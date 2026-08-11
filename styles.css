@@ -521,6 +521,15 @@ body.is-offline .status-text::before { content: "Sin conexión"; }
   letter-spacing: 3px;
   margin-bottom: 4px;
 }
+.welcome-motto {
+  font-family: var(--font-display);
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  color: var(--accent-eme);
+  margin: 6px 0 2px;
+  text-shadow: 0 0 18px rgba(80, 200, 120, 0.25);
+}
 .welcome-subtitle {
   font-size: 15px;
   color: var(--text-secondary);
