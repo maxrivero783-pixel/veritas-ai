@@ -1,0 +1,67 @@
+# ==============================================================================
+# Véritas v2.2 — _headers para Cloudflare Pages
+# ==============================================================================
+# Aplica headers HTTP a las respuestas servidas por Pages. Coherente con el
+# CSP del <meta> en index.html (no debe ser más restrictivo o bloqueará
+# recursos que el frontend usa).
+#
+# Referencia: https://developers.cloudflare.com/pages/configuration/headers/
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# Headers globales para todas las rutas
+# ------------------------------------------------------------------------------
+/*
+  # Content-Security-Policy — idéntico al <meta> de index.html.
+  # Permite: Puter.js, unpkg, jsDelivr, esm.sh (CDNs del Sandbox).
+  # 'unsafe-inline' + 'unsafe-eval' necesarios para el iframe del Sandbox
+  # (plantillas, CodeMirror, librerías CDN ejecutan JS inline/eval).
+  Content-Security-Policy: default-src 'self' https: data:; script-src 'unsafe-inline' 'unsafe-eval' https://js.puter.com https://unpkg.com https://cdn.jsdelivr.net https://esm.sh; style-src 'unsafe-inline' https:; img-src https: data:; connect-src https:; font-src https: data:;
+
+  # Security headers estándar (defensa en profundidad)
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: SAMEORIGIN
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: geolocation=(), microphone=(), camera=(), payment=(), usb=()
+  X-XSS-Protection: 1; mode=block
+
+  # CORS — permitimos cualquier origen (la app es auto-alojada por usuarios);
+  # la auth real la hace Cloudflare Access (cf-access-user-email header).
+  Access-Control-Allow-Origin: *
+  Access-Control-Allow-Methods: GET, POST, PUT, PATCH, DELETE, OPTIONS
+  Access-Control-Allow-Headers: Content-Type, cf-access-user-email, x-veritas-role
+  Access-Control-Max-Age: 86400
+
+  # Cache control — el HTML nunca se cachea (SPA), assets estáticos sí.
+  # Pages añade cache automático por hash de archivo, así que aquí solo
+  # cuidamos el HTML.
+  Cache-Control: no-store, must-revalidate
+
+# ------------------------------------------------------------------------------
+# Assets estáticos con hash en el nombre (cacheo largo)
+# Pages ya añade inmutabilidad a archivos con hash; este bloque refuerza.
+# ------------------------------------------------------------------------------
+/*.js
+  Content-Type: application/javascript; charset=utf-8
+  Cache-Control: public, max-age=31536000, immutable
+
+/*.css
+  Content-Type: text/css; charset=utf-8
+  Cache-Control: public, max-age=31536000, immutable
+
+# ------------------------------------------------------------------------------
+# Páginas HTML — nunca cacheadas (SPA que carga config en runtime)
+# ------------------------------------------------------------------------------
+/*.html
+  Content-Type: text/html; charset=utf-8
+  Cache-Control: no-store, must-revalidate
+
+# ------------------------------------------------------------------------------
+# _redirects y _headers — no servidos públicamente (Cloudflare los lee
+# internamente y no los expone). Esta regla es defensiva por si acaso.
+# ------------------------------------------------------------------------------
+/_redirects
+  X-Robots-Tag: noindex, nofollow
+
+/_headers
+  X-Robots-Tag: noindex, nofollow

@@ -1,0 +1,6 @@
+# Véritas v2.2 — SPA redirects para Cloudflare Pages
+# Cualquier ruta que no sea un archivo estático cae a index.html (SPA routing).
+# Necesario para que /chat/:chatId/join?token=... y otras rutas del frontend
+# funcionen al recargar la página.
+
+/*    /index.html   200

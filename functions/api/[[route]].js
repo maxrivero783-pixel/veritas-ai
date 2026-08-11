@@ -1,0 +1,2739 @@
+// ==============================================================================
+// Véritas v2.3 — /functions/api/[[route]].js
+// ==============================================================================
+// Router principal del Worker. Cloudflare Pages detecta este archivo como
+// Worker automáticamente (Pages Functions con catch-all route /api/*).
+//
+// Cubre TODOS los endpoints de las secciones 6.1 a 6.9 del BUILD:
+//   6.1  search, scrape, storage (upload/list/download/delete),
+//        repo (upload/get/list/delete), db/message, status
+//   6.2  chat/openrouter (streaming SSE, rotador, sticky, caching, truncation,
+//        persistencia de métricas)
+//   6.3  status (actualizado)
+//   6.4  keys (status, health, cooldown reset, services) — admin
+//   6.5  tool/invoke (dispatcher), tools/registry
+//   6.6  oauth (start, callback, disconnect, connections, account),
+//        artifact/proxy, sandbox/templates
+//   6.7  sesión compartida (share, revoke, join, participants, heartbeat,
+//        messages, turn acquire/release, leave, delete share)
+//   6.8  chat rename, suggest-title
+//   6.9  chats/offline-bundle, chat messages?full=true
+//
+// Auth: Cloudflare Access inyecta el header `cf-access-user-email`. En dev
+// local, fallback a env.DEV_USER_EMAIL. Validación en cada endpoint.
+// ==============================================================================
+
+import {
+  SERVICE_REGISTRY,
+  listServices,
+  discoverKeys,
+  getKey,
+  markCooldown,
+  markHealthy,
+  withKeyRotation,
+  getPoolStatus,
+  forceHealthCheck,
+  resetCooldown,
+  KeyPoolEmptyError,
+  AllKeysCooldownError,
+} from "../../lib/keyRotator.js";
+
+import {
+  encryptToken,
+  decryptToken,
+  getValidConnection,
+  markConnectionInvalid,
+  auditExternalCall,
+  generateOAuthState,
+  generatePkceVerifier,
+  computePkceChallenge,
+  upsertConnection,
+  OAuthNotConnectedError,
+  OAuthInvalidError,
+} from "../../lib/oauth.js";
+
+import {
+  TOOL_REGISTRY_SERVER,
+  isAllowed,
+  validateArgs,
+  publicRegistry,
+  importHandler,
+} from "../../lib/toolRegistry.server.js";
+
+import { SYSTEM_PROMPTS, ROLE_TO_MODEL, MODEL_TO_ROLE, UI_ROLE_TO_PROMPT_KEY } from "../../prompts.js";
+
+// ------------------------------------------------------------------------------
+// Whitelist de modelos OpenRouter permitidos (Sección 3.1 del BUILD).
+// ------------------------------------------------------------------------------
+const OPENROUTER_WHITELIST = new Set([
+  // Stack Nemotron (Agente)
+  "nvidia/nemotron-3-ultra-550b-a55b:free",
+  "nvidia/nemotron-3-super-120b-a12b:free",
+  "nvidia/nemotron-nano-12b-v2-vl:free",
+  "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+  // Roles standalone
+  "poolside/laguna-m.1:free",
+  "cognitivecomputations/dolphin-mistral-24b-venice-edition:free", // vía Puter, pero permitido para fallback cross-provider
+  "z-ai/glm-4.5-flash", // vía Puter, permitido para fallback cross-provider
+  // Fallback global
+  "nousresearch/hermes-3-llama-3.1-405b:free",
+  "qwen/qwen3-next-80b-a3b-instruct:free",
+]);
+
+// ------------------------------------------------------------------------------
+// Helper: extraer user_email del header Cloudflare Access o dev fallback.
+// ------------------------------------------------------------------------------
+function getUserEmail(request, env) {
+  const fromHeader = request.headers.get("cf-access-user-email");
+  if (fromHeader && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(fromHeader)) return fromHeader.toLowerCase();
+  if (env.DEV_USER_EMAIL) return env.DEV_USER_EMAIL.toLowerCase();
+  return null;
+}
+
+// ------------------------------------------------------------------------------
+// Helper: respuestas JSON estándar.
+// ------------------------------------------------------------------------------
+function json(data, status = 200, extraHeaders = {}) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: {
+      "Content-Type": "application/json; charset=utf-8",
+      "Cache-Control": "no-store",
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Headers": "Content-Type, cf-access-user-email, x-veritas-role",
+      "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+      ...extraHeaders,
+    },
+  });
+}
+
+function errorResponse(error, status, extra = {}) {
+  return json({ error, ...extra }, status);
+}
+
+// ------------------------------------------------------------------------------
+// Helper: admin check (para endpoints /api/keys/*).
+// ------------------------------------------------------------------------------
+function isAdmin(userEmail, env) {
+  if (!userEmail || !env.ADMIN_EMAILS) return false;
+  const admins = env.ADMIN_EMAILS.split(",").map((s) => s.trim().toLowerCase());
+  return admins.includes(userEmail);
+}
+
+// ------------------------------------------------------------------------------
+// Helper: slugify para nombres de archivo en R2 (anti path traversal).
+// ------------------------------------------------------------------------------
+function slugify(name) {
+  return String(name || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9._-]+/g, "_")
+    .replace(/_+/g, "_")
+    .slice(0, 128);
+}
+
+// ------------------------------------------------------------------------------
+// Helper: rutas públicas (bypass de auth — usadas por callbacks OAuth).
+// ------------------------------------------------------------------------------
+function isPublicPath(path) {
+  return /^\/api\/oauth\/[^/]+\/(start|callback)$/.test(path);
+}
+
+// ------------------------------------------------------------------------------
+// CORS preflight.
+// ------------------------------------------------------------------------------
+function handleCORS() {
+  return new Response(null, {
+    status: 204,
+    headers: {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Headers": "Content-Type, cf-access-user-email, x-veritas-role",
+      "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+      "Access-Control-Max-Age": "86400",
+    },
+  });
+}
+
+// ==============================================================================
+// MAIN ENTRY POINT
+// ==============================================================================
+export async function onRequest(context) {
+  const { request, env, params } = context;
+  const url = new URL(request.url);
+  const path = url.pathname;
+  const method = request.method.toUpperCase();
+
+  if (method === "OPTIONS") return handleCORS();
+
+  // Auth (excepto paths públicos de OAuth).
+  const userEmail = getUserEmail(request, env);
+  if (!isPublicPath(path) && !userEmail) {
+    return errorResponse("unauthorized", 401, {
+      message: "Missing cf-access-user-email header. Configure Cloudflare Access or set DEV_USER_EMAIL.",
+    });
+  }
+
+  // Dispatch por path.
+  try {
+    // 6.1 — search / scrape / storage / repo / db / status
+    if (path === "/api/search" && method === "POST") return await handleSearch(request, env, userEmail);
+    if (path === "/api/scrape" && method === "POST") return await handleScrape(request, env, userEmail);
+    if (path === "/api/storage/upload" && method === "POST") return await handleStorageUpload(request, env, userEmail);
+    if (path === "/api/storage/list" && method === "GET") return await handleStorageList(env, userEmail);
+    if (path.startsWith("/api/storage/download/") && method === "GET") return await handleStorageDownload(path, env, userEmail);
+    if (path.startsWith("/api/storage/delete/") && method === "DELETE") return await handleStorageDelete(path, env, userEmail);
+    if (path === "/api/repo/upload" && method === "POST") return await handleRepoUpload(request, env, userEmail);
+    if (path === "/api/repo/get" && method === "POST") return await handleRepoGet(request, env, userEmail);
+    if (path.startsWith("/api/repo/download/") && method === "GET") return await handleRepoDownload(path, env, userEmail);
+    if (path === "/api/repo/list" && method === "GET") return await handleRepoList(request, env, userEmail);
+    if (path === "/api/repo/delete" && method === "DELETE") return await handleRepoDelete(request, env, userEmail);
+    if (path === "/api/db/message" && method === "POST") return await handleDbMessage(request, env, userEmail);
+
+    // --- Chats CRUD (P0-3: endpoints faltantes de v2.0) ---
+    if (path === "/api/chats" && method === "GET") return await handleChatsList(request, env, userEmail);
+    if (path === "/api/chats" && method === "POST") return await handleChatsCreate(request, env, userEmail);
+    if (path.match(/^\/api\/chat\/[^/]+$/) && method === "DELETE") {
+      const chatId = path.split("/")[3];
+      return await handleChatDelete(chatId, env, userEmail);
+    }
+    if (path.match(/^\/api\/chat\/[^/]+$/) && method === "PUT") {
+      const chatId = path.split("/")[3];
+      return await handleChatUpdate(chatId, request, env, userEmail);
+    }
+
+    // --- Profile (P0-3) ---
+    if (path === "/api/profile" && method === "GET") return await handleProfileGet(env, userEmail);
+    if (path === "/api/profile" && method === "PUT") return await handleProfileUpdate(request, env, userEmail);
+
+    // --- Account (P0-3) ---
+    if (path === "/api/account" && method === "DELETE") return await handleAccountDelete(env, userEmail);
+
+    // --- Memories (v2.3, cross-chat memory) ---
+    if (path === "/api/memories" && method === "GET") return await handleMemoriesList(request, env, userEmail);
+    if (path === "/api/memories" && method === "POST") return await handleMemoryCreate(request, env, userEmail);
+    if (path === "/api/memories/batch" && method === "POST") return await handleMemoryBatchCreate(request, env, userEmail);
+    if (path === "/api/memories/touch" && method === "POST") return await handleMemoriesTouch(request, env, userEmail);
+    const memoryIdMatch = path.match(/^\/api\/memories\/(\d+)$/);
+    if (memoryIdMatch) {
+      if (method === "PATCH") return await handleMemoryUpdate(parseInt(memoryIdMatch[1]), request, env, userEmail);
+      if (method === "DELETE") return await handleMemoryDelete(parseInt(memoryIdMatch[1]), env, userEmail);
+    }
+
+    // --- Repo search + write (P0-3) ---
+    if (path === "/api/repo/search" && method === "POST") return await handleRepoSearch(request, env, userEmail);
+    if (path === "/api/repo/write" && method === "POST") return await handleRepoWrite(request, env, userEmail);
+
+    // 6.2 — chat/openrouter (streaming proxy con rotador)
+    if (path === "/api/chat/openrouter" && method === "POST") return await handleChatOpenRouter(request, env, userEmail);
+
+    // 6.3 — status
+    if (path === "/api/status" && method === "GET") return await handleStatus(env, userEmail);
+
+    // 6.4 — keys management (admin)
+    if (path === "/api/keys/status" && method === "GET") return await handleKeysStatus(request, env, userEmail);
+    if (path === "/api/keys/health" && method === "POST") return await handleKeysHealth(request, env, userEmail);
+    if (path === "/api/keys/cooldown/reset" && method === "POST") return await handleKeysCooldownReset(request, env, userEmail);
+    if (path === "/api/keys/services" && method === "GET") return await handleKeysServices(env, userEmail);
+
+    // 6.5 — tool invoke + tools registry
+    if (path === "/api/tool/invoke" && method === "POST") return await handleToolInvoke(request, env, userEmail);
+    if (path === "/api/tools/registry" && method === "GET") return await handleToolsRegistry();
+
+    // 6.6 — oauth + artifact proxy + sandbox templates
+    if (path === "/api/oauth/connections" && method === "GET") return await handleOAuthConnections(env, userEmail);
+    if (path === "/api/oauth/:provider/account") {} // handled below with regex
+    const oauthStart = path.match(/^\/api\/oauth\/([^/]+)\/start$/);
+    if (oauthStart && method === "GET") return await handleOAuthStart(oauthStart[1], request, env, userEmail);
+    const oauthCallback = path.match(/^\/api\/oauth\/([^/]+)\/callback$/);
+    if (oauthCallback && method === "GET") return await handleOAuthCallback(oauthCallback[1], request, env);
+    const oauthDisconnect = path.match(/^\/api\/oauth\/([^/]+)\/disconnect$/);
+    if (oauthDisconnect && method === "POST") return await handleOAuthDisconnect(oauthDisconnect[1], env, userEmail);
+    const oauthAccount = path.match(/^\/api\/oauth\/([^/]+)\/account$/);
+    if (oauthAccount && method === "GET") return await handleOAuthAccount(oauthAccount[1], env, userEmail);
+
+    if (path === "/api/artifact/proxy" && method === "POST") return await handleArtifactProxy(request, env, userEmail);
+    if (path === "/api/sandbox/templates" && method === "GET") return await handleSandboxTemplates();
+
+    // 6.7 — sesión compartida
+    const shareMatch = path.match(/^\/api\/chat\/([^/]+)\/share$/);
+    if (shareMatch) {
+      if (method === "POST") return await handleShareCreate(shareMatch[1], request, env, userEmail);
+      if (method === "DELETE") return await handleShareClose(shareMatch[1], env, userEmail);
+    }
+    if (path.match(/^\/api\/chat\/[^/]+\/share\/revoke$/) && method === "POST") {
+      const chatId = path.split("/")[3];
+      return await handleShareRevoke(chatId, env, userEmail);
+    }
+    if (path.match(/^\/api\/chat\/[^/]+\/join$/) && method === "GET") {
+      const chatId = path.split("/")[3];
+      return await handleShareJoin(chatId, url, env, userEmail);
+    }
+    if (path.match(/^\/api\/chat\/[^/]+\/participants$/) && method === "GET") {
+      const chatId = path.split("/")[3];
+      return await handleParticipants(chatId, env, userEmail);
+    }
+    if (path.match(/^\/api\/chat\/[^/]+\/heartbeat$/) && method === "POST") {
+      const chatId = path.split("/")[3];
+      return await handleHeartbeat(chatId, request, env, userEmail);
+    }
+    if (path.match(/^\/api\/chat\/[^/]+\/messages$/) && method === "GET") {
+      const chatId = path.split("/")[3];
+      return await handleMessagesPolling(chatId, url, env, userEmail);
+    }
+    if (path.match(/^\/api\/chat\/[^/]+\/turn\/acquire$/) && method === "POST") {
+      const chatId = path.split("/")[3];
+      return await handleTurnAcquire(chatId, request, env, userEmail);
+    }
+    if (path.match(/^\/api\/chat\/[^/]+\/turn\/release$/) && method === "POST") {
+      const chatId = path.split("/")[3];
+      return await handleTurnRelease(chatId, env, userEmail);
+    }
+    if (path.match(/^\/api\/chat\/[^/]+\/leave$/) && method === "POST") {
+      const chatId = path.split("/")[3];
+      return await handleLeave(chatId, env, userEmail);
+    }
+
+    // 6.8 — rename + suggest-title
+    if (path.match(/^\/api\/chat\/[^/]+\/rename$/) && method === "PATCH") {
+      const chatId = path.split("/")[3];
+      return await handleRename(chatId, request, env, userEmail);
+    }
+    if (path.match(/^\/api\/chat\/[^/]+\/suggest-title$/) && method === "POST") {
+      const chatId = path.split("/")[3];
+      return await handleSuggestTitle(chatId, env, userEmail);
+    }
+
+    // 6.9 — offline bundle
+    if (path === "/api/chats/offline-bundle" && method === "GET") return await handleOfflineBundle(env, userEmail);
+
+    // 6.10 — Agente: orquestación y percepción (Stack Nemotron)
+    if (path === "/api/chat/agent/orchestrate" && method === "POST") return await handleAgentOrchestrate(request, env, userEmail);
+    if (path === "/api/chat/perceive" && method === "POST") return await handlePerceive(request, env, userEmail);
+
+    // 6.11 — Skills CRUD (custom user skills, carga dinámica)
+    if (path === "/api/skills" && method === "GET") return await handleSkillsList(env, userEmail);
+    if (path === "/api/skills" && method === "POST") return await handleSkillCreate(request, env, userEmail);
+    const skillIdMatch = path.match(/^\/api\/skills\/([^/]+)$/);
+    if (skillIdMatch) {
+      if (method === "PUT") return await handleSkillUpdate(skillIdMatch[1], request, env, userEmail);
+      if (method === "DELETE") return await handleSkillDelete(skillIdMatch[1], env, userEmail);
+    }
+
+    // 404
+    return errorResponse("not_found", 404, { path, method });
+  } catch (e) {
+    // Errores tipados del rotador.
+    if (e instanceof KeyPoolEmptyError) {
+      return errorResponse("key_pool_empty", 503, { service: e.service, message: e.message });
+    }
+    if (e instanceof AllKeysCooldownError) {
+      return errorResponse("all_keys_rate_limited", 503, { service: e.service, retry_after_ms: e.retryAfterMs });
+    }
+    if (e instanceof OAuthNotConnectedError) {
+      return errorResponse("oauth_not_connected", 403, { provider: e.provider, message: e.message });
+    }
+    if (e instanceof OAuthInvalidError) {
+      return errorResponse("oauth_invalid", 401, { provider: e.provider, message: e.message });
+    }
+    console.error("Unhandled error:", e);
+    return errorResponse("internal_error", 500, { message: e.message || String(e) });
+  }
+}
+
+// ==============================================================================
+// 6.1 — SEARCH (proxy a Jina → Tavily → Serper con fallback encadenado)
+// ==============================================================================
+async function handleSearch(request, env, userEmail) {
+  const { query, max_results = 5 } = await request.json().catch(() => ({}));
+  if (!query) return errorResponse("missing_query", 400);
+
+  // Intentar Jina → Tavily → Serper, en orden.
+  for (const svc of ["jina", "tavily", "serper"]) {
+    try {
+      const mod = await import(`../../lib/services/${svc}.js`);
+      const result = await withKeyRotation(env, svc, async (key) => {
+        return await mod.callService({
+          endpoint: svc === "jina" ? "search" : "search",
+          payload: { query, num: max_results, max_results },
+          apiKey: key,
+        });
+      });
+      if (result.response && result.response.status >= 200 && result.response.status < 300) {
+        // callService devuelve un objeto { status, data, raw }; conKeyRotation devuelve { response, keyIndex, attempts }.
+        // Como callService no es un fetch directo, reorganizamos: usamos withKeyRotation solo para obtener la key.
+        // Reimplementación directa abajo.
+      }
+    } catch (e) {
+      // intentar siguiente
+      continue;
+    }
+  }
+
+  // Reimplementación directa sin withKeyRotation (que espera un fetch Response).
+  return await searchFallback(query, max_results, env);
+}
+
+async function searchFallback(query, maxResults, env) {
+  const errors = [];
+  // Jina
+  if (discoverKeys(env, "jina").length > 0) {
+    try {
+      const { key } = await getKey(env, "jina");
+      const mod = await import("../../lib/services/jina.js");
+      const r = await mod.callService({ endpoint: "search", payload: { query, num: maxResults }, apiKey: key });
+      if (r.status === 200 && r.data) {
+        return json({ provider: "jina", results: normalizeJinaSearch(r.data), raw: r.data });
+      }
+      await markCooldown(env, "jina", (await getKey(env, "jina")).index, 30_000, `search ${r.status}`);
+      errors.push({ provider: "jina", status: r.status });
+    } catch (e) { errors.push({ provider: "jina", error: e.message }); }
+  }
+  // Tavily
+  if (discoverKeys(env, "tavily").length > 0) {
+    try {
+      const { key } = await getKey(env, "tavily");
+      const mod = await import("../../lib/services/tavily.js");
+      const r = await mod.callService({ endpoint: "search", payload: { query, max_results: maxResults }, apiKey: key });
+      if (r.status === 200 && r.data) {
+        return json({ provider: "tavily", results: normalizeTavilySearch(r.data), raw: r.data });
+      }
+      errors.push({ provider: "tavily", status: r.status });
+    } catch (e) { errors.push({ provider: "tavily", error: e.message }); }
+  }
+  // Serper
+  if (discoverKeys(env, "serper").length > 0) {
+    try {
+      const { key } = await getKey(env, "serper");
+      const mod = await import("../../lib/services/serper.js");
+      const r = await mod.callService({ endpoint: "search", payload: { q: query, num: maxResults }, apiKey: key });
+      if (r.status === 200 && r.data) {
+        return json({ provider: "serper", results: normalizeSerperSearch(r.data), raw: r.data });
+      }
+      errors.push({ provider: "serper", status: r.status });
+    } catch (e) { errors.push({ provider: "serper", error: e.message }); }
+  }
+  return errorResponse("all_search_providers_failed", 503, { errors });
+}
+
+function normalizeJinaSearch(data) {
+  if (!data) return [];
+  const results = data.data || data.results || [];
+  return results.slice(0, 20).map((r, i) => ({
+    title: r.title || "",
+    url: r.url || r.link || "",
+    snippet: r.content || r.description || r.snippet || "",
+    score: r.score || (1 - i * 0.05),
+  }));
+}
+
+function normalizeTavilySearch(data) {
+  if (!data || !data.results) return [];
+  const out = data.results.slice(0, 20).map((r, i) => ({
+    title: r.title || "",
+    url: r.url || "",
+    snippet: r.content || r.snippet || "",
+    score: r.score || (1 - i * 0.05),
+  }));
+  if (data.answer) out.unshift({ title: "AI Answer", url: "", snippet: data.answer, score: 1.0 });
+  return out;
+}
+
+function normalizeSerperSearch(data) {
+  if (!data) return [];
+  const out = [];
+  if (data.knowledgeGraph) {
+    out.push({ title: data.knowledgeGraph.title || "", url: data.knowledgeGraph.website || "", snippet: data.knowledgeGraph.description || "", score: 1.0 });
+  }
+  if (data.organic) {
+    for (const r of data.organic.slice(0, 20)) {
+      out.push({ title: r.title || "", url: r.link || "", snippet: r.snippet || "", score: 1 - (r.position || 0) * 0.05 });
+    }
+  }
+  return out;
+}
+
+// ==============================================================================
+// 6.1 — SCRAPE (Jina r.jina.ai → ScrapingBee)
+// ==============================================================================
+async function handleScrape(request, env, userEmail) {
+  const { url: targetUrl, render_js = false } = await request.json().catch(() => ({}));
+  if (!targetUrl) return errorResponse("missing_url", 400);
+
+  // Jina Reader primero (sin JS render)
+  if (!render_js && discoverKeys(env, "jina").length > 0) {
+    try {
+      const { key } = await getKey(env, "jina");
+      const mod = await import("../../lib/services/jina.js");
+      const r = await mod.callService({ endpoint: "reader", payload: { url: targetUrl }, apiKey: key });
+      if (r.status === 200 && r.data) {
+        return json({ provider: "jina", content: r.data.content || r.raw, url: targetUrl });
+      }
+    } catch (e) { /* fall through */ }
+  }
+
+  // ScrapingBee (con o sin JS)
+  if (discoverKeys(env, "scrapingbee").length > 0) {
+    try {
+      const { key } = await getKey(env, "scrapingbee");
+      const mod = await import("../../lib/services/scrapingbee.js");
+      const r = await mod.callService({
+        endpoint: "scrape",
+        payload: { url: targetUrl, render_js: !!render_js },
+        apiKey: key,
+      });
+      if (r.status === 200 && r.data) {
+        return json({ provider: "scrapingbee", content: r.data.content || r.raw, url: targetUrl });
+      }
+    } catch (e) { /* fall through */ }
+  }
+
+  // Render JS requested but ScrapingBee unavailable — try Jina anyway.
+  if (render_js && discoverKeys(env, "jina").length > 0) {
+    try {
+      const { key } = await getKey(env, "jina");
+      const mod = await import("../../lib/services/jina.js");
+      const r = await mod.callService({ endpoint: "reader", payload: { url: targetUrl }, apiKey: key });
+      if (r.status === 200 && r.data) {
+        return json({ provider: "jina", content: r.data.content || r.raw, url: targetUrl, warning: "render_js requested but ScrapingBee unavailable; used Jina Reader (no JS render)." });
+      }
+    } catch (e) { /* fall through */ }
+  }
+
+  return errorResponse("scrape_failed", 503, { url: targetUrl });
+}
+
+// ==============================================================================
+// 6.1 — STORAGE (Carpeta Proyecto en R2)
+// ==============================================================================
+async function handleStorageUpload(request, env, userEmail) {
+  const formData = await request.formData();
+  const file = formData.get("file");
+  if (!file || typeof file === "undefined") return errorResponse("missing_file", 400);
+
+  const filename = slugify(file.name);
+  const r2Key = `projects/${userEmail}/${filename}`;
+  const buf = await file.arrayBuffer();
+  await env.BUCKET.put(r2Key, buf, {
+    customMetadata: { user_email: userEmail, original_name: file.name, mime_type: file.type || "application/octet-stream" },
+  });
+  return json({ ok: true, filename, r2_key: r2Key, size: buf.byteLength });
+}
+
+async function handleStorageList(env, userEmail) {
+  const list = await env.BUCKET.list({ prefix: `projects/${userEmail}/`, limit: 1000 });
+  const items = list.objects.map((o) => ({
+    filename: o.key.replace(`projects/${userEmail}/`, ""),
+    size: o.size,
+    uploaded: o.uploaded.toISOString(),
+  }));
+  return json({ files: items });
+}
+
+async function handleStorageDownload(path, env, userEmail) {
+  const filename = slugify(decodeURIComponent(path.split("/api/storage/download/")[1] || ""));
+  if (!filename) return errorResponse("missing_filename", 400);
+  const r2Key = `projects/${userEmail}/${filename}`;
+  const obj = await env.BUCKET.get(r2Key);
+  if (!obj) return errorResponse("not_found", 404, { filename });
+  return new Response(obj.body, {
+    headers: {
+      "Content-Type": obj.httpMetadata?.contentType || "application/octet-stream",
+      "Content-Disposition": `attachment; filename="${filename}"`,
+    },
+  });
+}
+
+async function handleStorageDelete(path, env, userEmail) {
+  const filename = slugify(decodeURIComponent(path.split("/api/storage/delete/")[1] || ""));
+  if (!filename) return errorResponse("missing_filename", 400);
+  const r2Key = `projects/${userEmail}/${filename}`;
+  await env.BUCKET.delete(r2Key);
+  return json({ ok: true, deleted: filename });
+}
+
+// ==============================================================================
+// 6.1 — REPO (Documentos del usuario, R2 + D1)
+// ==============================================================================
+async function handleRepoUpload(request, env, userEmail) {
+  const formData = await request.formData();
+  const file = formData.get("file");
+  const docName = formData.get("doc_name") || (file ? file.name : "untitled");
+  if (!file) return errorResponse("missing_file", 400);
+
+  const buf = await file.arrayBuffer();
+  if (buf.byteLength > 5 * 1024 * 1024) return errorResponse("file_too_large", 400, { max_bytes: 5_242_880 });
+
+  // Insertar en D1 para obtener doc_number autoincremental.
+  const ins = await env.DB.prepare(
+    `INSERT INTO repo_documents (user_email, doc_name, r2_key, file_size, mime_type) VALUES (?, ?, ?, ?, ?)`
+  ).bind(userEmail, docName, "pending", buf.byteLength, file.type || "application/octet-stream").run();
+  const docNumber = ins.meta.last_row_id;
+  const r2Key = `repo/${userEmail}/${docNumber}_${slugify(docName)}`;
+  await env.BUCKET.put(r2Key, buf, {
+    customMetadata: { user_email: userEmail, doc_number: String(docNumber), doc_name: docName },
+  });
+  await env.DB.prepare(
+    `UPDATE repo_documents SET r2_key = ? WHERE doc_number = ? AND user_email = ?`
+  ).bind(r2Key, docNumber, userEmail).run();
+
+  return json({ ok: true, doc_number: docNumber, doc_name: docName, r2_key: r2Key, size: buf.byteLength });
+}
+
+async function handleRepoGet(request, env, userEmail) {
+  const { query } = await request.json().catch(() => ({}));
+  if (!query) return errorResponse("missing_query", 400);
+
+  // Buscar por número o nombre parcial.
+  const asNum = Number(query);
+  let row;
+  if (!Number.isNaN(asNum)) {
+    row = await env.DB.prepare(
+      `SELECT * FROM repo_documents WHERE user_email = ? AND doc_number = ?`
+    ).bind(userEmail, asNum).first();
+  }
+  if (!row) {
+    row = await env.DB.prepare(
+      `SELECT * FROM repo_documents WHERE user_email = ? AND doc_name LIKE ? ORDER BY created_at DESC LIMIT 1`
+    ).bind(userEmail, `%${query}%`).first();
+  }
+  if (!row) return errorResponse("doc_not_found", 404, { query });
+
+  const obj = await env.BUCKET.get(row.r2_key);
+  if (!obj) return errorResponse("r2_object_missing", 500, { r2_key: row.r2_key });
+  const buf = await obj.arrayBuffer();
+  const text = await extractText(buf, row.doc_name, row.mime_type);
+  return json({
+    doc_number: row.doc_number,
+    doc_name: row.doc_name,
+    text,
+    size: row.file_size,
+    mime_type: row.mime_type,
+  });
+}
+
+async function handleRepoList(request, env, userEmail) {
+  const url = new URL(request.url);
+  const limit = Math.min(100, Math.max(1, parseInt(url.searchParams.get("limit")) || 50));
+  const offset = Math.max(0, parseInt(url.searchParams.get("offset")) || 0);
+  const search = (url.searchParams.get("search") || "").trim();
+
+  let sql = `SELECT doc_number, doc_name, file_size, mime_type, created_at FROM repo_documents WHERE user_email = ?`;
+  const binds = [userEmail];
+  if (search) {
+    sql += ` AND doc_name LIKE ?`;
+    binds.push(`%${search}%`);
+  }
+  sql += ` ORDER BY doc_number DESC LIMIT ? OFFSET ?`;
+  binds.push(limit, offset);
+
+  // Total count + total size para paginación y barra de uso.
+  let countSql = `SELECT COUNT(*) AS total, COALESCE(SUM(file_size), 0) AS total_size FROM repo_documents WHERE user_email = ?`;
+  const countBinds = [userEmail];
+  if (search) {
+    countSql += ` AND doc_name LIKE ?`;
+    countBinds.push(`%${search}%`);
+  }
+
+  const [result, countResult] = await Promise.all([
+    env.DB.prepare(sql).bind(...binds).all(),
+    env.DB.prepare(countSql).bind(...countBinds).first(),
+  ]);
+
+  return json({
+    documents: result.results || [],
+    total: countResult?.total || 0,
+    total_size: countResult?.total_size || 0,
+    limit,
+    offset,
+    has_more: (offset + (result.results || []).length) < (countResult?.total || 0),
+  });
+}
+
+// GET /api/repo/download/:docNumber — descarga archivo crudo (blob con Content-Disposition)
+async function handleRepoDownload(path, env, userEmail) {
+  const docNumber = parseInt(path.split("/").pop(), 10);
+  if (Number.isNaN(docNumber)) return errorResponse("invalid_doc_number", 400);
+
+  const row = await env.DB.prepare(
+    `SELECT r2_key, doc_name, mime_type FROM repo_documents WHERE user_email = ? AND doc_number = ?`
+  ).bind(userEmail, docNumber).first();
+  if (!row) return errorResponse("doc_not_found", 404);
+
+  const obj = await env.BUCKET.get(row.r2_key);
+  if (!obj) return errorResponse("r2_object_missing", 500, { r2_key: row.r2_key });
+
+  const contentType = row.mime_type || "application/octet-stream";
+  const safeName = slugify(row.doc_name);
+  return new Response(obj.body, {
+    headers: {
+      "Content-Type": contentType,
+      "Content-Disposition": `attachment; filename="${safeName}"`,
+      "Content-Length": String(obj.size),
+      "Cache-Control": "private, max-age=3600",
+    },
+  });
+}
+
+async function handleRepoDelete(request, env, userEmail) {
+  const { doc_number } = await request.json().catch(() => ({}));
+  if (!doc_number) return errorResponse("missing_doc_number", 400);
+  const row = await env.DB.prepare(
+    `SELECT r2_key FROM repo_documents WHERE user_email = ? AND doc_number = ?`
+  ).bind(userEmail, doc_number).first();
+  if (!row) return errorResponse("doc_not_found", 404);
+  await env.BUCKET.delete(row.r2_key);
+  await env.DB.prepare(
+    `DELETE FROM repo_documents WHERE user_email = ? AND doc_number = ?`
+  ).bind(userEmail, doc_number).run();
+  return json({ ok: true, deleted: doc_number });
+}
+
+// ------------------------------------------------------------------------------
+// extractText: extrae texto de PDF/HTML/MD/código/plano.
+// En Workers no hay pdf-parse; hacemos best-effort: HTML → strip tags, resto →
+// texto plano. Para PDF se recomienda subir .txt o .md paralelamente.
+// ------------------------------------------------------------------------------
+async function extractText(buf, name, mimeType) {
+  const ext = (name || "").split(".").pop().toLowerCase();
+  const text = new TextDecoder("utf-8").decode(buf);
+  if (ext === "html" || mimeType === "text/html") {
+    return text.replace(/<script[\s\S]*?<\/script>/gi, "").replace(/<style[\s\S]*?<\/style>/gi, "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+  }
+  if (ext === "pdf") {
+    // Best-effort: extraer texto entre streams BT/ET (Tj/TJ operators). No es completo.
+    return `[PDF — extracción limitada en Worker. Contenido parcial:]\n${text.replace(/[^\x20-\x7E\n\r\t]+/g, " ").slice(0, 50000)}`;
+  }
+  // .txt, .md, .py, .js, .ts, .csv, .json → texto plano.
+  return text;
+}
+
+// ==============================================================================
+// P0-3 — CHATS CRUD (endpoints faltantes de v2.0)
+// ==============================================================================
+
+// GET /api/chats?category=&search=  — lista chats del usuario
+async function handleChatsList(request, env, userEmail) {
+  const url = new URL(request.url);
+  const category = url.searchParams.get("category");
+  const search = url.searchParams.get("search");
+
+  let sql = `SELECT id, user_email, category, title, summary_json, is_shared, updated_at
+             FROM chats WHERE user_email = ?`;
+  const binds = [userEmail];
+  if (category && ["agent", "coder", "general"].includes(category)) {
+    sql += ` AND category = ?`;
+    binds.push(category);
+  }
+  if (search) {
+    sql += ` AND title LIKE ?`;
+    binds.push(`%${search}%`);
+  }
+  sql += ` ORDER BY updated_at DESC LIMIT 200`;
+
+  const result = await env.DB.prepare(sql).bind(...binds).all();
+  return json({ chats: result.results || [] });
+}
+
+// POST /api/chats  { title, category }  — crea chat explícitamente
+async function handleChatsCreate(request, env, userEmail) {
+  const { title, category, id } = await request.json().catch(() => ({}));
+  if (!title || !category) return errorResponse("missing_fields", 400, { required: ["title", "category"] });
+  if (!["agent", "coder", "general"].includes(category)) {
+    return errorResponse("invalid_category", 400, { allowed: ["agent", "coder", "general"] });
+  }
+  const chatId = id || crypto.randomUUID();
+  await env.DB.prepare(
+    `INSERT INTO chats (id, user_email, category, title, is_shared) VALUES (?, ?, ?, ?, 0)`
+  ).bind(chatId, userEmail, category, String(title).slice(0, 200)).run();
+
+  // Asegurar que el usuario existe en D1 (INSERT OR IGNORE).
+  await env.DB.prepare(`INSERT OR IGNORE INTO users (email) VALUES (?)`).bind(userEmail).run();
+
+  return json({
+    ok: true,
+    chat: { id: chatId, user_email: userEmail, category, title, is_shared: 0, updated_at: new Date().toISOString() },
+  });
+}
+
+// DELETE /api/chat/:id  — elimina chat + mensajes (cascada automática por FK)
+async function handleChatDelete(chatId, env, userEmail) {
+  // Verificar ownership: solo el owner del chat (o editor en sesión compartida).
+  const chat = await env.DB.prepare(
+    `SELECT user_email FROM chats WHERE id = ?`
+  ).bind(chatId).first();
+  if (!chat) return errorResponse("chat_not_found", 404, { chat_id: chatId });
+
+  const isOwner = chat.user_email === userEmail;
+  const isEditor = await env.DB.prepare(
+    `SELECT 1 FROM chat_participants WHERE chat_id = ? AND user_email = ? AND role = 'editor'`
+  ).bind(chatId, userEmail).first();
+  if (!isOwner && !isEditor) return errorResponse("not_authorized", 403);
+
+  // ON DELETE CASCADE limpia messages, chat_participants, chat_turn_lock, chat_presence.
+  await env.DB.prepare(`DELETE FROM chats WHERE id = ?`).bind(chatId).run();
+  return json({ ok: true, deleted: chatId });
+}
+
+// PUT /api/chat/:id  { title?, category? }  — actualiza chat
+async function handleChatUpdate(chatId, request, env, userEmail) {
+  const { title, category } = await request.json().catch(() => ({}));
+  const chat = await env.DB.prepare(
+    `SELECT user_email FROM chats WHERE id = ?`
+  ).bind(chatId).first();
+  if (!chat) return errorResponse("chat_not_found", 404);
+  if (chat.user_email !== userEmail) return errorResponse("not_owner", 403);
+
+  const updates = [];
+  const binds = [];
+  if (title !== undefined) {
+    updates.push("title = ?");
+    binds.push(String(title).slice(0, 200));
+  }
+  if (category !== undefined) {
+    if (!["agent", "coder", "general"].includes(category)) {
+      return errorResponse("invalid_category", 400, { allowed: ["agent", "coder", "general"] });
+    }
+    updates.push("category = ?");
+    binds.push(category);
+  }
+  if (updates.length === 0) return errorResponse("no_fields", 400);
+  updates.push("updated_at = CURRENT_TIMESTAMP");
+  binds.push(chatId);
+
+  await env.DB.prepare(`UPDATE chats SET ${updates.join(", ")} WHERE id = ?`).bind(...binds).run();
+  return json({ ok: true, chat_id: chatId });
+}
+
+// ==============================================================================
+// P0-3 — PROFILE (users.profile_json)
+// ==============================================================================
+
+// GET /api/profile
+async function handleProfileGet(env, userEmail) {
+  await env.DB.prepare(`INSERT OR IGNORE INTO users (email) VALUES (?)`).bind(userEmail).run();
+  const row = await env.DB.prepare(
+    `SELECT email, profile_json, created_at FROM users WHERE email = ?`
+  ).bind(userEmail).first();
+  let profile = {};
+  if (row?.profile_json) {
+    try { profile = JSON.parse(row.profile_json); } catch {}
+  }
+  return json({
+    email: userEmail,
+    profile,
+    created_at: row?.created_at || null,
+  });
+}
+
+// PUT /api/profile  { profile_json: object }  — merge con existente
+async function handleProfileUpdate(request, env, userEmail) {
+  const body = await request.json().catch(() => ({}));
+  const newProfile = body.profile_json || body.profile || body;
+  if (typeof newProfile !== "object") return errorResponse("invalid_profile", 400);
+
+  await env.DB.prepare(`INSERT OR IGNORE INTO users (email) VALUES (?)`).bind(userEmail).run();
+  const row = await env.DB.prepare(
+    `SELECT profile_json FROM users WHERE email = ?`
+  ).bind(userEmail).first();
+  let existing = {};
+  if (row?.profile_json) {
+    try { existing = JSON.parse(row.profile_json); } catch {}
+  }
+  const merged = { ...existing, ...newProfile };
+  await env.DB.prepare(
+    `UPDATE users SET profile_json = ? WHERE email = ?`
+  ).bind(JSON.stringify(merged), userEmail).run();
+  return json({ ok: true, profile: merged });
+}
+
+// ==============================================================================
+// P0-3 — ACCOUNT DELETE
+// ==============================================================================
+
+// DELETE /api/account  — elimina TODA la data del usuario
+// (chats, messages, repo_documents, oauth, external_connections, etc.).
+// ON DELETE CASCADE en users(email) limpia todo lo demás.
+async function handleAccountDelete(env, userEmail) {
+  // Borrar archivos R2 del usuario (projects + repo).
+  try {
+    const projectsList = await env.BUCKET.list({ prefix: `projects/${userEmail}/`, limit: 1000 });
+    for (const obj of projectsList.objects) await env.BUCKET.delete(obj.key);
+    const repoList = await env.BUCKET.list({ prefix: `repo/${userEmail}/`, limit: 1000 });
+    for (const obj of repoList.objects) await env.BUCKET.delete(obj.key);
+  } catch (e) { /* best-effort */ }
+
+  // Borrar fila en users → cascada limpia chats, messages, repo_documents,
+  // chat_participants, chat_turn_lock, chat_presence, oauth_pending, external_connections,
+  // user_memories.
+  await env.DB.prepare(`DELETE FROM users WHERE email = ?`).bind(userEmail).run();
+  // external_api_calls no tiene FK a users; limpiar manualmente.
+  await env.DB.prepare(`DELETE FROM external_api_calls WHERE user_email = ?`).bind(userEmail).run();
+  await env.DB.prepare(`DELETE FROM tool_calls WHERE user_email = ?`).bind(userEmail).run();
+  await env.DB.prepare(`DELETE FROM openrouter_calls WHERE user_email = ?`).bind(userEmail).run();
+
+  return json({ ok: true, deleted_account: userEmail });
+}
+
+// ==============================================================================
+// MEMORIES — cross-chat memory (v2.3, Gap 2 del audit)
+// ==============================================================================
+// CRUD para user_memories. El frontend usa estos endpoints para:
+//   - Guardar hechos aprendidos de conversaciones (POST)
+//   - Recuperar memorias relevantes para inyectar en el contexto (GET)
+//   - Gestionar memorias manualmente (DELETE, PATCH)
+//
+// Todos los endpoints requieren auth (cf-access-user-email).
+// ==============================================================================
+
+// GET /api/memories?category=...&limit=...&exclude_chat=...  — listar memorias
+async function handleMemoriesList(request, env, userEmail) {
+  const url = new URL(request.url);
+  const category = url.searchParams.get("category");  // filtrar por categoría
+  const limit = Math.min(parseInt(url.searchParams.get("limit") || "50", 10), 200);
+  const excludeChat = url.searchParams.get("exclude_chat"); // excluir memorias de este chat
+
+  let query = `SELECT id, category, content, source_chat_id, importance, access_count, last_accessed, expires_at, created_at FROM user_memories WHERE user_email = ?`;
+  const binds = [userEmail];
+
+  // Filtrar memorias no expiradas.
+  query += ` AND (expires_at IS NULL OR expires_at > ?)`;
+  binds.push(Date.now());
+
+  if (category) {
+    const validCategories = ["personal", "tech", "preference", "fact"];
+    if (!validCategories.includes(category)) return errorResponse("invalid_category", 400, { allowed: validCategories });
+    query += ` AND category = ?`;
+    binds.push(category);
+  }
+
+  if (excludeChat) {
+    query += ` AND (source_chat_id IS NULL OR source_chat_id != ?)`;
+    binds.push(excludeChat);
+  }
+
+  // Ordenar: importancia DESC, luego más accedidas primero.
+  query += ` ORDER BY importance DESC, last_accessed DESC LIMIT ?`;
+  binds.push(limit);
+
+  const { results } = await env.DB.prepare(query).bind(...binds).all();
+  return json({ ok: true, memories: results || [], count: (results || []).length });
+}
+
+// POST /api/memories  { content, category?, importance?, source_chat_id?, expires_at? }
+async function handleMemoryCreate(request, env, userEmail) {
+  const body = await request.json().catch(() => ({}));
+  const { content, category, importance, source_chat_id, expires_at } = body;
+
+  if (!content || typeof content !== "string") return errorResponse("missing_content", 400);
+  if (content.length > 2000) return errorResponse("content_too_long", 400, { max: 2000 });
+
+  const validCategories = ["personal", "tech", "preference", "fact"];
+  const cat = validCategories.includes(category) ? category : "fact";
+  const imp = Math.max(1, Math.min(5, parseInt(importance) || 3));
+
+  // Evitar duplicados exactos (mismo usuario + mismo contenido truncado a 100 chars).
+  const contentFingerprint = content.trim().slice(0, 100);
+  const existing = await env.DB.prepare(
+    `SELECT id FROM user_memories WHERE user_email = ? AND substr(content, 1, 100) = ?`
+  ).bind(userEmail, contentFingerprint).first();
+  if (existing) {
+    return json({ ok: true, duplicate: true, memory_id: existing.id });
+  }
+
+  const result = await env.DB.prepare(
+    `INSERT INTO user_memories (user_email, category, content, source_chat_id, importance, expires_at) VALUES (?, ?, ?, ?, ?, ?)`
+  ).bind(userEmail, cat, content.trim().slice(0, 2000), source_chat_id || null, imp, expires_at || null).run();
+
+  return json({ ok: true, memory_id: result.meta.last_row_id }, 201);
+}
+
+// PATCH /api/memories/:id  { content?, category?, importance? }
+async function handleMemoryUpdate(memoryId, request, env, userEmail) {
+  const body = await request.json().catch(() => ({}));
+  const { content, category, importance } = body;
+
+  // Verificar ownership.
+  const existing = await env.DB.prepare(
+    `SELECT id FROM user_memories WHERE id = ? AND user_email = ?`
+  ).bind(memoryId, userEmail).first();
+  if (!existing) return errorResponse("memory_not_found", 404);
+
+  const updates = [];
+  const binds = [];
+  if (content !== undefined) {
+    updates.push("content = ?");
+    binds.push(String(content).slice(0, 2000));
+  }
+  if (category !== undefined) {
+    const validCategories = ["personal", "tech", "preference", "fact"];
+    if (!validCategories.includes(category)) return errorResponse("invalid_category", 400, { allowed: validCategories });
+    updates.push("category = ?");
+    binds.push(category);
+  }
+  if (importance !== undefined) {
+    const imp = Math.max(1, Math.min(5, parseInt(importance) || 3));
+    updates.push("importance = ?");
+    binds.push(imp);
+  }
+  if (updates.length === 0) return errorResponse("no_fields", 400);
+
+  binds.push(memoryId, userEmail);
+  await env.DB.prepare(
+    `UPDATE user_memories SET ${updates.join(", ")} WHERE id = ? AND user_email = ?`
+  ).bind(...binds).run();
+
+  return json({ ok: true, memory_id: parseInt(memoryId) });
+}
+
+// DELETE /api/memories/:id
+async function handleMemoryDelete(memoryId, env, userEmail) {
+  const result = await env.DB.prepare(
+    `DELETE FROM user_memories WHERE id = ? AND user_email = ?`
+  ).bind(memoryId, userEmail).run();
+  if (result.meta.changes === 0) return errorResponse("memory_not_found", 404);
+  return json({ ok: true, deleted: parseInt(memoryId) });
+}
+
+// POST /api/memories/batch  { memories: [{ content, category?, importance? }] }
+async function handleMemoryBatchCreate(request, env, userEmail) {
+  const body = await request.json().catch(() => ({}));
+  const { memories, source_chat_id } = body;
+
+  if (!Array.isArray(memories) || memories.length === 0) return errorResponse("missing_memories_array", 400);
+  if (memories.length > 20) return errorResponse("batch_too_large", 400, { max: 20 });
+
+  const validCategories = ["personal", "tech", "preference", "fact"];
+  const inserted = [];
+  const duplicates = 0;
+
+  for (const m of memories) {
+    if (!m.content || typeof m.content !== "string") continue;
+    const content = m.content.trim().slice(0, 2000);
+    if (!content) continue;
+
+    const cat = validCategories.includes(m.category) ? m.category : "fact";
+    const imp = Math.max(1, Math.min(5, parseInt(m.importance) || 3));
+
+    // Deduplicación por fingerprint.
+    const fp = content.slice(0, 100);
+    const exists = await env.DB.prepare(
+      `SELECT id FROM user_memories WHERE user_email = ? AND substr(content, 1, 100) = ?`
+    ).bind(userEmail, fp).first();
+    if (exists) { duplicates++; continue; }
+
+    const r = await env.DB.prepare(
+      `INSERT INTO user_memories (user_email, category, content, source_chat_id, importance) VALUES (?, ?, ?, ?, ?)`
+    ).bind(userEmail, cat, content, source_chat_id || null, imp).run();
+    inserted.push(r.meta.last_row_id);
+  }
+
+  return json({ ok: true, inserted: inserted.length, duplicates, memory_ids: inserted });
+}
+
+// POST /api/memories/touch  { ids: [1, 2, ...] }  — actualizar access_count + last_accessed
+async function handleMemoriesTouch(request, env, userEmail) {
+  const { ids } = await request.json().catch(() => ({}));
+  if (!Array.isArray(ids) || ids.length === 0) return errorResponse("missing_ids", 400);
+  if (ids.length > 100) return errorResponse("batch_too_large", 400, { max: 100 });
+
+  const now = Date.now();
+  // D1 no soporta VALUES() multi-row en UPDATE, así que hacemos loop.
+  // Con ≤100 IDs esto es aceptable (100 queries en paralelo).
+  const promises = ids.map((id) =>
+    env.DB.prepare(
+      `UPDATE user_memories SET access_count = access_count + 1, last_accessed = ? WHERE id = ? AND user_email = ?`
+    ).bind(now, id, userEmail).run()
+  );
+  await Promise.all(promises);
+
+  return json({ ok: true, touched: ids.length });
+}
+
+// ==============================================================================
+// P0-3 — REPO SEARCH + WRITE (faltantes de v2.0)
+// ==============================================================================
+
+// POST /api/repo/search  { query, content_search? }  — busca en nombres + opcionalmente en contenido
+async function handleRepoSearch(request, env, userEmail) {
+  const { query, content_search = false } = await request.json().catch(() => ({}));
+  if (!query) return errorResponse("missing_query", 400);
+
+  // Búsqueda LIKE en nombres de documentos.
+  const byName = await env.DB.prepare(
+    `SELECT doc_number, doc_name, file_size, mime_type, created_at, 1 AS match_type
+       FROM repo_documents
+      WHERE user_email = ? AND doc_name LIKE ?
+      ORDER BY created_at DESC LIMIT 50`
+  ).bind(userEmail, `%${query}%`).all();
+
+  let byContent = [];
+  if (content_search) {
+    // Buscar en contenido de documentos de texto (.txt, .md, .py, .js, .ts, .csv, .json, .html).
+    const textDocs = await env.DB.prepare(
+      `SELECT doc_number, doc_name, file_size, mime_type, r2_key, created_at
+         FROM repo_documents
+        WHERE user_email = ?
+          AND (mime_type LIKE 'text/%' OR mime_type IN ('application/json','application/javascript','application/typescript'))
+        ORDER BY doc_number DESC LIMIT 50`
+    ).bind(userEmail).all();
+
+    const queryLower = query.toLowerCase();
+    const promises = (textDocs.results || []).map(async (doc) => {
+      try {
+        const obj = await env.BUCKET.get(doc.r2_key);
+        if (!obj) return null;
+        const buf = await obj.arrayBuffer();
+        const text = new TextDecoder("utf-8").decode(buf).toLowerCase();
+        if (text.includes(queryLower)) {
+          // Encontrar contexto alrededor del match.
+          const idx = text.indexOf(queryLower);
+          const start = Math.max(0, idx - 60);
+          const end = Math.min(text.length, idx + query.length + 60);
+          const snippet = (idx > 60 ? "..." : "") + text.slice(start, end) + (end < text.length ? "..." : "");
+          return { ...doc, match_type: 2, snippet };
+        }
+      } catch { /* skip */ }
+      return null;
+    });
+    byContent = (await Promise.all(promises)).filter(Boolean);
+  }
+
+  // Merge: priorizar matches por nombre, luego por contenido.
+  const nameResults = byName.results || [];
+  const contentNumbers = new Set(byContent.map((d) => d.doc_number));
+  const merged = [
+    ...nameResults,
+    ...byContent.filter((d) => !contentNumbers.has(d.doc_number) || !nameResults.some((n) => n.doc_number === d.doc_number)),
+  ];
+
+  return json({
+    query,
+    results: merged,
+    total_by_name: nameResults.length,
+    total_by_content: byContent.length,
+  });
+}
+
+// POST /api/repo/write  { filename, content, overwrite }  — escribe documento al repo
+async function handleRepoWrite(request, env, userEmail) {
+  const { filename, content, overwrite = false } = await request.json().catch(() => ({}));
+  if (!filename || content === undefined) return errorResponse("missing_fields", 400, { required: ["filename", "content"] });
+
+  const buf = new TextEncoder().encode(content);
+  if (buf.byteLength > 5 * 1024 * 1024) return errorResponse("file_too_large", 400, { max_bytes: 5_242_880 });
+
+  // Si overwrite=false, verificar que no exista.
+  const existing = await env.DB.prepare(
+    `SELECT doc_number FROM repo_documents WHERE user_email = ? AND doc_name = ?`
+  ).bind(userEmail, filename).first();
+  if (existing && !overwrite) {
+    return errorResponse("file_exists", 409, { filename, doc_number: existing.doc_number });
+  }
+
+  // Calcular uso total del usuario (100 MB límite).
+  const usage = await env.DB.prepare(
+    `SELECT COALESCE(SUM(file_size), 0) AS total FROM repo_documents WHERE user_email = ?`
+  ).bind(userEmail).first();
+  if ((usage?.total || 0) + buf.byteLength > 100 * 1024 * 1024) {
+    return errorResponse("quota_exceeded", 400, { used: usage?.total || 0, limit: 104857600 });
+  }
+
+  if (existing && overwrite) {
+    // Actualizar contenido en R2 (misma r2_key) y metadatos.
+    const r2Key = `repo/${userEmail}/${existing.doc_number}_${slugify(filename)}`;
+    await env.BUCKET.put(r2Key, buf, {
+      customMetadata: { user_email: userEmail, doc_number: String(existing.doc_number), doc_name: filename },
+    });
+    await env.DB.prepare(
+      `UPDATE repo_documents SET file_size = ?, mime_type = ? WHERE doc_number = ? AND user_email = ?`
+    ).bind(buf.byteLength, guessMime(filename), existing.doc_number, userEmail).run();
+    return json({ ok: true, doc_number: existing.doc_number, doc_name: filename, r2_key: r2Key, size: buf.byteLength, overwritten: true });
+  }
+
+  // Crear nuevo.
+  const ins = await env.DB.prepare(
+    `INSERT INTO repo_documents (user_email, doc_name, r2_key, file_size, mime_type) VALUES (?, ?, ?, ?, ?)`
+  ).bind(userEmail, filename, "pending", buf.byteLength, guessMime(filename)).run();
+  const docNumber = ins.meta.last_row_id;
+  const r2Key = `repo/${userEmail}/${docNumber}_${slugify(filename)}`;
+  await env.BUCKET.put(r2Key, buf, {
+    customMetadata: { user_email: userEmail, doc_number: String(docNumber), doc_name: filename },
+  });
+  await env.DB.prepare(
+    `UPDATE repo_documents SET r2_key = ? WHERE doc_number = ? AND user_email = ?`
+  ).bind(r2Key, docNumber, userEmail).run();
+  return json({ ok: true, doc_number: docNumber, doc_name: filename, r2_key: r2Key, size: buf.byteLength });
+}
+
+function guessMime(filename) {
+  const ext = (filename || "").split(".").pop().toLowerCase();
+  const map = {
+    txt: "text/plain", md: "text/markdown", pdf: "application/pdf", csv: "text/csv",
+    json: "application/json", html: "text/html", py: "text/x-python", js: "application/javascript",
+    ts: "application/typescript",
+  };
+  return map[ext] || "application/octet-stream";
+}
+
+// ==============================================================================
+// 6.1 — DB MESSAGE (autoguardado continuo)
+// ==============================================================================
+async function handleDbMessage(request, env, userEmail) {
+  const { chat_id, role, content, model, provider, thinking_content, tools_used, author_email, tokens_in, tokens_out, cached_tokens, message_id } = await request.json().catch(() => ({}));
+  if (!chat_id || !role || !content) return errorResponse("missing_fields", 400);
+
+  const msgId = message_id || crypto.randomUUID();
+  await env.DB.prepare(
+    `INSERT INTO messages (id, chat_id, role, model, provider, content, thinking_content, tools_used, author_email, tokens_in, tokens_out, cached_tokens)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(
+    msgId, chat_id, role, model || null, provider || null, content,
+    thinking_content || null, tools_used ? JSON.stringify(tools_used) : null,
+    author_email || userEmail, tokens_in || null, tokens_out || null, cached_tokens || 0
+  ).run();
+
+  // Touch chat updated_at.
+  await env.DB.prepare(
+    `UPDATE chats SET updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_email = ?`
+  ).bind(chat_id, userEmail).run();
+
+  return json({ ok: true, message_id: msgId });
+}
+
+// ==============================================================================
+// 6.2 — CHAT/OPENROUTER (streaming proxy con rotador + sticky + caching)
+// ==============================================================================
+async function handleChatOpenRouter(request, env, userEmail) {
+  const clientBody = await request.json().catch(() => ({}));
+  const { model, messages, stream = true, tools, reasoning, chat_id, is_shared, settings = {} } = clientBody;
+
+  if (!model || !OPENROUTER_WHITELIST.has(model)) {
+    return errorResponse("model_not_allowed", 400, { model, whitelist: [...OPENROUTER_WHITELIST] });
+  }
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return errorResponse("missing_messages", 400);
+  }
+
+  // --- Construir body upstream ---
+  const upstreamBody = { ...clientBody };
+  delete upstreamBody.chat_id;
+  delete upstreamBody.is_shared;
+  delete upstreamBody.settings;
+
+  // --- System prompt: resolver e inyectar el correcto para el modelo ---
+  // El frontend envía un system prompt basado en su módulo prompts.js (que puede
+  // carecer de BASE_SYSTEM_PROMPT si el admin no lo bundleó en el frontend).
+  // El Worker tiene la versión completa (con BASE_SYSTEM_PROMPT real), así que
+  // reemplazamos el system message para garantizar identidad completa.
+  const uiRole = request.headers.get("x-veritas-role") || null;
+  const promptKey = uiRole ? UI_ROLE_TO_PROMPT_KEY[uiRole] : null;
+  // Fallback: resolver desde el modelId directamente.
+  const resolvedKey = promptKey || MODEL_TO_ROLE[model];
+  const systemPrompt = resolvedKey ? SYSTEM_PROMPTS[resolvedKey] : null;
+  if (systemPrompt && Array.isArray(upstreamBody.messages)) {
+    const firstMsg = upstreamBody.messages[0];
+    if (firstMsg && firstMsg.role === "system") {
+      // Reemplazar el system message existente (placeholder o versión frontend)
+      // con la versión completa del Worker que incluye BASE_SYSTEM_PROMPT.
+      upstreamBody.messages[0] = { role: "system", content: systemPrompt };
+    } else {
+      // No hay system message — prepend el del Worker.
+      upstreamBody.messages.unshift({ role: "system", content: systemPrompt });
+    }
+  }
+
+  // Sticky routing (Sección 1.4.1).
+  if (settings.stickyRouting !== false && chat_id) {
+    upstreamBody.session_id = chat_id;
+  }
+
+  // Caching defensivo (Sección 1.4.2).
+  if (settings.promptCaching !== false) {
+    upstreamBody.messages = injectCacheControl(upstreamBody.messages, is_shared);
+  }
+
+  // Tool result truncation (Sección 1.4.4).
+  if (settings.toolTruncation !== false) {
+    const limitKB = settings.toolTruncationLimitKB || 2;
+    upstreamBody.messages = truncateToolResults(upstreamBody.messages, limitKB * 1024);
+  }
+
+  // --- Llamar upstream con rotador de claves ---
+  const startTs = Date.now();
+  let keyIndexUsed = null;
+  let degraded = false;
+  let upstreamResp = null;
+
+  try {
+    const result = await withKeyRotation(env, "openrouter", async (key) => {
+      // Nota: getKey se llama dentro de withKeyRotation; capturamos el índice
+      // para telemetría. Hacemos un getKey previo para conocer el índice.
+      return await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${key}`,
+          "Content-Type": "application/json",
+          "HTTP-Referer": env.PAGES_URL || "https://veritas.pages.dev",
+          "X-Title": "Véritas",
+          "Accept": stream ? "text/event-stream" : "application/json",
+        },
+        body: JSON.stringify(upstreamBody),
+      });
+    });
+    upstreamResp = result.response;
+    keyIndexUsed = result.keyIndex;
+    degraded = result.degraded;
+  } catch (e) {
+    if (e instanceof AllKeysCooldownError) throw e;
+    return errorResponse("upstream_error", 502, { message: e.message });
+  }
+
+  if (!upstreamResp) {
+    return errorResponse("upstream_no_response", 502);
+  }
+
+  // Si el upstream sigue en error tras reintentos, devolver JSON estructurado.
+  if (upstreamResp.status === 429 || upstreamResp.status === 503) {
+    return errorResponse("all_keys_rate_limited", 503, {
+      retry_after_ms: SERVICE_REGISTRY.openrouter.cooldownMs,
+      model,
+    });
+  }
+  if (upstreamResp.status >= 500) {
+    return errorResponse("upstream_error", upstreamResp.status, { model });
+  }
+  if (upstreamResp.status === 401 || upstreamResp.status === 403) {
+    return errorResponse("auth_error", upstreamResp.status, { model });
+  }
+  if (upstreamResp.status >= 400) {
+    const errText = await upstreamResp.text();
+    return errorResponse("upstream_error", upstreamResp.status, { model, body: errText.slice(0, 1000) });
+  }
+
+  // --- Logging de telemetría (opcional, best-effort) ---
+  logOpenRouterCall(env, userEmail, model, keyIndexUsed, upstreamResp.status, startTs).catch(() => {});
+
+  // --- Stream passthrough ---
+  if (stream) {
+    // TransformStream para interceptar el último evento (usage) y persistirlo.
+    const { readable, writable } = new TransformStream({
+      async transform(chunk, controller) {
+        controller.enqueue(chunk);
+      },
+    });
+
+    // Pipe upstream → cliente. El frontend parsea SSE y manda de vuelta usage
+    // vía /api/db/message (tokens_in/out/cached_tokens).
+    const headers = new Headers(upstreamResp.headers);
+    headers.set("Cache-Control", "no-cache");
+    headers.set("Connection", "keep-alive");
+    headers.set("Content-Type", "text/event-stream");
+    headers.set("X-Véritas-Key-Index", String(keyIndexUsed));
+    if (degraded) headers.set("X-Véritas-Degraded", "1");
+
+    return new Response(upstreamResp.body.pipeThrough(writable), { status: 200, headers });
+  }
+
+  // Non-streaming: devolver JSON tal cual + header con key_index.
+  const respHeaders = new Headers();
+  respHeaders.set("Content-Type", "application/json");
+  respHeaders.set("X-Véritas-Key-Index", String(keyIndexUsed));
+  if (degraded) respHeaders.set("X-Véritas-Degraded", "1");
+  return new Response(upstreamResp.body, { status: 200, headers: respHeaders });
+}
+
+// ------------------------------------------------------------------------------
+// injectCacheControl: transforma messages[0] (system) a array con cache_control.
+// ------------------------------------------------------------------------------
+function injectCacheControl(messages, isShared) {
+  if (!Array.isArray(messages) || messages.length === 0) return messages;
+  const sys = messages[0];
+  if (!sys || sys.role !== "system") return messages;
+
+  const originalText = typeof sys.content === "string"
+    ? sys.content
+    : Array.isArray(sys.content)
+      ? sys.content.map((b) => b.text || "").join("\n")
+      : "";
+
+  const cacheControl = { type: "ephemeral" };
+  if (isShared) cacheControl.ttl = "1h";
+
+  return [
+    {
+      role: "system",
+      content: [
+        { type: "text", text: originalText },
+        {
+          type: "text",
+          text: "[Configuración fija de Véritas — permanente para este chat]",
+          cache_control: cacheControl,
+        },
+      ],
+    },
+    ...messages.slice(1),
+  ];
+}
+
+function truncateToolResults(messages, limitBytes) {
+  if (!Array.isArray(messages)) return messages;
+  return messages.map((msg) => {
+    if (msg.role !== "tool") return msg;
+    if (msg.full_requested) return msg;
+    const content = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content);
+    if (content.length <= limitBytes) return msg;
+    const truncated = content.slice(0, limitBytes);
+    const remaining = content.length - limitBytes;
+    return { ...msg, content: `${truncated}\n[... ${remaining} bytes más, pide full=true para verlos]` };
+  });
+}
+
+async function logOpenRouterCall(env, userEmail, model, keyIndex, status, startTs) {
+  try {
+    await env.DB.prepare(
+      `INSERT INTO openrouter_calls (user_email, model, key_index, status, latency_ms, ts)
+       VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`
+    ).bind(userEmail, model, keyIndex, status, Date.now() - startTs).run();
+  } catch (e) { /* best-effort */ }
+}
+
+// ==============================================================================
+// 6.3 — STATUS (Dashboard)
+// ==============================================================================
+async function handleStatus(env, userEmail) {
+  const services = listServices(env);
+  const openrouterPool = services.includes("openrouter") ? await getPoolStatus(env, "openrouter") : null;
+
+  // Ping OpenRouter si hay claves (HEAD request al endpoint de completions).
+  let openrouterAvailable = null;
+  if (openrouterPool && !openrouterPool.empty) {
+    try {
+      const start = Date.now();
+      const resp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "HEAD",
+      });
+      openrouterAvailable = { available: resp.status < 500, latency_ms: Date.now() - start, status: resp.status };
+    } catch (e) {
+      openrouterAvailable = { available: false, error: e.message };
+    }
+  }
+
+  // Puter no se puede ping desde Worker (corre en cliente). El frontend hace el ping.
+  return json({
+    openrouter: openrouterAvailable,
+    openrouter_pool_degraded: openrouterPool ? openrouterPool.degraded : null,
+    puter: { provider: "puter", available: true, note: "Ping is done client-side; Worker always returns available=true." },
+    services: services.map((s) => ({ name: s, registered: true })),
+    ts: new Date().toISOString(),
+  });
+}
+
+// ==============================================================================
+// 6.4 — KEYS MANAGEMENT (admin)
+// ==============================================================================
+async function handleKeysStatus(request, env, userEmail) {
+  if (!isAdmin(userEmail, env)) return errorResponse("admin_required", 403);
+  const url = new URL(request.url);
+  const service = url.searchParams.get("service");
+  if (!service) {
+    // Devolver estado de todos los servicios.
+    const all = {};
+    for (const svc of Object.keys(SERVICE_REGISTRY)) {
+      try { all[svc] = await getPoolStatus(env, svc); } catch (e) { all[svc] = { error: e.message }; }
+    }
+    return json({ services: all });
+  }
+  const status = await getPoolStatus(env, service);
+  return json(status);
+}
+
+async function handleKeysHealth(request, env, userEmail) {
+  if (!isAdmin(userEmail, env)) return errorResponse("admin_required", 403);
+  const url = new URL(request.url);
+  const service = url.searchParams.get("service");
+  if (!service) return errorResponse("missing_service", 400);
+  const result = await forceHealthCheck(env, service);
+  return json(result);
+}
+
+async function handleKeysCooldownReset(request, env, userEmail) {
+  if (!isAdmin(userEmail, env)) return errorResponse("admin_required", 403);
+  const { service, key_index } = await request.json().catch(() => ({}));
+  if (!service || !key_index) return errorResponse("missing_params", 400);
+  await resetCooldown(env, service, Number(key_index));
+  return json({ ok: true, service, key_index });
+}
+
+async function handleKeysServices(env, userEmail) {
+  // Público (no admin): solo nombres de servicios registrados.
+  return json({ services: Object.keys(SERVICE_REGISTRY) });
+}
+
+// ==============================================================================
+// 6.5 — TOOL INVOKE (dispatcher único)
+// ==============================================================================
+async function handleToolInvoke(request, env, userEmail) {
+  const body = await request.json().catch(() => ({}));
+  const { tool: toolName, args } = body;
+  const role = request.headers.get("x-veritas-role") || body.role || null;
+
+  if (!toolName) return errorResponse("missing_tool", 400);
+  if (!TOOL_REGISTRY_SERVER[toolName]) return errorResponse("tool_not_found", 404, { tool: toolName });
+  if (!isAllowed(toolName, role)) return errorResponse("forbidden", 403, { tool: toolName, role, allowed: TOOL_REGISTRY_SERVER[toolName].allowedRoles });
+
+  const validation = validateArgs(toolName, args || {});
+  if (!validation.ok) return errorResponse("invalid_args", 400, { tool: toolName, error: validation.error });
+
+  // OAuth check.
+  const meta = TOOL_REGISTRY_SERVER[toolName];
+  if (meta.requiresOauth) {
+    const row = await env.DB.prepare(
+      `SELECT invalid FROM external_connections WHERE user_email = ? AND provider = ?`
+    ).bind(userEmail, meta.requiresOauth).first();
+    if (!row) {
+      return json({
+        status: "forbidden",
+        output: `Conecta tu cuenta de ${meta.requiresOauth} en Ajustes → Conexiones externas.`,
+        latency_ms: 0,
+      });
+    }
+    if (row.invalid === 1) {
+      return json({
+        status: "forbidden",
+        output: `Tu conexión de ${meta.requiresOauth} fue revocada. Reconéctala en Ajustes → Conexiones externas.`,
+        latency_ms: 0,
+      });
+    }
+  }
+
+  // Ejecutar handler.
+  const startTs = Date.now();
+  try {
+    // --- Inline handler para create_skill (escribe directamente en D1) ---
+    if (toolName === "create_skill") {
+      return await handleInlineCreateSkill(validation.args, env, userEmail);
+    }
+
+    const handler = await importHandler(toolName);
+    const ctx = { env, user_email: userEmail, chat_id: body.chat_id || null, role };
+    const result = await Promise.race([
+      handler.run(validation.args, ctx),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("tool_timeout")), 30_000)),
+    ]);
+    const latency = Date.now() - startTs;
+
+    // Persistir en tool_calls (auditoría).
+    persistToolCall(env, userEmail, body.chat_id, toolName, validation.args, result, latency).catch(() => {});
+
+    return json({
+      status: result.status || "ok",
+      output: result.output,
+      latency_ms: latency,
+      ...(result.extra || {}),
+    });
+  } catch (e) {
+    const latency = Date.now() - startTs;
+    persistToolCall(env, userEmail, body.chat_id, toolName, validation.args, { status: "error", output: e.message }, latency).catch(() => {});
+    return json({ status: "error", output: e.message || String(e), latency_ms: latency });
+  }
+}
+
+/**
+ * Inline handler para la tool create_skill.
+ * Reutiliza la misma lógica de handleSkillCreate pero dentro del dispatcher de tools.
+ */
+function skillSlugify(name) {
+  return String(name || "").toLowerCase()
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 64);
+}
+
+async function handleInlineCreateSkill(args, env, userEmail) {
+  const { name, description, category, icon, color, needsExternal, promptContent } = args;
+  const startTs = Date.now();
+
+  const id = skillSlugify(name);
+  if (!id) return json({ status: "error", output: "Cannot generate skill ID from name" });
+
+  // Colisión con built-ins (misma lista que handleSkillCreate).
+  const STATIC_IDS = new Set([
+    "cross-reference-claim", "media-literacy-analyzer", "source-reliability-rater",
+    "argument-deconstruct", "timeline-from-sources", "build-entity-graph",
+    "detect-coordinated-behavior", "social-username-correlate", "social-profile-analyzer",
+    "geolocate-from-visual-cues", "influence-operations-analyst", "social-phenomena-analyst",
+    "psychological-profile", "legal-document-analyzer",
+    "conflict-dynamics-analyst", "contentanalysis", "geopolitical-risk-analyst",
+    "global-logistics-evaluator", "anti-pua", "web-search", "web-reader",
+    "image-search", "multi-search-engine", "ai-news-collectors", "aminer-research",
+    "qingyan-research", "auto-target-tracker", "coding-agent", "fullstack-dev",
+    "agent-browser", "web-artifacts-builder", "web-shader-extractor",
+    "process-optimizer", "version-management", "blog-writer", "seo-content-writer",
+    "content-strategy", "writing-plans", "paraphrase-humanized",
+    "transcreation-localization", "doc-coauthoring", "finance",
+    "stock-analysis-skill", "market-research-reports", "text-to-dashboard",
+    "image-understand", "image-generation", "image-edit", "video-understand",
+    "podcast-generate", "storyboard-manager", "learn", "cheat-sheet",
+    "mindfulness-meditation", "quiz-mastery", "study-buddy", "quiz-html",
+    "comm-advisor-camp", "crisis-comm-advisor", "marketing-mode",
+    "interview-designer", "interview-prep", "jd-resume-tailor", "resume-builder",
+    "job-intent-tracker", "canvas-design", "design", "visual-design-foundations",
+    "theme-factory", "ui-ux-pro-max", "docx", "pdf", "pptx", "xlsx",
+    "skill-creator", "skill-finder-cn", "task-review",
+  ]);
+  if (STATIC_IDS.has(id)) {
+    return json({ status: "error", output: `Skill ID "${id}" conflicts with a built-in skill`, latency_ms: Date.now() - startTs });
+  }
+
+  // Verificar si ya existe una custom con ese ID.
+  const existing = await env.DB.prepare(
+    `SELECT id FROM user_skills WHERE id = ? AND user_email = ? AND is_active = 1`
+  ).bind(id, userEmail).first();
+  if (existing) {
+    return json({ status: "error", output: `Ya existe una skill con ID "${id}"`, latency_ms: Date.now() - startTs });
+  }
+
+  // Obtener ordering máximo.
+  const maxOrder = await env.DB.prepare(
+    `SELECT COALESCE(MAX(ordering), -1) as max_o FROM user_skills WHERE user_email = ?`
+  ).bind(userEmail).first();
+  const ordering = (maxOrder?.max_o ?? -1) + 1;
+
+  const skillData = {
+    name: String(name).trim(),
+    description: String(description).trim(),
+    category: category || "utility",
+    tier: "utility",
+    inputType: "text",
+    outputType: "analysis_report",
+    needsExternal: !!needsExternal,
+    promptPath: null,
+    references: [],
+    icon: icon || "\u2728",
+    color: color || "#f59e0b",
+    allowedRoles: ["agent", "estratega", "pensador", "coder", "fast"],
+  };
+
+  await env.DB.prepare(
+    `INSERT INTO user_skills (id, user_email, skill_json, prompt_content, is_active, ordering)
+     VALUES (?, ?, ?, ?, 1, ?)`
+  ).bind(id, userEmail, JSON.stringify(skillData), (promptContent || "").trim(), ordering).run();
+
+  skillData.id = id;
+  skillData._isCustom = true;
+  skillData._promptContent = (promptContent || "").trim();
+
+  return json({
+    status: "ok",
+    output: `Skill "${skillData.name}" creada exitosamente con ID "${id}". Ya está disponible para el usuario.`,
+    skill: skillData,
+    latency_ms: Date.now() - startTs,
+  });
+}
+
+async function persistToolCall(env, userEmail, chatId, toolName, args, result, latencyMs) {
+  try {
+    const outputPreview = String(result.output || "").slice(0, 2048);
+    await env.DB.prepare(
+      `INSERT INTO tool_calls (user_email, chat_id, tool_name, args_json, status, output_preview, latency_ms, ts)
+       VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`
+    ).bind(
+      userEmail, chatId || null, toolName,
+      JSON.stringify(args).slice(0, 8192),
+      result.status || "error",
+      outputPreview,
+      latencyMs
+    ).run();
+  } catch (e) { /* best-effort */ }
+}
+
+async function handleToolsRegistry() {
+  return json({ tools: publicRegistry() });
+}
+
+// ==============================================================================
+// 6.6 — OAUTH (start, callback, disconnect, connections, account)
+// ==============================================================================
+async function handleOAuthStart(provider, request, env, userEmail) {
+  if (!["github", "dropbox"].includes(provider)) return errorResponse("unknown_provider", 400, { provider });
+  const adapter = (await import(`../../lib/services/oauth/${provider}.js`)).default;
+  const clientId = provider === "github" ? env.GITHUB_OAUTH_CLIENT_ID : env.DROPBOX_OAUTH_APP_KEY;
+  if (!clientId) return errorResponse("client_id_missing", 500, { provider });
+
+  const state = generateOAuthState();
+  const verifier = generatePkceVerifier();
+  const challenge = await computePkceChallenge(verifier);
+
+  const url = new URL(request.url);
+  const origin = `${url.protocol}//${url.host}`;
+  const redirectUri = `${origin}/api/oauth/${provider}/callback`;
+
+  await env.DB.prepare(
+    `INSERT INTO oauth_pending (state, user_email, provider, code_verifier, created_at)
+     VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)`
+  ).bind(state, userEmail, provider, verifier).run();
+
+  // Purgar states viejos (>15 min) en cada start.
+  env.DB.prepare(`DELETE FROM oauth_pending WHERE created_at < datetime('now','-15 minutes')`).run().catch(() => {});
+
+  const authUrl = adapter.getAuthUrl({
+    clientId,
+    redirectUri,
+    scopes: adapter.DEFAULT_SCOPES,
+    state,
+    codeChallenge: challenge,
+  });
+
+  return Response.redirect(authUrl, 302);
+}
+
+async function handleOAuthCallback(provider, request, env) {
+  if (!["github", "dropbox"].includes(provider)) return errorResponse("unknown_provider", 400);
+  const url = new URL(request.url);
+  const code = url.searchParams.get("code");
+  const state = url.searchParams.get("state");
+  const error = url.searchParams.get("error");
+
+  const frontendBase = `${url.protocol}//${url.host}`;
+  if (error) return Response.redirect(`${frontendBase}/ajustes/conexiones?status=error&provider=${provider}&error=${encodeURIComponent(error)}`, 302);
+  if (!code || !state) return Response.redirect(`${frontendBase}/ajustes/conexiones?status=error&provider=${provider}&error=missing_code_or_state`, 302);
+
+  const pending = await env.DB.prepare(
+    `SELECT user_email, code_verifier FROM oauth_pending WHERE state = ?`
+  ).bind(state).first();
+  if (!pending) return Response.redirect(`${frontendBase}/ajustes/conexiones?status=error&provider=${provider}&error=invalid_state`, 302);
+
+  await env.DB.prepare(`DELETE FROM oauth_pending WHERE state = ?`).bind(state).run();
+
+  const adapter = (await import(`../../lib/services/oauth/${provider}.js`)).default;
+  const clientId = provider === "github" ? env.GITHUB_OAUTH_CLIENT_ID : env.DROPBOX_OAUTH_APP_KEY;
+  const clientSecret = provider === "github" ? env.GITHUB_OAUTH_CLIENT_SECRET : env.DROPBOX_OAUTH_APP_SECRET;
+  const redirectUri = `${frontendBase}/api/oauth/${provider}/callback`;
+
+  try {
+    const tokens = await adapter.exchangeCode({
+      code,
+      codeVerifier: pending.code_verifier,
+      clientId,
+      clientSecret,
+      redirectUri,
+    });
+
+    let accountMetadata = null;
+    try {
+      accountMetadata = await adapter.getAccountInfo({ accessToken: tokens.access_token });
+    } catch (e) { /* best-effort */ }
+
+    await upsertConnection(env, pending.user_email, provider, {
+      access_token: tokens.access_token,
+      refresh_token: tokens.refresh_token,
+      expires_in_sec: tokens.expires_in_sec,
+      scopes: tokens.scopes,
+      account_metadata: accountMetadata,
+    });
+
+    return Response.redirect(`${frontendBase}/ajustes/conexiones?status=ok&provider=${provider}`, 302);
+  } catch (e) {
+    return Response.redirect(`${frontendBase}/ajustes/conexiones?status=error&provider=${provider}&error=${encodeURIComponent(e.message)}`, 302);
+  }
+}
+
+async function handleOAuthDisconnect(provider, env, userEmail) {
+  if (!["github", "dropbox"].includes(provider)) return errorResponse("unknown_provider", 400);
+  // Best-effort revoke en el provider.
+  try {
+    const conn = await getValidConnection(env, userEmail, provider).catch(() => null);
+    if (conn) {
+      const adapter = (await import(`../../lib/services/oauth/${provider}.js`)).default;
+      // GitHub: DELETE /applications/{client_id}/token. Dropbox: POST /auth/token_revoke.
+      // Best-effort; si falla, igual borramos la fila local.
+      if (provider === "dropbox") {
+        await adapter.apiCall({ accessToken: conn.accessToken, method: "POST", path: "/auth/token_revoke", apiArg: {} }).catch(() => {});
+      }
+    }
+  } catch (e) { /* best-effort */ }
+  await env.DB.prepare(
+    `DELETE FROM external_connections WHERE user_email = ? AND provider = ?`
+  ).bind(userEmail, provider).run();
+  return json({ ok: true, disconnected: provider });
+}
+
+async function handleOAuthConnections(env, userEmail) {
+  const result = await env.DB.prepare(
+    `SELECT provider, scopes, expires_at, account_metadata, invalid, created_at, updated_at
+       FROM external_connections WHERE user_email = ?`
+  ).bind(userEmail).all();
+  const connections = (result.results || []).map((r) => ({
+    provider: r.provider,
+    scopes: r.scopes ? r.scopes.split(",") : [],
+    expires_at: r.expires_at,
+    account_metadata: r.account_metadata ? JSON.parse(r.account_metadata) : null,
+    invalid: r.invalid === 1,
+    connected_at: r.created_at,
+    updated_at: r.updated_at,
+  }));
+  return json({ connections });
+}
+
+async function handleOAuthAccount(provider, env, userEmail) {
+  if (!["github", "dropbox"].includes(provider)) return errorResponse("unknown_provider", 400);
+  const row = await env.DB.prepare(
+    `SELECT account_metadata, invalid FROM external_connections WHERE user_email = ? AND provider = ?`
+  ).bind(userEmail, provider).first();
+  if (!row) return errorResponse("not_connected", 404, { provider });
+  return json({
+    provider,
+    account: row.account_metadata ? JSON.parse(row.account_metadata) : null,
+    invalid: row.invalid === 1,
+  });
+}
+
+// ==============================================================================
+// 6.6 — ARTIFACT PROXY (para el iframe del Sandbox)
+// ==============================================================================
+async function handleArtifactProxy(request, env, userEmail) {
+  const { url: targetUrl, method = "GET", headers = {}, body } = await request.json().catch(() => ({}));
+  if (!targetUrl) return errorResponse("missing_url", 400);
+
+  let parsed;
+  try { parsed = new URL(targetUrl); } catch { return errorResponse("invalid_url", 400); }
+  if (parsed.protocol !== "https:") return errorResponse("ssrf_blocked", 400, { reason: "Only HTTPS allowed" });
+
+  // Anti-SSRF: bloquear IPs internas.
+  const hostname = parsed.hostname.toLowerCase();
+  if (["localhost", "127.0.0.1", "0.0.0.0", "::1"].includes(hostname) ||
+      hostname.startsWith("10.") || hostname.startsWith("192.168.") ||
+      /^172\.(1[6-9]|2\d|3[01])\./.test(hostname) || hostname.endsWith(".internal")) {
+    return errorResponse("ssrf_blocked", 400, { hostname });
+  }
+
+  // Lista blanca opcional desde wrangler.toml.
+  if (env.ARTIFACT_PROXY_ALLOWED_HOSTS) {
+    const allowed = env.ARTIFACT_PROXY_ALLOWED_HOSTS.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+    if (allowed.length > 0 && !allowed.includes(hostname)) {
+      return errorResponse("host_not_allowed", 403, { hostname, allowed });
+    }
+  }
+
+  // Si la URL pertenece a un servicio del rotador, inyectar API key automáticamente.
+  const serviceForHost = matchServiceByHost(hostname);
+  let injectedKey = null;
+  let keyIndex = null;
+  if (serviceForHost) {
+    try {
+      const k = await getKey(env, serviceForHost);
+      injectedKey = k.key;
+      keyIndex = k.index;
+    } catch (e) { /* no key available */ }
+  }
+
+  const finalHeaders = { ...headers };
+  if (injectedKey) {
+    // Inyectar según convención del servicio.
+    if (serviceForHost === "scrapingbee") parsed.searchParams.set("api_key", injectedKey);
+    else if (serviceForHost === "serper") finalHeaders["X-API-KEY"] = injectedKey;
+    else if (serviceForHost === "steel") finalHeaders["steel-api-key"] = injectedKey;
+    else finalHeaders["Authorization"] = `Bearer ${injectedKey}`;
+  }
+
+  const start = Date.now();
+  try {
+    const resp = await fetch(parsed.toString(), {
+      method,
+      headers: finalHeaders,
+      body: body ? (typeof body === "string" ? body : JSON.stringify(body)) : undefined,
+    });
+    const text = await resp.text();
+    const latency = Date.now() - start;
+    // Auditoría si la URL pertenece a un servicio del rotador.
+    if (serviceForHost && keyIndex !== null) {
+      auditExternalCall(env, userEmail, serviceForHost, "proxy", parsed.host, resp.status, latency).catch(() => {});
+    }
+    return new Response(text, {
+      status: resp.status,
+      headers: {
+        "Content-Type": resp.headers.get("Content-Type") || "application/json",
+        "Access-Control-Allow-Origin": "*",
+        "X-Véritas-Proxy-Latency": String(latency),
+        "X-Véritas-Proxy-Service": serviceForHost || "none",
+      },
+    });
+  } catch (e) {
+    return errorResponse("proxy_failed", 502, { message: e.message });
+  }
+}
+
+function matchServiceByHost(hostname) {
+  if (hostname.endsWith("jina.ai") || hostname === "r.jina.ai" || hostname === "s.jina.ai") return "jina";
+  if (hostname.endsWith("tavily.com") || hostname === "api.tavily.com") return "tavily";
+  if (hostname.endsWith("serper.dev") || hostname === "google.serper.dev") return "serper";
+  if (hostname.endsWith("scrapingbee.com") || hostname === "app.scrapingbee.com") return "scrapingbee";
+  if (hostname.endsWith("firecrawl.dev") || hostname === "api.firecrawl.dev") return "firecrawl";
+  if (hostname.endsWith("browser-use.com") || hostname === "api.browser-use.com") return "browser_use";
+  if (hostname.endsWith("steel.dev") || hostname === "api.steel.dev") return "steel";
+  if (hostname.endsWith("openrouter.ai")) return "openrouter";
+  return null;
+}
+
+// ==============================================================================
+// 6.6 — SANDBOX TEMPLATES
+// ==============================================================================
+async function handleSandboxTemplates() {
+  // El catálogo real está en /lib/sandboxTemplates.js (ETAPA 5). Aquí devolvemos
+  // la lista de nombres para que el frontend pueda hidratar el dropdown.
+  return json({
+    templates: [
+      { name: "maplibre-basic", description: "Mapa MapLibre GL centrado en coordenadas dadas, tiles OSM raster." },
+      { name: "maplibre-markers", description: "Mapa MapLibre con marcadores arrastrables." },
+      { name: "three-scene", description: "Escena Three.js con cámara orbital y mesh por defecto." },
+      { name: "chartjs-dashboard", description: "Dashboard con 3 charts (line, bar, doughnut) responsive." },
+      { name: "d3-chart", description: "Gráfico D3.js force-directed graph." },
+      { name: "tailwind-page", description: "Página completa con Tailwind CDN y secciones hero/features/footer." },
+      { name: "plotly-3d", description: "Superficie 3D Plotly.js." },
+    ],
+  });
+}
+
+// ==============================================================================
+// 6.7 — SESIÓN COMPARTIDA
+// ==============================================================================
+async function handleShareCreate(chatId, request, env, userEmail) {
+  // Solo el owner puede crear share.
+  const chat = await env.DB.prepare(
+    `SELECT id, user_email, is_shared, category FROM chats WHERE id = ? AND user_email = ?`
+  ).bind(chatId, userEmail).first();
+  if (!chat) return errorResponse("chat_not_found", 404, { chat_id: chatId });
+
+  if (!["agent", "general"].includes(chat.category)) {
+    return errorResponse("category_not_shareable", 400, { category: chat.category });
+  }
+
+  const shareToken = crypto.randomUUID();
+  await env.DB.prepare(
+    `INSERT OR REPLACE INTO chat_participants (chat_id, user_email, role, share_token, joined_at)
+     VALUES (?, ?, 'owner', NULL, CURRENT_TIMESTAMP)`
+  ).bind(chatId, userEmail).run();
+
+  // Crear invitación pendiente (una fila con share_token y user_email=NULL).
+  await env.DB.prepare(
+    `INSERT INTO chat_participants (chat_id, user_email, role, share_token, joined_at)
+     VALUES (?, NULL, 'editor', ?, CURRENT_TIMESTAMP)`
+  ).bind(chatId, shareToken).run();
+
+  await env.DB.prepare(
+    `UPDATE chats SET is_shared = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+  ).bind(chatId).run();
+
+  const url = new URL(request.url);
+  const shareUrl = `${url.protocol}//${url.host}/chat/${chatId}/join?token=${shareToken}`;
+  return json({ ok: true, share_url: shareUrl, share_token: shareToken });
+}
+
+async function handleShareRevoke(chatId, env, userEmail) {
+  // Solo el owner.
+  const owner = await env.DB.prepare(
+    `SELECT user_email FROM chat_participants WHERE chat_id = ? AND role = 'owner'`
+  ).bind(chatId).first();
+  if (!owner || owner.user_email !== userEmail) return errorResponse("not_owner", 403);
+
+  // Eliminar invitaciones pendientes (share_token no canjeado aún).
+  await env.DB.prepare(
+    `DELETE FROM chat_participants WHERE chat_id = ? AND share_token IS NOT NULL AND user_email IS NULL`
+  ).bind(chatId).run();
+  return json({ ok: true });
+}
+
+async function handleShareJoin(chatId, url, env, userEmail) {
+  const token = url.searchParams.get("token");
+  if (!token) return errorResponse("missing_token", 400);
+
+  // Validar token.
+  const pending = await env.DB.prepare(
+    `SELECT user_email FROM chat_participants WHERE chat_id = ? AND share_token = ? AND user_email IS NULL`
+  ).bind(chatId, token).first();
+  if (!pending) return errorResponse("invalid_or_used_token", 404);
+
+  // Verificar que no haya ya un editor.
+  const existingEditor = await env.DB.prepare(
+    `SELECT user_email FROM chat_participants WHERE chat_id = ? AND role = 'editor' AND user_email IS NOT NULL`
+  ).bind(chatId).first();
+  if (existingEditor && existingEditor.user_email !== userEmail) {
+    return errorResponse("session_full", 409, { message: "Sesión compartida llena." });
+  }
+
+  // Canjear: crear fila con user_email y eliminar la pendiente.
+  await env.DB.prepare(
+    `DELETE FROM chat_participants WHERE chat_id = ? AND share_token = ?`
+  ).bind(chatId, token).run();
+  await env.DB.prepare(
+    `INSERT INTO chat_participants (chat_id, user_email, role, joined_at) VALUES (?, ?, 'editor', CURRENT_TIMESTAMP)`
+  ).bind(chatId, userEmail).run();
+
+  return json({ ok: true, chat_id: chatId, role: "editor" });
+}
+
+async function handleShareClose(chatId, env, userEmail) {
+  const owner = await env.DB.prepare(
+    `SELECT user_email FROM chat_participants WHERE chat_id = ? AND role = 'owner'`
+  ).bind(chatId).first();
+  if (!owner || owner.user_email !== userEmail) return errorResponse("not_owner", 403);
+
+  await env.DB.prepare(`DELETE FROM chat_participants WHERE chat_id = ?`).bind(chatId).run();
+  await env.DB.prepare(`DELETE FROM chat_turn_lock WHERE chat_id = ?`).bind(chatId).run();
+  await env.DB.prepare(`DELETE FROM chat_presence WHERE chat_id = ?`).bind(chatId).run();
+  await env.DB.prepare(
+    `UPDATE chats SET is_shared = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+  ).bind(chatId).run();
+  return json({ ok: true });
+}
+
+async function handleParticipants(chatId, env, userEmail) {
+  // Verificar acceso.
+  const me = await env.DB.prepare(
+    `SELECT role FROM chat_participants WHERE chat_id = ? AND user_email = ?`
+  ).bind(chatId, userEmail).first();
+  if (!me) return errorResponse("not_participant", 403);
+
+  const result = await env.DB.prepare(
+    `SELECT cp.user_email, cp.role, cp.joined_at,
+            COALESCE(cp2.last_heartbeat, 0) AS last_heartbeat,
+            COALESCE(cp2.is_typing, 0) AS is_typing
+       FROM chat_participants cp
+       LEFT JOIN chat_presence cp2 ON cp.chat_id = cp2.chat_id AND cp.user_email = cp2.user_email
+      WHERE cp.chat_id = ?`
+  ).bind(chatId).all();
+
+  const now = Date.now();
+  const participants = (result.results || []).map((r) => ({
+    user_email: r.user_email,
+    role: r.role,
+    online: r.last_heartbeat > 0 && (now - r.last_heartbeat) < 10_000,
+    is_typing: r.is_typing === 1 && (now - r.last_heartbeat) < 5_000,
+    joined_at: r.joined_at,
+  }));
+  return json({ participants, me: me.role });
+}
+
+async function handleHeartbeat(chatId, request, env, userEmail) {
+  const { is_typing = false } = await request.json().catch(() => ({}));
+  const now = Date.now();
+  await env.DB.prepare(
+    `INSERT OR REPLACE INTO chat_presence (chat_id, user_email, last_heartbeat, is_typing)
+     VALUES (?, ?, ?, ?)`
+  ).bind(chatId, userEmail, now, is_typing ? 1 : 0).run();
+  return json({ ok: true, ts: now });
+}
+
+async function handleMessagesPolling(chatId, url, env, userEmail) {
+  const since = Number(url.searchParams.get("since") || 0);
+  const full = url.searchParams.get("full") === "true";
+
+  // Verificar acceso (owner o editor).
+  const me = await env.DB.prepare(
+    `SELECT role FROM chat_participants WHERE chat_id = ? AND user_email = ?`
+  ).bind(chatId, userEmail).first();
+  if (!me) {
+    // Si no es shared, verificar que es el owner directo del chat.
+    const chat = await env.DB.prepare(
+      `SELECT user_email, is_shared FROM chats WHERE id = ?`
+    ).bind(chatId).first();
+    if (!chat || chat.user_email !== userEmail) return errorResponse("not_participant", 403);
+  }
+
+  const limit = full ? 1000 : 200;
+  const query = since > 0
+    ? env.DB.prepare(
+        `SELECT id, role, model, provider, content, thinking_content, tools_used, author_email,
+                tokens_in, tokens_out, cached_tokens, created_at, unixepoch(created_at) as ts
+           FROM messages WHERE chat_id = ? AND unixepoch(created_at)*1000 > ?
+           ORDER BY created_at ASC LIMIT ?`
+      ).bind(chatId, since, limit)
+    : env.DB.prepare(
+        `SELECT id, role, model, provider, content, thinking_content, tools_used, author_email,
+                tokens_in, tokens_out, cached_tokens, created_at, unixepoch(created_at) as ts
+           FROM messages WHERE chat_id = ?
+           ORDER BY created_at ASC LIMIT ?`
+      ).bind(chatId, limit);
+
+  const result = await query.all();
+  const messages = (result.results || []).map((r) => ({
+    ...r,
+    tools_used: r.tools_used ? JSON.parse(r.tools_used) : null,
+  }));
+
+  // Presencia de participantes (para indicador typing/online).
+  const presenceResult = await env.DB.prepare(
+    `SELECT user_email, last_heartbeat, is_typing FROM chat_presence WHERE chat_id = ?`
+  ).bind(chatId).all();
+  const now = Date.now();
+  const presence = (presenceResult.results || []).map((r) => ({
+    user_email: r.user_email,
+    online: (now - r.last_heartbeat) < 10_000,
+    is_typing: r.is_typing === 1 && (now - r.last_heartbeat) < 5_000,
+  }));
+
+  return json({ messages, presence, server_ts: now });
+}
+
+async function handleTurnAcquire(chatId, request, env, userEmail) {
+  const { ttl_min = 30 } = await request.json().catch(() => ({}));
+  const now = Date.now();
+  const ttlMs = Math.min(Math.max(ttl_min, 1), 120) * 60_000;
+
+  const existing = await env.DB.prepare(
+    `SELECT held_by_user_email, expires_at FROM chat_turn_lock WHERE chat_id = ?`
+  ).bind(chatId).first();
+
+  if (existing) {
+    if (existing.expires_at > now && existing.held_by_user_email !== userEmail) {
+      return json({
+        acquired: false,
+        held_by: existing.held_by_user_email,
+        expires_at: existing.expires_at,
+      });
+    }
+    // Expirado o mismo usuario: sobrescribir.
+  }
+
+  const expiresAt = now + ttlMs;
+  await env.DB.prepare(
+    `INSERT OR REPLACE INTO chat_turn_lock (chat_id, held_by_user_email, acquired_at, expires_at)
+     VALUES (?, ?, ?, ?)`
+  ).bind(chatId, userEmail, now, expiresAt).run();
+
+  return json({ acquired: true, expires_at: expiresAt });
+}
+
+async function handleTurnRelease(chatId, env, userEmail) {
+  const lock = await env.DB.prepare(
+    `SELECT held_by_user_email FROM chat_turn_lock WHERE chat_id = ?`
+  ).bind(chatId).first();
+  if (!lock) return json({ ok: true, message: "No lock held." });
+  if (lock.held_by_user_email !== userEmail) return errorResponse("not_lock_holder", 403);
+  await env.DB.prepare(`DELETE FROM chat_turn_lock WHERE chat_id = ?`).bind(chatId).run();
+  return json({ ok: true });
+}
+
+async function handleLeave(chatId, env, userEmail) {
+  await env.DB.prepare(
+    `DELETE FROM chat_participants WHERE chat_id = ? AND user_email = ?`
+  ).bind(chatId, userEmail).run();
+  await env.DB.prepare(
+    `DELETE FROM chat_presence WHERE chat_id = ? AND user_email = ?`
+  ).bind(chatId, userEmail).run();
+  // Si era el holder del turno, liberarlo.
+  await env.DB.prepare(
+    `DELETE FROM chat_turn_lock WHERE chat_id = ? AND held_by_user_email = ?`
+  ).bind(chatId, userEmail).run();
+  return json({ ok: true });
+}
+
+// ==============================================================================
+// 6.8 — RENAME + SUGGEST-TITLE
+// ==============================================================================
+async function handleRename(chatId, request, env, userEmail) {
+  const { title } = await request.json().catch(() => ({}));
+  if (!title || typeof title !== "string" || title.trim().length === 0) {
+    return errorResponse("missing_title", 400);
+  }
+  const sanitized = title.trim().slice(0, 100);
+  // Verificar permiso: owner del chat o editor en shared.
+  const chat = await env.DB.prepare(
+    `SELECT user_email, is_shared FROM chats WHERE id = ?`
+  ).bind(chatId).first();
+  if (!chat) return errorResponse("chat_not_found", 404);
+  if (chat.user_email === userEmail) {
+    // owner directo.
+  } else if (chat.is_shared === 1) {
+    const me = await env.DB.prepare(
+      `SELECT role FROM chat_participants WHERE chat_id = ? AND user_email = ?`
+    ).bind(chatId, userEmail).first();
+    if (!me) return errorResponse("not_participant", 403);
+  } else {
+    return errorResponse("not_owner", 403);
+  }
+  await env.DB.prepare(
+    `UPDATE chats SET title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+  ).bind(sanitized, chatId).run();
+  return json({ ok: true, title: sanitized });
+}
+
+async function handleSuggestTitle(chatId, env, userEmail) {
+  // Cargar primer intercambio user-assistant.
+  const result = await env.DB.prepare(
+    `SELECT role, content FROM messages WHERE chat_id = ? ORDER BY created_at ASC LIMIT 2`
+  ).bind(chatId).all();
+  const msgs = result.results || [];
+  if (msgs.length < 2) return json({ suggested_title: null, reason: "not_enough_messages" });
+  const userMsg = msgs.find((m) => m.role === "user");
+  const assistantMsg = msgs.find((m) => m.role === "assistant");
+  if (!userMsg || !assistantMsg) return json({ suggested_title: null });
+
+  // Llamar a GLM-4.5-Flash vía OpenRouter con la pool de claves (es más fiable que Puter desde Worker).
+  // Como GLM-Flash en Véritas es Puter, pero Puter no es accesible desde Worker, hacemos
+  // best-effort: si la pool de openrouter tiene claves, usar qwen3-next como sugeridor.
+  if (discoverKeys(env, "openrouter").length === 0) {
+    return json({ suggested_title: null, reason: "openrouter_pool_empty" });
+  }
+  try {
+    const { key } = await getKey(env, "openrouter");
+    const prompt = `Genera un título corto (máximo 8 palabras) que resuma el siguiente intercambio. Responde SOLO con el título, sin comillas ni puntuación final. Idioma: el mismo del primer mensaje del usuario.\n\nUsuario: ${userMsg.content.slice(0, 1000)}\n\nAsistente: ${assistantMsg.content.slice(0, 500)}`;
+    const resp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${key}`,
+        "Content-Type": "application/json",
+        "X-Title": "Véritas",
+      },
+      body: JSON.stringify({
+        model: "qwen/qwen3-next-80b-a3b-instruct:free",
+        messages: [{ role: "user", content: prompt }],
+        stream: false,
+        max_tokens: 50,
+      }),
+    });
+    if (resp.ok) {
+      const data = await resp.json();
+      const title = (data.choices?.[0]?.message?.content || "").trim().slice(0, 100);
+      if (title) {
+        await env.DB.prepare(
+          `UPDATE chats SET title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_email = ?`
+        ).bind(title, chatId, userEmail).run();
+        return json({ suggested_title: title });
+      }
+    }
+    await markCooldown(env, "openrouter", (await getKey(env, "openrouter")).index, 30_000, `suggest-title ${resp.status}`);
+  } catch (e) { /* fall through */ }
+  return json({ suggested_title: null, reason: "generation_failed" });
+}
+
+// ==============================================================================
+// 6.9 — OFFLINE BUNDLE
+// ==============================================================================
+async function handleOfflineBundle(env, userEmail) {
+  const chats = await env.DB.prepare(
+    `SELECT id, category, title, summary_json, is_shared, updated_at FROM chats WHERE user_email = ? ORDER BY updated_at DESC LIMIT 100`
+  ).bind(userEmail).all();
+
+  const chatIds = (chats.results || []).map((c) => c.id);
+  let messages = [];
+  if (chatIds.length > 0) {
+    // Últimos 50 mensajes por chat.
+    const placeholders = chatIds.map(() => "?").join(",");
+    const msgResult = await env.DB.prepare(
+      `SELECT m.id, m.chat_id, m.role, m.model, m.provider, m.content, m.thinking_content,
+              m.tools_used, m.author_email, m.tokens_in, m.tokens_out, m.cached_tokens, m.created_at
+         FROM messages m
+         JOIN (
+           SELECT chat_id, id,
+                  ROW_NUMBER() OVER (PARTITION BY chat_id ORDER BY created_at DESC) AS rn
+             FROM messages
+            WHERE chat_id IN (${placeholders})
+         ) ranked ON m.id = ranked.id
+        WHERE ranked.rn <= 50
+        ORDER BY m.chat_id, m.created_at ASC`
+    ).bind(...chatIds).all();
+    messages = msgResult.results || [];
+  }
+
+  const bundle = {
+    user_email: userEmail,
+    generated_at: new Date().toISOString(),
+    chats: chats.results || [],
+    messages: messages.map((m) => ({
+      ...m,
+      tools_used: m.tools_used ? JSON.parse(m.tools_used) : null,
+    })),
+  };
+
+  // Verificar tamaño (5 MB max).
+  const size = JSON.stringify(bundle).length;
+  return json({
+    ...bundle,
+    size_bytes: size,
+    truncated: size > 5_242_880,
+  });
+}
+
+// ==============================================================================
+// 6.10 — AGENTE: ORQUESTACIÓN Y PERCEPCIÓN (Stack Nemotron)
+// ==============================================================================
+
+// POST /api/chat/agent/orchestrate
+// Recibe: { chat_id, messages, escalate: "ultra" | null, stream: bool }
+// Decide qué modelo del stack Nemotron usar y reenvía a OpenRouter.
+// Por defecto → Nemotron 3 Super (ejecutor).
+// Si escalate === "ultra" → Nemotron 3 Ultra (orquestador).
+// Inyecta el system prompt correspondiente (super_executor o ultra_orchestrator).
+// Retorna streaming SSE igual que /api/chat/openrouter.
+async function handleAgentOrchestrate(request, env, userEmail) {
+  const body = await request.json().catch(() => ({}));
+  const { chat_id, messages, escalate, stream = true, skills_block, memory_block } = body;
+
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return errorResponse("missing_messages", 400);
+  }
+
+  // Decidir modelo y system prompt según el nivel de escalamiento.
+  let modelId, roleKey, systemPrompt;
+  if (escalate === "ultra") {
+    modelId = ROLE_TO_MODEL.ultra_orchestrator; // nvidia/nemotron-3-ultra-550b-a55b:free
+    roleKey = "ultra_orchestrator";
+  } else {
+    modelId = ROLE_TO_MODEL.super_executor; // nvidia/nemotron-3-super-120b-a12b:free
+    roleKey = "super_executor";
+  }
+
+  // Construir system prompt base del rol.
+  systemPrompt = SYSTEM_PROMPTS[roleKey];
+
+  // Appendear skills y memorias al system prompt si el frontend las envió.
+  // Esto reemplaza el mecanismo roto donde se enviaban como mensajes system
+  // que luego se filtraban con .filter(m => m.role !== 'system').
+  if (memory_block) {
+    systemPrompt += "\n\n<memorias_cross_chat>\n" + memory_block + "\n</memorias_cross_chat>";
+  }
+  if (skills_block) {
+    systemPrompt += "\n" + skills_block;
+  }
+
+  // Inyectar system prompt como primer mensaje si no existe.
+  const hasSystem = messages.length > 0 && messages[0].role === "system";
+  const finalMessages = hasSystem
+    ? messages
+    : [{ role: "system", content: systemPrompt }, ...messages];
+
+  // Caching defensivo (igual que handleChatOpenRouter).
+  const cachedMessages = injectCacheControl(finalMessages, false);
+  // Tool result truncation.
+  const truncatedMessages = truncateToolResults(cachedMessages, 2048);
+
+  const upstreamBody = {
+    model: modelId,
+    messages: truncatedMessages,
+    stream,
+  };
+
+  // Sticky routing.
+  if (chat_id) {
+    upstreamBody.session_id = chat_id;
+  }
+
+  // Llamar upstream con rotador de claves.
+  const startTs = Date.now();
+  let keyIndexUsed = null;
+  let degraded = false;
+  let upstreamResp = null;
+
+  try {
+    const result = await withKeyRotation(env, "openrouter", async (key) => {
+      return await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${key}`,
+          "Content-Type": "application/json",
+          "HTTP-Referer": env.PAGES_URL || "https://veritas.pages.dev",
+          "X-Title": "Véritas",
+          "Accept": stream ? "text/event-stream" : "application/json",
+        },
+        body: JSON.stringify(upstreamBody),
+      });
+    });
+    upstreamResp = result.response;
+    keyIndexUsed = result.keyIndex;
+    degraded = result.degraded;
+  } catch (e) {
+    if (e instanceof AllKeysCooldownError) throw e;
+    return errorResponse("upstream_error", 502, { message: e.message, role: roleKey });
+  }
+
+  if (!upstreamResp) {
+    return errorResponse("upstream_no_response", 502, { role: roleKey });
+  }
+
+  // Manejo de errores upstream.
+  if (upstreamResp.status === 429 || upstreamResp.status === 503) {
+    return errorResponse("all_keys_rate_limited", 503, {
+      retry_after_ms: SERVICE_REGISTRY.openrouter.cooldownMs,
+      model: modelId,
+      role: roleKey,
+    });
+  }
+  if (upstreamResp.status >= 500) {
+    return errorResponse("upstream_error", upstreamResp.status, { model: modelId, role: roleKey });
+  }
+  if (upstreamResp.status === 401 || upstreamResp.status === 403) {
+    return errorResponse("auth_error", upstreamResp.status, { model: modelId, role: roleKey });
+  }
+  if (upstreamResp.status >= 400) {
+    const errText = await upstreamResp.text();
+    return errorResponse("upstream_error", upstreamResp.status, { model: modelId, role: roleKey, body: errText.slice(0, 1000) });
+  }
+
+  // Telemetría.
+  logOpenRouterCall(env, userEmail, modelId, keyIndexUsed, upstreamResp.status, startTs).catch(() => {});
+
+  // Stream passthrough (igual que handleChatOpenRouter).
+  if (stream) {
+    const { readable, writable } = new TransformStream({
+      async transform(chunk, controller) {
+        controller.enqueue(chunk);
+      },
+    });
+    const headers = new Headers(upstreamResp.headers);
+    headers.set("Cache-Control", "no-cache");
+    headers.set("Connection", "keep-alive");
+    headers.set("Content-Type", "text/event-stream");
+    headers.set("X-Véritas-Key-Index", String(keyIndexUsed));
+    headers.set("X-Véritas-Role", roleKey);
+    if (degraded) headers.set("X-Véritas-Degraded", "1");
+
+    return new Response(upstreamResp.body.pipeThrough(writable), { status: 200, headers });
+  }
+
+  // Non-streaming.
+  const respHeaders = new Headers();
+  respHeaders.set("Content-Type", "application/json");
+  respHeaders.set("X-Véritas-Key-Index", String(keyIndexUsed));
+  respHeaders.set("X-Véritas-Role", roleKey);
+  if (degraded) respHeaders.set("X-Véritas-Degraded", "1");
+  return new Response(upstreamResp.body, { status: 200, headers: respHeaders });
+}
+
+// POST /api/chat/perceive
+// Recibe: { attachment_url?, attachment_r2_key?, modality: "image"|"pdf"|"audio"|"video" }
+// Llama al modelo Nano correspondiente (VL para image/pdf, Omni para audio/video).
+// Si se pasa attachment_r2_key, lo lee de R2 y convierte a data URI.
+// Si se pasa attachment_url, lo usa directamente (debe ser URL accesible).
+// Retorna JSON: { description: string, model: string, modality: string }
+async function handlePerceive(request, env, userEmail) {
+  const body = await request.json().catch(() => ({}));
+  const { attachment_url, attachment_r2_key, modality } = body;
+
+  if (!modality || !["image", "pdf", "audio", "video"].includes(modality)) {
+    return errorResponse("invalid_modality", 400, { modality, allowed: ["image", "pdf", "audio", "video"] });
+  }
+  if (!attachment_url && !attachment_r2_key) {
+    return errorResponse("missing_attachment", 400, { message: "Provide attachment_url or attachment_r2_key" });
+  }
+
+  // Seleccionar modelo Nano según modalidad.
+  let modelId, roleKey;
+  if (modality === "image" || modality === "pdf") {
+    modelId = ROLE_TO_MODEL.nano_vl;       // nvidia/nemotron-nano-12b-v2-vl:free
+    roleKey = "nano_vl";
+  } else {
+    modelId = ROLE_TO_MODEL.nano_omni;     // nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free
+    roleKey = "nano_omni";
+  }
+
+  // Resolver el contenido del attachment.
+  let contentParts;
+
+  if (attachment_r2_key) {
+    // Leer de R2. La key ya debe incluir el prefijo del usuario (ej: attachments/user@/file.png).
+    const r2Key = attachment_r2_key.startsWith("attachments/")
+      ? attachment_r2_key
+      : `attachments/${userEmail}/${attachment_r2_key}`;
+    const obj = await env.BUCKET.get(r2Key);
+    if (!obj) {
+      return errorResponse("attachment_not_found", 404, { r2_key: r2Key });
+    }
+    const buf = await obj.arrayBuffer();
+    const base64 = arrayBufferToBase64(buf);
+    const contentType = obj.customMetadata?.mime_type || guessMimeType(attachment_r2_key, modality);
+    contentParts = [
+      { type: "text", text: `Analiza el siguiente contenido (${modality}). Responde en español con descripción estructurada.` },
+      { type: "image_url", image_url: { url: `data:${contentType};base64,${base64}` } },
+    ];
+  } else {
+    // Usar URL directa. Para VL, envolver como image_url. Para Omni, enviar como URL en texto.
+    if (modality === "image" || modality === "pdf") {
+      contentParts = [
+        { type: "text", text: `Analiza el siguiente contenido (${modality}). Responde en español con descripción estructurada.` },
+        { type: "image_url", image_url: { url: attachment_url } },
+      ];
+    } else {
+      // Audio/video: pasar la URL como texto (el modelo Omni debe soportar la URL directamente).
+      contentParts = [
+        { type: "text", text: `Analiza el siguiente contenido multimedia (${modality}) en la URL: ${attachment_url}. Transcribe y describe en español.` },
+      ];
+    }
+  }
+
+  const systemPrompt = SYSTEM_PROMPTS[roleKey];
+  const messages = [
+    { role: "system", content: systemPrompt },
+    { role: "user", content: contentParts },
+  ];
+
+  // Llamar a OpenRouter (non-streaming, esperamos respuesta completa).
+  const startTs = Date.now();
+  let keyIndexUsed = null;
+  let upstreamResp = null;
+
+  try {
+    const result = await withKeyRotation(env, "openrouter", async (key) => {
+      return await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${key}`,
+          "Content-Type": "application/json",
+          "HTTP-Referer": env.PAGES_URL || "https://veritas.pages.dev",
+          "X-Title": "Véritas",
+        },
+        body: JSON.stringify({
+          model: modelId,
+          messages,
+          stream: false,
+          max_tokens: 4096,
+        }),
+      });
+    });
+    upstreamResp = result.response;
+    keyIndexUsed = result.keyIndex;
+  } catch (e) {
+    if (e instanceof AllKeysCooldownError) throw e;
+    return errorResponse("upstream_error", 502, { message: e.message, role: roleKey });
+  }
+
+  if (!upstreamResp || !upstreamResp.ok) {
+    const status = upstreamResp ? upstreamResp.status : 502;
+    const errText = upstreamResp ? (await upstreamResp.text().catch(() => "")) : "";
+    // Telemetría del error.
+    logOpenRouterCall(env, userEmail, modelId, keyIndexUsed || 0, status, startTs).catch(() => {});
+    return errorResponse("perception_failed", status, { model: modelId, role: roleKey, body: errText.slice(0, 500) });
+  }
+
+  // Telemetría.
+  logOpenRouterCall(env, userEmail, modelId, keyIndexUsed, upstreamResp.status, startTs).catch(() => {});
+
+  const data = await upstreamResp.json();
+  const description = data.choices?.[0]?.message?.content || "";
+
+  return json({
+    description,
+    model: modelId,
+    role: roleKey,
+    modality,
+    tokens_in: data.usage?.prompt_tokens || 0,
+    tokens_out: data.usage?.completion_tokens || 0,
+  });
+}
+
+// Helper: ArrayBuffer → Base64 (sin btoa que no existe en Workers).
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  const chunkSize = 8192;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const chunk = bytes.subarray(i, i + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+  return btoa(binary);
+}
+
+// Helper: adivinar MIME type del attachment.
+function guessMimeType(key, modality) {
+  const ext = (key.split(".").pop() || "").toLowerCase();
+  const map = {
+    // Imágenes
+    png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif",
+    webp: "image/webp", bmp: "image/bmp", svg: "image/svg+xml",
+    // PDF
+    pdf: "application/pdf",
+    // Audio
+    mp3: "audio/mpeg", wav: "audio/wav", ogg: "audio/ogg", m4a: "audio/mp4", flac: "audio/flac",
+    // Video
+    mp4: "video/mp4", webm: "video/webm", avi: "video/x-msvideo", mov: "video/quicktime",
+  };
+  if (map[ext]) return map[ext];
+  // Fallback por modalidad.
+  if (modality === "image") return "image/png";
+  if (modality === "pdf") return "application/pdf";
+  if (modality === "audio") return "audio/mpeg";
+  if (modality === "video") return "video/mp4";
+  return "application/octet-stream";
+}
+
+// ==============================================================================
+// 6.11 — SKILLS CRUD (custom user skills, carga dinámica)
+// ==============================================================================
+// Gestión de skills personalizadas del usuario. Se almacenan en D1 (user_skills)
+// y se fusionan en el frontend con las skills estáticas del registry.
+
+/**
+ * Genera un slug kebab-case a partir de un nombre.
+ * Ej: "Mi Skill de Prueba" → "mi-skill-de-prueba"
+ */
+function skillSlugify(name) {
+  return String(name || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9\s-]/g, "")
+    .trim()
+    .replace(/\s+/g, "-")
+    .toLowerCase()
+    .slice(0, 64);
+}
+
+/**
+ * GET /api/skills — Lista todas las skills personalizadas del usuario.
+ */
+async function handleSkillsList(env, userEmail) {
+  const { results } = await env.DB.prepare(
+    `SELECT id, skill_json, prompt_content, is_active, ordering, created_at, updated_at
+     FROM user_skills WHERE user_email = ? AND is_active = 1 ORDER BY ordering ASC, created_at ASC`
+  ).bind(userEmail).all();
+
+  const skills = (results || []).map((row) => {
+    let skillData;
+    try { skillData = JSON.parse(row.skill_json); } catch { skillData = {}; }
+    // Asegurar que el id del skill coincide con la PK.
+    skillData.id = row.id;
+    skillData._isCustom = true;
+    skillData._promptContent = row.prompt_content;
+    skillData._ordering = row.ordering;
+    skillData._created_at = row.created_at;
+    skillData._updated_at = row.updated_at;
+    return skillData;
+  });
+
+  return json({ skills });
+}
+
+/**
+ * POST /api/skills — Crea una nueva skill personalizada.
+ * Body: { name, description, category, tier?, inputType?, outputType?,
+ *         needsExternal?, icon?, color?, promptContent, references? }
+ */
+async function handleSkillCreate(request, env, userEmail) {
+  const body = await request.json();
+  const { name, description, promptContent } = body;
+
+  if (!name || !name.trim()) return errorResponse("validation_error", 400, { message: "name is required" });
+  if (!description || !description.trim()) return errorResponse("validation_error", 400, { message: "description is required" });
+  if (!promptContent || !promptContent.trim()) return errorResponse("validation_error", 400, { message: "promptContent is required" });
+
+  const id = skillSlugify(name);
+  if (!id) return errorResponse("validation_error", 400, { message: "Invalid skill name (cannot generate slug)" });
+
+  // Evitar colisión con IDs estáticos del registry (77 built-in skills).
+  const STATIC_IDS = new Set([
+    "cross-reference-claim", "media-literacy-analyzer", "source-reliability-rater",
+    "argument-deconstruct", "timeline-from-sources", "build-entity-graph",
+    "detect-coordinated-behavior", "social-username-correlate", "social-profile-analyzer",
+    "geolocate-from-visual-cues", "influence-operations-analyst", "social-phenomena-analyst",
+    "psychological-profile", "legal-document-analyzer",
+    "conflict-dynamics-analyst", "contentanalysis", "geopolitical-risk-analyst",
+    "global-logistics-evaluator", "anti-pua",
+    "web-search", "web-reader", "image-search", "multi-search-engine",
+    "ai-news-collectors", "aminer-research", "qingyan-research", "auto-target-tracker",
+    "coding-agent", "fullstack-dev", "agent-browser", "web-artifacts-builder",
+    "web-shader-extractor", "process-optimizer", "version-management",
+    "blog-writer", "seo-content-writer", "content-strategy", "writing-plans",
+    "paraphrase-humanized", "transcreation-localization", "doc-coauthoring",
+    "finance", "stock-analysis-skill", "market-research-reports", "text-to-dashboard",
+    "image-understand", "image-generation", "image-edit", "video-understand",
+    "podcast-generate", "storyboard-manager",
+    "learn", "cheat-sheet", "mindfulness-meditation",
+    "quiz-mastery", "study-buddy", "quiz-html",
+    "comm-advisor-camp", "crisis-comm-advisor", "marketing-mode",
+    "interview-designer", "interview-prep", "jd-resume-tailor", "resume-builder", "job-intent-tracker",
+    "canvas-design", "design", "visual-design-foundations", "theme-factory", "ui-ux-pro-max",
+    "docx", "pdf", "pptx", "xlsx",
+    "skill-creator", "skill-finder-cn", "task-review",
+  ]);
+  if (STATIC_IDS.has(id)) return errorResponse("validation_error", 409, { message: `Skill ID "${id}" conflicts with a built-in skill` });
+
+  // Obtener ordering máximo.
+  const maxOrder = await env.DB.prepare(
+    `SELECT COALESCE(MAX(ordering), -1) as max_o FROM user_skills WHERE user_email = ?`
+  ).bind(userEmail).first();
+  const ordering = (maxOrder?.max_o ?? -1) + 1;
+
+  const skillData = {
+    name: name.trim(),
+    description: description.trim(),
+    category: body.category || "utility",
+    tier: body.tier || "utility",
+    inputType: body.inputType || "text",
+    outputType: body.outputType || "analysis_report",
+    needsExternal: !!body.needsExternal,
+    promptPath: null,
+    references: body.references || [],
+    icon: body.icon || "\u2728",
+    color: body.color || "#f59e0b",
+    allowedRoles: body.allowedRoles || ["agent", "estratega", "pensador", "coder", "fast"],
+  };
+
+  await env.DB.prepare(
+    `INSERT INTO user_skills (id, user_email, skill_json, prompt_content, is_active, ordering)
+     VALUES (?, ?, ?, ?, 1, ?)`
+  ).bind(id, userEmail, JSON.stringify(skillData), (promptContent || "").trim(), ordering).run();
+
+  skillData.id = id;
+  skillData._isCustom = true;
+  skillData._promptContent = (promptContent || "").trim();
+  return json({ skill: skillData }, 201);
+}
+
+/**
+ * PUT /api/skills/:id — Actualiza una skill personalizada.
+ */
+async function handleSkillUpdate(skillId, request, env, userEmail) {
+  const body = await request.json();
+
+  // Verificar que existe y es del usuario.
+  const existing = await env.DB.prepare(
+    `SELECT id, skill_json, prompt_content FROM user_skills WHERE id = ? AND user_email = ?`
+  ).bind(skillId, userEmail).first();
+  if (!existing) return errorResponse("not_found", 404, { message: `Skill "${skillId}" not found` });
+
+  let skillData;
+  try { skillData = JSON.parse(existing.skill_json); } catch { skillData = {}; }
+
+  // Merge campos proporcionados.
+  if (body.name !== undefined) skillData.name = String(body.name).trim();
+  if (body.description !== undefined) skillData.description = String(body.description).trim();
+  if (body.category !== undefined) skillData.category = body.category;
+  if (body.tier !== undefined) skillData.tier = body.tier;
+  if (body.inputType !== undefined) skillData.inputType = body.inputType;
+  if (body.outputType !== undefined) skillData.outputType = body.outputType;
+  if (body.needsExternal !== undefined) skillData.needsExternal = !!body.needsExternal;
+  if (body.icon !== undefined) skillData.icon = body.icon;
+  if (body.color !== undefined) skillData.color = body.color;
+  if (body.references !== undefined) skillData.references = body.references;
+  if (body.allowedRoles !== undefined) skillData.allowedRoles = body.allowedRoles;
+
+  const newPrompt = body.promptContent !== undefined ? String(body.promptContent).trim() : existing.prompt_content;
+
+  await env.DB.prepare(
+    `UPDATE user_skills SET skill_json = ?, prompt_content = ?, updated_at = CURRENT_TIMESTAMP
+     WHERE id = ? AND user_email = ?`
+  ).bind(JSON.stringify(skillData), newPrompt, skillId, userEmail).run();
+
+  skillData.id = skillId;
+  skillData._isCustom = true;
+  skillData._promptContent = newPrompt;
+  return json({ skill: skillData });
+}
+
+/**
+ * DELETE /api/skills/:id — Elimina (soft delete) una skill personalizada.
+ */
+async function handleSkillDelete(skillId, request, env, userEmail) {
+  // Soft delete: is_active = 0.
+  const result = await env.DB.prepare(
+    `UPDATE user_skills SET is_active = 0, updated_at = CURRENT_TIMESTAMP
+     WHERE id = ? AND user_email = ? AND is_active = 1`
+  ).bind(skillId, userEmail).run();
+
+  if (!result.meta.changes) return errorResponse("not_found", 404, { message: `Skill "${skillId}" not found or already deleted` });
+
+  return json({ deleted: skillId });
+}
+
+// ==============================================================================
+// Export default (compatibilidad con Cloudflare Pages Functions).
+// ==============================================================================
+export default { onRequest };

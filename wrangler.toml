@@ -1,0 +1,103 @@
+# ==============================================================================
+# Véritas v2.2 — wrangler.toml
+# ==============================================================================
+# Configuración del Worker de Cloudflare Pages + Workers.
+# Este archivo SÍ se commitea (es configuración pública). Los secrets reales
+# van en `wrangler secret put <NAME>`, no en este archivo.
+#
+# Tras crear D1 y R2 (ver README.txt pasos 3 y 4), reemplazar los placeholders
+# `__REPLACE_ME__` con los IDs reales devueltos por los comandos:
+#   wrangler d1 create veritas-db
+#   wrangler r2 bucket create veritas-storage
+# ==============================================================================
+
+name = "veritas"
+compatibility_date = "2025-06-01"
+pages_build_output_dir = "."
+
+# ------------------------------------------------------------------------------
+# Cron Triggers (v2.3, Gap 3 del audit)
+# ------------------------------------------------------------------------------
+# Ejecuta /functions/purge/scheduled.js cada 6 horas.
+# Cloudflare free plan soporta 3 crons con frecuencia mínima de 1 hora.
+# Las zonas horosas se evalúan en UTC.
+# ------------------------------------------------------------------------------
+[triggers]
+crons = ["0 */6 * * *"]
+
+# ------------------------------------------------------------------------------
+# Bindings: D1 (SQLite) y R2 (object storage)
+# ------------------------------------------------------------------------------
+[[d1_databases]]
+binding       = "DB"
+database_name = "veritas-db"
+database_id   = "__REPLACE_ME__"            # wrangler d1 create veritas-db
+# query_pattern = "log_4xx_and_5xx"          # descomentar para habilitar observabilidad de queries D1
+
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "veritas-storage"
+
+# ------------------------------------------------------------------------------
+# Vars públicas (no sensibles). Disponibles en el Worker como env.<NAME>.
+# Las credenciales sensibles (client secrets, API keys, encryption keys) van
+# como `wrangler secret put <NAME>` y NO aparecen aquí.
+# ------------------------------------------------------------------------------
+[vars]
+GITHUB_OAUTH_CLIENT_ID = "__REPLACE_ME__"   # GitHub App → Client ID (dashboard GitHub)
+DROPBOX_OAUTH_APP_KEY  = "__REPLACE_ME__"   # Dropbox App → App key (dashboard Dropbox)
+
+# Lista de dominios permitidos para el proxy /api/artifact/proxy (anti-SSRF).
+# Vacío = cualquier HTTPS. Recomendar rellenar con dominios conocidos en prod.
+ARTIFACT_PROXY_ALLOWED_HOSTS = ""
+
+# Versión pública de la app (visible en Ajustes → Acerca de).
+APP_VERSION = "2.3.1"
+
+# ------------------------------------------------------------------------------
+# Observabilidad (opcional). Descomentar para enviar logs a Cloudflare Logs.
+# ------------------------------------------------------------------------------
+# [observability]
+# enabled = true
+# head_sampling_rate = 0.1
+
+# ------------------------------------------------------------------------------
+# Limits del Worker (defaults de Cloudflare, documentados aquí para referencia)
+# ------------------------------------------------------------------------------
+# CPU:        10 ms (free) / 50 ms (paid) por request.
+# Subrequest: 50 (free) / 1000 (paid) por request.
+# Memory:     128 MB.
+# Stream:     sin límite explícito; el body pasa a través vía TransformStream.
+
+# ------------------------------------------------------------------------------
+# Dev local (wrangler dev)
+# ------------------------------------------------------------------------------
+# Para desarrollo local, crea un archivo .dev.vars (NO se commitea, está en
+# .gitignore) con los secrets de prueba en formato KEY=VALUE:
+#
+#   OPENROUTER_API_KEY_1=sk-or-v1-...
+#   GITHUB_OAUTH_CLIENT_SECRET=...
+#   DROPBOX_OAUTH_APP_SECRET=...
+#   OAUTH_ENCRYPTION_KEY=<openssl rand -hex 32>
+#   DEV_USER_EMAIL=dev@veritas.local
+#   ADMIN_EMAILS=dev@veritas.local
+#
+# wrangler dev carga .dev.vars automáticamente.
+
+# ------------------------------------------------------------------------------
+# Notas sobre secrets (aplicar en prod con `wrangler secret put <NAME>`):
+# ------------------------------------------------------------------------------
+# OPENROUTER_API_KEY_1, _2, _N         (pool, mínimo 1, recomendado 2-3)
+# JINA_API_KEY_1, _2, _N               (opcional, web_search)
+# TAVILY_API_KEY_1, _2, _N             (opcional, web_search)
+# SERPER_API_KEY_1, _2, _N             (opcional, web_search)
+# SCRAPINGBEE_API_KEY_1, _2, _N        (opcional, scrape_url con render_js)
+# FIRECRAWL_API_KEY_1, _2, _N          (opcional, firecrawl_scrape/crawl)
+# BROWSER_USE_API_KEY_1, _2, _N        (opcional, browser_use_browse)
+# STEEL_API_KEY_1, _2, _N              (opcional, steel_session)
+# GITHUB_OAUTH_CLIENT_SECRET           (obligatorio para conexiones GitHub)
+# DROPBOX_OAUTH_APP_SECRET             (obligatorio para conexiones Dropbox)
+# OAUTH_ENCRYPTION_KEY                 (32 bytes hex, obligatorio)
+# DEV_USER_EMAIL                       (solo dev local)
+# ADMIN_EMAILS                         (CSV, para endpoints /api/keys/*)
+# ==============================================================================

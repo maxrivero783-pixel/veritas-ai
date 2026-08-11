@@ -1,0 +1,813 @@
+<!DOCTYPE html>
+<html lang="es" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="Véritas v2.2 — Interfaz de orquestación multi-proveedor de modelos de IA" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' https: data:; script-src 'unsafe-inline' 'unsafe-eval' https://js.puter.com https://unpkg.com https://cdn.jsdelivr.net https://esm.sh; style-src 'unsafe-inline' https:; img-src https: data:; connect-src https:; font-src https: data:;" />
+  <title>Véritas — IA Orquestadora</title>
+
+  <!-- Fuentes -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700&family=Rajdhani:wght@400;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+
+  <!-- Estilos -->
+  <link rel="stylesheet" href="./styles.css" />
+
+  <!-- Puter.js (SDK frontend para Estratega y Fast) — cargar con defer -->
+  <script src="https://js.puter.com/v2/" defer></script>
+
+  <!-- Dexie.js (IndexedDB para modo offline) -->
+  <script src="https://cdn.jsdelivr.net/npm/dexie@3.2.4/dist/dexie.min.js" defer></script>
+
+  <!-- JSZip (export ZIP del Sandbox) -->
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js" defer></script>
+
+  <!-- CodeMirror 6 (editor del Sandbox) — bundles UMD -->
+  <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/lib/codemirror.min.js" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/mode/html/html.min.js" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/mode/css/css.min.js" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/mode/javascript/javascript.min.js" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/mode/markdown/markdown.min.js" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/mode/python/python.min.js" defer></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/lib/codemirror.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/theme/material-darker.css" />
+
+  <!-- MapLibre GL JS (plantillas de mapas) -->
+  <link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet" />
+  <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js" defer></script>
+
+  <!-- Módulos de la app (ES modules, type=module) -->
+  <script type="module" src="./app.js"></script>
+</head>
+<body class="offline-mode-false" data-state="idle">
+
+  <!-- ============================================================ -->
+  <!-- HEADER GLOBAL (mobile-only) -->
+  <!-- ============================================================ -->
+  <header class="app-header" id="appHeader">
+    <button class="icon-btn" id="menuToggle" aria-label="Toggle menu" data-i18n="aria.menuToggle" aria-expanded="false">
+      <span class="icon icon-menu"></span>
+    </button>
+    <h1 class="app-title" data-i18n="app.title">Véritas</h1>
+    <button class="icon-btn" id="sandboxToggle" aria-label="Toggle sandbox" data-i18n="aria.sandboxToggle">
+      <span class="icon icon-sandbox"></span>
+    </button>
+  </header>
+
+  <!-- ============================================================ -->
+  <!-- LAYOUT PRINCIPAL — 3 COLUMNAS EN DESKTOP -->
+  <!-- ============================================================ -->
+  <div class="app-layout">
+
+    <!-- ========================================================== -->
+    <!-- SIDEBAR IZQUIERDO (~25%) -->
+    <!-- ========================================================== -->
+    <aside class="sidebar" id="sidebar" aria-label="Sidebar">
+
+      <!-- Canvas 2D — animación de la entidad cybernetic -->
+      <div class="entity-canvas-wrapper">
+        <canvas id="entityCanvas" width="200" height="160" aria-hidden="true"></canvas>
+        <div class="entity-state-indicator" id="entityStateIndicator" data-state="idle"></div>
+      </div>
+
+      <h1 class="brand">Véritas</h1>
+      <p class="brand-tagline" data-i18n="app.tagline">Verdad sin filtro</p>
+
+      <!-- Submenús de chat por categoría -->
+      <nav class="chat-nav" aria-label="Chat categories">
+        <button class="nav-tab active" data-category="agent" data-i18n="nav.agent">Agente</button>
+        <button class="nav-tab" data-category="coder" data-i18n="nav.coder">Coder</button>
+        <button class="nav-tab" data-category="general" data-i18n="nav.general">General</button>
+      </nav>
+
+      <!-- P1-4: Buscador de chats (solo por título) -->
+      <div class="chat-search-wrapper">
+        <input
+          type="search"
+          id="chatSearchInput"
+          class="chat-search-input"
+          placeholder="Buscar chats..."
+          data-i18n="chat.searchPlaceholder"
+          data-i18n-attr="placeholder"
+          aria-label="Search chats by title"
+          autocomplete="off"
+        />
+        <button class="chat-search-clear" id="chatSearchClear" aria-label="Clear search" data-i18n="aria.clearSearch" hidden>✕</button>
+      </div>
+
+      <!-- Lista de chats del submenú activo -->
+      <div class="chat-list" id="chatList" role="list" aria-live="polite"></div>
+
+      <!-- Botones de acción -->
+      <div class="sidebar-actions">
+        <button class="action-btn primary" id="newChatBtn" data-i18n="actions.newChat">+ Nuevo Chat</button>
+        <button class="action-btn" id="openRepoBtn" data-i18n="actions.repo">Repositorio</button>
+        <button class="action-btn" id="openSettingsBtn" data-i18n="actions.settings">Ajustes</button>
+      </div>
+
+      <!-- Indicador online/offline -->
+      <div class="connection-status" id="connectionStatus">
+        <span class="status-dot" id="statusDot"></span>
+        <span class="status-text" id="statusText" data-i18n="status.online">En línea</span>
+      </div>
+    </aside>
+
+    <!-- ========================================================== -->
+    <!-- CENTRO (~45%) — ÁREA DE CHAT -->
+    <!-- ========================================================== -->
+    <main class="chat-area" id="chatArea">
+
+      <!-- Header del chat (título + indicadores) -->
+      <div class="chat-header" id="chatHeader">
+        <div class="chat-title-wrapper">
+          <h2 class="chat-title" id="chatTitle" data-i18n="chat.empty">Selecciona o crea un chat</h2>
+          <span class="chat-cached-badge" id="chatCachedBadge" title="Tokens cached this chat" hidden>⚡ 0 cached this chat</span>
+        </div>
+        <div class="chat-model-info" id="chatModelInfo">
+          <span class="model-chip" id="modelChip">—</span>
+          <span class="skills-active-indicator" id="skillsActiveIndicator" hidden title="Skills activas"></span>
+        </div>
+        <!-- Banner de sesión compartida (oculto por defecto) -->
+        <div class="shared-banner" id="sharedBanner" hidden>
+          <div class="shared-participants" id="sharedParticipants"></div>
+          <div class="shared-turn-info" id="sharedTurnInfo"></div>
+          <button class="action-btn small" id="sharedLeaveBtn" data-i18n="shared.leave" hidden>Salir</button>
+          <button class="action-btn small" id="sharedCloseBtn" data-i18n="shared.close" hidden>Cerrar sesión</button>
+        </div>
+      </div>
+
+      <!-- Indicador de streaming: "Procesando..." / "Pensando..." -->
+      <div class="streaming-indicator" id="streamingIndicator" hidden>
+        <span class="streaming-dot" id="streamingDot"></span>
+        <span class="streaming-text" id="streamingText" data-i18n="stream.processing">Procesando...</span>
+      </div>
+
+      <!-- Mensajes del chat -->
+      <div class="messages-container" id="messagesContainer" role="log" aria-live="polite" aria-atomic="false">
+        <!-- Empty state: welcome con tarjetas de modelo clickeables (P1-extra) -->
+        <div class="empty-state" id="emptyState">
+          <div class="welcome-orb">⬡</div>
+          <h2 class="welcome-title" data-i18n="welcome.title">Véritas</h2>
+          <p class="welcome-subtitle" data-i18n="welcome.subtitle">Selecciona un modelo para empezar</p>
+          <div class="welcome-model-cards" id="welcomeModelCards" role="list">
+            <!-- Tarjetas populadas dinámicamente por app.js según categoría activa -->
+          </div>
+          <p class="welcome-hint" data-i18n="welcome.hint">o escribe tu mensaje abajo ↑</p>
+        </div>
+      </div>
+
+      <!-- Indicador "X está escribiendo..." (sesión compartida) -->
+      <div class="typing-indicator" id="typingIndicator" hidden>
+        <span id="typingUser"></span> <span data-i18n="shared.typing">está escribiendo...</span>
+      </div>
+
+      <!-- Barra de entrada -->
+      <div class="input-bar" id="inputBar">
+        <div class="input-toolbar">
+          <select class="model-selector" id="modelSelector" aria-label="Model selector" data-i18n="aria.modelSelector">
+            <!-- opciones populadas dinámicamente según submenú activo -->
+          </select>
+          <button class="icon-btn" id="attachBtn" aria-label="Attach file" data-i18n="aria.attach">
+            <span class="icon icon-attach"></span>
+          </button>
+          <button class="icon-btn" id="repoAttachBtn" title="Adjuntar documento del repositorio" data-i18n="title.repoAttach">
+            <span class="icon icon-repo-attach">📄</span>
+          </button>
+          <button class="toggle-btn" id="searchToggle" aria-pressed="false" title="Búsqueda Web" data-i18n="title.search">🔍</button>
+          <button class="toggle-btn" id="scrapeToggle" aria-pressed="false" title="Scraping" data-i18n="title.scrape">🌐</button>
+          <button class="toggle-btn" id="thinkingToggle" aria-pressed="false" title="Pensamiento" data-i18n="title.thinking">💭</button>
+          <button class="toggle-btn" id="deepThinkingBtn" aria-pressed="false" title="Pensamiento Profundo (solo Agente)" hidden>💡</button>
+        </div>
+
+        <div class="input-wrapper">
+          <textarea
+            id="messageInput"
+            class="message-input"
+            rows="1"
+            placeholder="Escribe tu mensaje..."
+            data-i18n="input.placeholder"
+            data-i18n-attr="placeholder"
+            aria-label="Message input"
+          ></textarea>
+          <button class="send-btn" id="sendBtn" aria-label="Send" data-i18n="aria.send" title="Enviar (Enter)">
+            <span class="icon icon-send"></span>
+          </button>
+          <button class="send-btn stop-btn" id="stopBtn" aria-label="Stop" data-i18n="aria.stop" title="Detener generación" hidden>
+            <span class="icon icon-stop">■</span>
+          </button>
+        </div>
+
+        <!-- Chips de preview para attachments multimedia -->
+        <div class="attachment-chips" id="attachmentChips" hidden></div>
+
+        <!-- Chips de documentos del repo adjuntados -->
+        <div class="repo-doc-chips" id="repoDocChips" hidden></div>
+
+        <!-- Popover de selección de docs del repo -->
+        <div class="repo-attach-popover" id="repoAttachPopover" hidden>
+          <div class="repo-attach-header">
+            <span data-i18n="repo.selectDocs">Seleccionar documentos</span>
+            <button class="icon-btn repo-attach-close" id="repoAttachClose">✕</button>
+          </div>
+          <input type="text" class="repo-attach-search" id="repoAttachSearch"
+            placeholder="Filtrar..." data-i18n-placeholder="repo.searchPlaceholder" />
+          <ul class="repo-attach-list" id="repoAttachList"></ul>
+          <div class="repo-attach-footer">
+            <span id="repoAttachCount">0 seleccionados</span>
+            <button class="action-btn primary small" id="repoAttachConfirm" data-i18n="repo.attachConfirm">Adjuntar</button>
+          </div>
+        </div>
+
+        <!-- Contador de tokens (v2.2) -->
+        <div class="token-counter" id="tokenCounter" title="Tokens usados / disponibles">
+          <span id="tokenUsed">0</span> / <span id="tokenAvailable">32000</span>
+        </div>
+
+        <!-- File input oculto para attach (multimedia: imagen, PDF, audio, video) -->
+        <input type="file" id="fileInput" hidden multiple accept="image/*,.pdf,audio/*,video/*" />
+
+        <!-- Botón Invitar (sesión compartida, solo roles elegibles) -->
+        <button class="action-btn small" id="inviteBtn" data-i18n="shared.invite" hidden>Invitar</button>
+      </div>
+    </main>
+
+    <!-- ========================================================== -->
+    <!-- SIDEBAR DERECHO (~30%) — SANDBOX UNIFICADO -->
+    <!-- ========================================================== -->
+    <aside class="sandbox" id="sandbox" aria-label="Sandbox" hidden>
+
+      <!-- Toolbar superior -->
+      <div class="sandbox-toolbar">
+        <button class="sandbox-btn" id="sbNew" data-i18n="sandbox.new" title="Nuevo">+ Nuevo</button>
+        <div class="dropdown">
+          <button class="sandbox-btn" id="sbTemplatesBtn" data-i18n="sandbox.templates" title="Plantillas">Plantillas ▼</button>
+          <div class="dropdown-menu" id="sbTemplatesMenu" hidden>
+            <button data-template="maplibre-basic">MapLibre Básico</button>
+            <button data-template="maplibre-markers">MapLibre Marcadores</button>
+            <button data-template="three-scene">Three.js Escena</button>
+            <button data-template="chartjs-dashboard">Chart.js Dashboard</button>
+            <button data-template="d3-chart">D3 Force Graph</button>
+            <button data-template="tailwind-page">Tailwind Page</button>
+            <button data-template="plotly-3d">Plotly 3D</button>
+          </div>
+        </div>
+        <div class="dropdown">
+          <button class="sandbox-btn" id="sbLibrariesBtn" data-i18n="sandbox.libraries" title="Librerías">Librerías ▼</button>
+          <div class="dropdown-menu" id="sbLibrariesMenu" hidden>
+            <button data-lib="leaflet">Leaflet</button>
+            <button data-lib="maplibre">MapLibre GL</button>
+            <button data-lib="three">Three.js</button>
+            <button data-lib="babylon">Babylon.js</button>
+            <button data-lib="chartjs">Chart.js</button>
+            <button data-lib="d3">D3.js</button>
+            <button data-lib="plotly">Plotly.js</button>
+            <button data-lib="echarts">ECharts</button>
+            <button data-lib="tailwind">Tailwind CDN</button>
+            <button data-lib="alpine">Alpine.js</button>
+            <button data-lib="htmx">htmx</button>
+            <button data-lib="anime">Anime.js</button>
+            <button data-lib="gsap">GSAP</button>
+            <button data-lib="papaparse">PapaParse</button>
+            <button data-lib="dexie">Dexie</button>
+            <button data-lib="sqljs">SQL.js</button>
+            <button data-lib="katex">KaTeX</button>
+            <button data-lib="mathjs">math.js</button>
+          </div>
+        </div>
+        <button class="sandbox-btn" id="sbExportZip" data-i18n="sandbox.exportZip" title="Export ZIP">📦 Export ZIP</button>
+        <button class="sandbox-btn" id="sbDownload" data-i18n="sandbox.download" title="Descargar archivo">⬇ Descargar</button>
+        <button class="sandbox-btn" id="sbCopy" data-i18n="sandbox.copy" title="Copiar">⧉ Copiar</button>
+        <button class="sandbox-btn" id="sbOpenBrowser" data-i18n="sandbox.openBrowser" title="Ver en navegador">↗ Navegador</button>
+        <button class="sandbox-btn" id="sbPushGithub" data-i18n="sandbox.pushGithub" title="Push a GitHub" hidden>⬆ GitHub</button>
+        <button class="sandbox-btn collapse" id="sbCollapse" aria-label="Collapse sandbox" data-i18n="aria.collapse">⟨</button>
+      </div>
+
+      <!-- Cuerpo del sandbox: árbol + editor + preview -->
+      <div class="sandbox-body">
+        <!-- Árbol de archivos -->
+        <div class="sandbox-tree" id="sandboxTree" role="tree">
+          <div class="empty-tree" data-i18n="sandbox.emptyTree">Sin archivos. El modelo generará archivos aquí.</div>
+        </div>
+
+        <!-- Editor (CodeMirror) -->
+        <div class="sandbox-editor-wrapper">
+          <div class="sandbox-editor-tabs" id="sandboxEditorTabs"></div>
+          <textarea id="sandboxEditor" class="sandbox-editor" hidden></textarea>
+          <div class="sandbox-editor-host" id="sandboxEditorHost"></div>
+        </div>
+
+        <!-- Live Preview (iframe sandboxeado) -->
+        <div class="sandbox-preview-wrapper">
+          <div class="sandbox-preview-header">
+            <span data-i18n="sandbox.preview">Live Preview</span>
+            <button class="icon-btn" id="sbRefresh" aria-label="Refresh preview" data-i18n="aria.refresh">↻</button>
+          </div>
+          <iframe
+            id="sandboxPreview"
+            class="sandbox-preview"
+            sandbox="allow-scripts"
+            referrerpolicy="no-referrer"
+            title="Sandbox preview"
+          ></iframe>
+        </div>
+      </div>
+
+      <!-- Panel inferior colapsable: Console + Network -->
+      <div class="sandbox-bottom-panel" id="sandboxBottomPanel" hidden>
+        <div class="panel-tabs">
+          <button class="panel-tab active" data-panel="console" data-i18n="sandbox.console">Console</button>
+          <button class="panel-tab" data-panel="network" data-i18n="sandbox.network">Network</button>
+          <button class="panel-tab" id="sbClosePanel" aria-label="Close panel" data-i18n="aria.closePanel">✕</button>
+        </div>
+        <div class="panel-content" id="panelConsole" role="log"></div>
+        <div class="panel-content" id="panelNetwork" hidden></div>
+      </div>
+    </aside>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- MODAL: AJUSTES -->
+  <!-- ============================================================ -->
+  <div class="modal-overlay" id="settingsModal" hidden>
+    <div class="modal settings-modal" role="dialog" aria-labelledby="settingsTitle">
+      <header class="modal-header">
+        <h2 id="settingsTitle" data-i18n="settings.title">Ajustes</h2>
+        <button class="icon-btn" id="closeSettings" aria-label="Close" data-i18n="aria.close">✕</button>
+      </header>
+
+      <nav class="settings-nav" aria-label="Settings sections">
+        <button class="settings-tab active" data-section="profile" data-i18n="settings.profile">Perfil</button>
+        <button class="settings-tab" data-section="personalization" data-i18n="settings.personalization">Personalización</button>
+        <button class="settings-tab" data-section="language" data-i18n="settings.language">Idioma</button>
+        <button class="settings-tab" data-section="maps" data-i18n="settings.maps">Mapas</button>
+        <button class="settings-tab" data-section="connections" data-i18n="settings.connections">Conexiones</button>
+        <button class="settings-tab" data-section="tokens" data-i18n="settings.tokens">Optimización de tokens</button>
+        <button class="settings-tab" data-section="shared" data-i18n="settings.shared">Sesión compartida</button>
+        <button class="settings-tab" data-section="notifications" data-i18n="settings.notifications">Notificaciones push</button>
+        <button class="settings-tab" data-section="offline" data-i18n="settings.offline">Modo offline</button>
+        <button class="settings-tab" data-section="chats" data-i18n="settings.chats">Chats</button>
+        <button class="settings-tab" data-section="skills" data-i18n="settings.skills">Skills</button>
+        <button class="settings-tab" data-section="repo" data-i18n="settings.repo">Repositorio</button>
+        <button class="settings-tab" data-section="dashboard" data-i18n="settings.dashboard">Dashboard</button>
+        <button class="settings-tab" data-section="about" data-i18n="settings.about">Acerca de</button>
+      </nav>
+
+      <div class="modal-body">
+        <!-- Perfil -->
+        <section class="settings-section active" id="settings-profile">
+          <h3 data-i18n="settings.profile">Perfil</h3>
+          <p class="hint" data-i18n="settings.profile.hint">Véritas NO aprende detalles automáticamente de los chats. Solo los que pongas aquí se usan para personalizar respuestas.</p>
+          <label for="profileName" data-i18n="settings.profile.name">Nombre</label>
+          <input type="text" id="profileName" />
+          <label for="profileBio" data-i18n="settings.profile.bio">Sobre ti</label>
+          <textarea id="profileBio" rows="4"></textarea>
+          <label for="profileLang" data-i18n="settings.profile.prefLang">Idioma preferido de respuestas</label>
+          <select id="profileLang">
+            <option value="auto" data-i18n="settings.profile.auto">Automático (detectar del mensaje)</option>
+            <option value="es">Español</option>
+            <option value="en">English</option>
+            <option value="fr">Français</option>
+          </select>
+          <button class="action-btn primary" id="saveProfile" data-i18n="actions.save">Guardar</button>
+        </section>
+
+        <!-- Personalización -->
+        <section class="settings-section" id="settings-personalization" hidden>
+          <h3 data-i18n="settings.personalization">Personalización</h3>
+          <label class="toggle-row">
+            <span data-i18n="settings.theme">Tema</span>
+            <select id="themeSelect">
+              <option value="dark" data-i18n="settings.theme.dark">Oscuro</option>
+              <option value="light" data-i18n="settings.theme.light">Claro</option>
+              <option value="system" data-i18n="settings.theme.system">Sistema</option>
+            </select>
+          </label>
+          <label class="toggle-row">
+            <span data-i18n="settings.readMode">Modo lectura</span>
+            <input type="checkbox" id="readModeToggle" />
+          </label>
+          <label class="toggle-row">
+            <span data-i18n="settings.persist">Persistencia</span>
+            <input type="checkbox" id="persistToggle" checked />
+          </label>
+          <label class="toggle-row">
+            <span data-i18n="settings.animations">Animaciones</span>
+            <input type="checkbox" id="animationsToggle" checked />
+          </label>
+          <button class="action-btn danger" id="purgeBtn" data-i18n="settings.purge">Purgar todos los datos</button>
+        </section>
+
+        <!-- Idioma -->
+        <section class="settings-section" id="settings-language" hidden>
+          <h3 data-i18n="settings.language">Idioma de la interfaz</h3>
+          <p class="hint" data-i18n="settings.language.hint">Cambia al instante todo el texto estático de la UI. No afecta al contenido de los chats ni a los system prompts de los modelos.</p>
+          <div class="lang-options">
+            <button class="lang-btn" data-lang="es">Español</button>
+            <button class="lang-btn" data-lang="en">English</button>
+            <button class="lang-btn" data-lang="fr">Français</button>
+          </div>
+        </section>
+
+        <!-- Mapas -->
+        <section class="settings-section" id="settings-maps" hidden>
+          <h3 data-i18n="settings.maps">Mapas</h3>
+          <p class="hint" data-i18n="settings.maps.hint">API key opcional para vector tiles premium (MapTiler o Stadia Maps). Si está vacío, MapLibre usa tiles OSM raster.</p>
+          <label for="mapsApiKey" data-i18n="settings.maps.key">API key</label>
+          <input type="password" id="mapsApiKey" placeholder="pk.eyJ..." />
+          <label for="mapsProvider" data-i18n="settings.maps.provider">Proveedor</label>
+          <select id="mapsProvider">
+            <option value="maptiler">MapTiler</option>
+            <option value="stadia">Stadia Maps</option>
+          </select>
+          <button class="action-btn primary" id="saveMaps" data-i18n="actions.save">Guardar</button>
+        </section>
+
+        <!-- Conexiones externas -->
+        <section class="settings-section" id="settings-connections" hidden>
+          <h3 data-i18n="settings.connections">Conexiones externas</h3>
+          <div class="connection-cards">
+            <div class="connection-card" data-provider="github">
+              <div class="conn-header">
+                <span class="conn-icon">🐙</span>
+                <span class="conn-name">GitHub</span>
+                <span class="conn-status" id="connStatusGithub" data-i18n="connections.disconnected">Desconectado</span>
+              </div>
+              <div class="conn-account" id="connAccountGithub" hidden></div>
+              <button class="action-btn" id="connectGithub" data-i18n="connections.connect">Conectar</button>
+              <button class="action-btn danger" id="disconnectGithub" data-i18n="connections.disconnect" hidden>Desconectar</button>
+            </div>
+            <div class="connection-card" data-provider="dropbox">
+              <div class="conn-header">
+                <span class="conn-icon">📦</span>
+                <span class="conn-name">Dropbox</span>
+                <span class="conn-status" id="connStatusDropbox" data-i18n="connections.disconnected">Desconectado</span>
+              </div>
+              <div class="conn-account" id="connAccountDropbox" hidden></div>
+              <button class="action-btn" id="connectDropbox" data-i18n="connections.connect">Conectar</button>
+              <button class="action-btn danger" id="disconnectDropbox" data-i18n="connections.disconnect" hidden>Desconectar</button>
+            </div>
+          </div>
+        </section>
+
+        <!-- Optimización de tokens -->
+        <section class="settings-section" id="settings-tokens" hidden>
+          <h3 data-i18n="settings.tokens">Optimización de tokens</h3>
+          <label class="toggle-row">
+            <span data-i18n="settings.tokens.compress">Compresión de contexto (sliding window)</span>
+            <input type="checkbox" id="optCompress" checked />
+          </label>
+          <label class="slider-row">
+            <span data-i18n="settings.tokens.recent">Mensajes recientes a mantener: <strong id="optRecentVal">8</strong></span>
+            <input type="range" id="optRecent" min="4" max="20" step="1" value="8" />
+          </label>
+          <label class="toggle-row">
+            <span data-i18n="settings.tokens.truncate">Truncar resultados de tools</span>
+            <input type="checkbox" id="optTruncate" checked />
+          </label>
+          <label class="slider-row">
+            <span data-i18n="settings.tokens.truncateLimit">Límite de truncado: <strong id="optTruncVal">2</strong> KB</span>
+            <input type="range" id="optTruncLimit" min="0.5" max="8" step="0.5" value="2" />
+          </label>
+          <label class="toggle-row">
+            <span data-i18n="settings.tokens.caching">Prompt caching (OpenRouter)</span>
+            <input type="checkbox" id="optCaching" checked />
+          </label>
+          <label class="toggle-row">
+            <span data-i18n="settings.tokens.sticky">Sticky routing por chat</span>
+            <input type="checkbox" id="optSticky" checked />
+          </label>
+          <label class="toggle-row">
+            <span data-i18n="settings.tokens.chips">Mostrar chips de tokens ahorrados</span>
+            <input type="checkbox" id="optChips" checked />
+          </label>
+          <label class="toggle-row">
+            <span data-i18n="settings.tokens.counter">Mostrar contador de tokens en caja de texto</span>
+            <input type="checkbox" id="optCounter" checked />
+          </label>
+        </section>
+
+        <!-- Sesión compartida -->
+        <section class="settings-section" id="settings-shared" hidden>
+          <h3 data-i18n="settings.shared">Sesión compartida</h3>
+          <label class="toggle-row">
+            <span data-i18n="settings.shared.enable">Activar función en chats elegibles</span>
+            <input type="checkbox" id="sharedEnable" checked />
+          </label>
+          <label class="slider-row">
+            <span data-i18n="settings.shared.turnDuration">Duración de turno: <strong id="sharedTurnVal">30</strong> min</span>
+            <input type="range" id="sharedTurnDuration" min="5" max="120" step="5" value="30" />
+          </label>
+          <label class="toggle-row">
+            <span data-i18n="settings.shared.inviteNotif">Notificaciones de invitación</span>
+            <input type="checkbox" id="sharedInviteNotif" checked />
+          </label>
+        </section>
+
+        <!-- Notificaciones push -->
+        <section class="settings-section" id="settings-notifications" hidden>
+          <h3 data-i18n="settings.notifications">Notificaciones push</h3>
+          <p class="hint" id="notifPermissionStatus"></p>
+          <label class="toggle-row">
+            <span data-i18n="settings.notifications.master">Activar notificaciones push</span>
+            <input type="checkbox" id="notifMaster" />
+          </label>
+          <label class="toggle-row">
+            <span data-i18n="settings.notifications.modelDone">Modelo terminó de responder</span>
+            <input type="checkbox" id="notifModelDone" checked />
+          </label>
+          <label class="toggle-row">
+            <span data-i18n="settings.notifications.turnAvailable">Turno disponible en sesión compartida</span>
+            <input type="checkbox" id="notifTurn" checked />
+          </label>
+          <label class="toggle-row">
+            <span data-i18n="settings.notifications.newMessage">Nuevo mensaje en sesión compartida</span>
+            <input type="checkbox" id="notifNewMsg" checked />
+          </label>
+          <label class="toggle-row">
+            <span data-i18n="settings.notifications.toolDone">Tool completada en background</span>
+            <input type="checkbox" id="notifToolDone" />
+          </label>
+        </section>
+
+        <!-- Modo offline -->
+        <section class="settings-section" id="settings-offline" hidden>
+          <h3 data-i18n="settings.offline">Modo offline</h3>
+          <label class="toggle-row">
+            <span data-i18n="settings.offline.enable">Activar cache local</span>
+            <input type="checkbox" id="offlineEnable" checked />
+          </label>
+          <p class="hint" id="offlineLastSync" data-i18n="settings.offline.neverSynced">Última sincronización: nunca</p>
+          <p class="hint" id="offlineSize">Cache: 0 MB / 5 MB</p>
+          <button class="action-btn" id="offlineSyncNow" data-i18n="settings.offline.syncNow">Sincronizar ahora</button>
+          <button class="action-btn danger" id="offlinePurge" data-i18n="settings.offline.purge">Purgar cache local</button>
+        </section>
+
+        <!-- Chats -->
+        <section class="settings-section" id="settings-chats" hidden>
+          <h3 data-i18n="settings.chats">Chats</h3>
+          <label class="toggle-row">
+            <span data-i18n="settings.chats.autoTitle">Auto-sugerir título tras primer intercambio</span>
+            <input type="checkbox" id="chatsAutoTitle" checked />
+          </label>
+          <p class="hint" data-i18n="settings.chats.renameHint">Doble click en el título del chat en el sidebar para renombrarlo manualmente.</p>
+        </section>
+
+        <!-- Skills de verificación -->
+        <section class="settings-section" id="settings-skills" hidden>
+          <div class="skills-header-row">
+            <div>
+              <h3 data-i18n="settings.skills">Skills</h3>
+              <p class="hint" data-i18n="settings.skills.hint">Habilita skills para que el modelo aplique automáticamente sus directivas cuando el contenido sea relevante. El acceso varía según el rol activo.</p>
+            </div>
+            <button class="btn btn-primary" id="newSkillBtn">+ Nueva Skill</button>
+          </div>
+          <div class="skills-search-bar">
+            <input type="text" id="skillsSearchInput" class="search-input" placeholder="Buscar skill..." data-i18n="settings.skills.search" />
+          </div>
+          <div class="skills-filters">
+            <button class="filter-chip active" data-skill-filter="all">Todas</button>
+            <button class="filter-chip" data-skill-filter="verification">Verificación</button>
+            <button class="filter-chip" data-skill-filter="osint">OSINT</button>
+            <button class="filter-chip" data-skill-filter="analysis">Análisis</button>
+            <button class="filter-chip" data-skill-filter="research">Investigación</button>
+            <button class="filter-chip" data-skill-filter="coding">Código</button>
+            <button class="filter-chip" data-skill-filter="writing">Escritura</button>
+            <button class="filter-chip" data-skill-filter="data">Datos</button>
+            <button class="filter-chip" data-skill-filter="media">Media</button>
+            <button class="filter-chip" data-skill-filter="productivity">Productividad</button>
+            <button class="filter-chip" data-skill-filter="education">Educación</button>
+            <button class="filter-chip" data-skill-filter="business">Negocios</button>
+            <button class="filter-chip" data-skill-filter="communication">Comunicación</button>
+            <button class="filter-chip" data-skill-filter="design">Diseño</button>
+            <button class="filter-chip" data-skill-filter="document">Documentos</button>
+            <button class="filter-chip" data-skill-filter="meta">Meta</button>
+          </div>
+          <div class="skills-grid" id="skillsGrid"></div>
+          <div class="skills-count" id="skillsCount"></div>
+        </section>
+
+        <!-- Repositorio de Documentos -->
+        <section class="settings-section" id="settings-repo" hidden>
+          <h3 data-i18n="settings.repo">Repositorio de Documentos</h3>
+          <p class="hint" data-i18n="settings.repo.hint">Gestiona tus documentos de referencia. Desde el chat del Agente puedes adjuntarlos como contexto.</p>
+          <div class="repo-upload-zone" id="repoUploadZone" tabindex="0">
+            <p data-i18n="repo.dropHere">Arrastra archivos aquí o click para subir</p>
+            <input type="file" id="repoFileInput" hidden multiple
+              accept=".txt,.md,.pdf,.csv,.json,.html,.py,.js,.ts,.xml,.yaml,.yml,.css,.sql,.sh,.log,.tex" />
+            <div class="repo-upload-meta" id="repoUploadMeta" hidden>
+              <label>
+                <span data-i18n="repo.docName">Nombre del documento</span>
+                <input type="text" id="repoDocName" />
+              </label>
+            </div>
+            <button class="action-btn primary" id="repoConfirmUpload" data-i18n="repo.upload" hidden>Subir</button>
+          </div>
+          <div class="repo-toolbar">
+            <input type="text" class="repo-search-input" id="repoSearchInput"
+              placeholder="Filtrar por nombre..." data-i18n-placeholder="repo.searchPlaceholder" />
+          </div>
+          <div class="repo-usage-bar">
+            <div class="repo-usage-fill" id="repoUsageFill"></div>
+            <span class="repo-usage-text" id="repoUsageText">0 MB / 100 MB</span>
+          </div>
+          <ul class="repo-list" id="repoList"></ul>
+        </section>
+
+        <!-- Dashboard de modelos y APIs -->
+        <section class="settings-section" id="settings-dashboard" hidden>
+          <h3 data-i18n="settings.dashboard">Dashboard de modelos y APIs</h3>
+          <div class="dashboard-grid" id="dashboardModels"></div>
+          <h4 data-i18n="settings.dashboard.keys" hidden>API Key Rotator</h4>
+          <div class="dashboard-keys" id="dashboardKeys" hidden></div>
+        </section>
+
+        <!-- Acerca de -->
+        <section class="settings-section" id="settings-about" hidden>
+          <h3 data-i18n="settings.about">Acerca de</h3>
+          <img src="https://ik.imagekit.io/csdp6gbr6/17815803429593.png" alt="Véritas logo" class="about-logo" />
+          <p>Véritas v2.3.0</p>
+          <p data-i18n="settings.about.desc">Interfaz de orquestación multi-proveedor de modelos de IA con estilo de ópera espacial.</p>
+          <p><a href="https://github.com/" target="_blank" rel="noopener">Repositorio en GitHub</a></p>
+        </section>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- MODAL: INVITAR (sesión compartida) -->
+  <!-- ============================================================ -->
+  <div class="modal-overlay" id="inviteModal" hidden>
+    <div class="modal invite-modal" role="dialog" aria-labelledby="inviteTitle">
+      <header class="modal-header">
+        <h2 id="inviteTitle" data-i18n="shared.inviteTitle">Invitar a sesión compartida</h2>
+        <button class="icon-btn" id="closeInvite" aria-label="Close" data-i18n="aria.close">✕</button>
+      </header>
+      <div class="modal-body">
+        <p data-i18n="shared.inviteDesc">Genera un enlace de un solo uso y compártelo con tu invitado. Máximo 1 editor.</p>
+        <button class="action-btn primary" id="generateShareLink" data-i18n="shared.generate">Generar enlace</button>
+        <div class="share-link-box" id="shareLinkBox" hidden>
+          <input type="text" id="shareLinkInput" readonly />
+          <button class="action-btn" id="copyShareLink" data-i18n="shared.copy">Copiar</button>
+        </div>
+        <button class="action-btn danger" id="revokeShareLink" data-i18n="shared.revoke" hidden>Revocar enlace</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- BANNER OFFLINE -->
+  <!-- ============================================================ -->
+  <div class="offline-banner" id="offlineBanner" hidden>
+    <span data-i18n="offline.banner">Modo offline — Lectura únicamente. Tus mensajes se enviarán al reconectar.</span>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- TOAST CONTAINER -->
+  <!-- ============================================================ -->
+  <div class="toast-container" id="toastContainer" aria-live="polite"></div>
+
+  <!-- ============================================================ -->
+  <!-- PLANTILLAS DE MENSAJE (ocultas, clonadas por app.js) -->
+  <!-- ============================================================ -->
+  <template id="messageTemplate">
+    <div class="message">
+      <div class="message-avatar"></div>
+      <div class="message-content-wrapper">
+        <div class="message-header">
+          <span class="message-author"></span>
+          <span class="message-time"></span>
+          <span class="message-provider" hidden></span>
+        </div>
+        <div class="message-body"></div>
+        <div class="message-thinking" hidden></div>
+        <div class="message-tools" hidden></div>
+        <div class="message-cached-chip" hidden></div>
+      </div>
+    </div>
+  </template>
+
+  <template id="toolResultTemplate">
+    <details class="tool-result">
+      <summary>
+        <span class="tool-icon">🔧</span>
+        <span class="tool-name"></span>
+        <span class="tool-status"></span>
+      </summary>
+      <pre class="tool-output"></pre>
+    </details>
+  </template>
+
+  <!-- ============================================================ -->
+  <!-- PROMPT CRAFT: Botón flotante arrastrable + panel chat (GLM) -->
+  <!-- ============================================================ -->
+  <div id="promptCraftFab" class="prompt-craft-fab" title="Prompt Craft — Genera prompts optimizados">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+  </div>
+
+  <div id="promptCraftPanel" class="prompt-craft-panel" hidden>
+    <div class="prompt-craft-header">
+      <span class="prompt-craft-title">Prompt Craft</span>
+      <button class="prompt-craft-close" id="promptCraftClose" title="Cerrar">✕</button>
+    </div>
+    <div class="prompt-craft-body">
+      <div class="prompt-craft-role-row">
+        <label for="promptCraftRole">Rol</label>
+        <select id="promptCraftRole">
+          <option value="agent">\U0001f50d Agente (OSINT / Investigación)</option>
+          <option value="coder">\U0001f4bb Coder (Ingeniería de software)</option>
+          <option value="estratega">\U0001f9e0 Estratega (Análisis profundo)</option>
+          <option value="pensador">\U0001f4ad Pensador (Razonamiento)</option>
+        </select>
+      </div>
+      <div class="prompt-craft-input-row">
+        <textarea id="promptCraftInput" rows="3" placeholder="Describe brevemente lo que quieres... Ej: investigar fondo financiero de empresa X"></textarea>
+        <button class="prompt-craft-send" id="promptCraftSend" title="Generar prompt">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+        </button>
+      </div>
+      <div class="prompt-craft-output" id="promptCraftOutput" hidden>
+        <pre id="promptCraftResult"></pre>
+      </div>
+    </div>
+    <div class="prompt-craft-footer">
+      <button class="prompt-craft-btn" id="promptCraftCopy" disabled title="Copiar prompt al portapapeles">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+        Copiar
+      </button>
+      <button class="prompt-craft-btn" id="promptCraftRefresh" title="Limpiar y generar otro">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
+        Refrescar
+      </button>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- MODAL: SKILL EDITOR (crear/editar skills custom) -->
+  <!-- ============================================================ -->
+  <div class="modal-overlay" id="skillEditorModal" hidden>
+    <div class="modal skill-editor-modal" role="dialog" aria-labelledby="skillEditorTitle">
+      <header class="modal-header">
+        <h2 id="skillEditorTitle">Nueva Skill</h2>
+        <button class="icon-btn" onclick="closeSkillEditor()" aria-label="Close">✕</button>
+      </header>
+      <div class="skill-editor-body">
+        <div class="skill-editor-row">
+          <label for="skillEditorName">Nombre *</label>
+          <input type="text" id="skillEditorName" placeholder="Ej: Detector de deepfakes" />
+        </div>
+        <div class="skill-editor-row">
+          <label for="skillEditorDesc">Descripción *</label>
+          <textarea id="skillEditorDesc" rows="2" placeholder="Descripción breve de lo que hace la skill..."></textarea>
+        </div>
+        <div class="skill-editor-row-inline">
+          <div class="skill-editor-field">
+            <label for="skillEditorCategory">Categoría</label>
+            <select id="skillEditorCategory">
+              <option value="verification">Verificación</option>
+              <option value="osint">OSINT</option>
+              <option value="analysis">Análisis</option>
+              <option value="research">Investigación</option>
+              <option value="coding">Código</option>
+              <option value="writing">Escritura</option>
+              <option value="data">Datos</option>
+              <option value="media">Media</option>
+              <option value="productivity">Productividad</option>
+              <option value="education">Educación</option>
+              <option value="business">Negocios</option>
+              <option value="communication">Comunicación</option>
+              <option value="design">Diseño</option>
+              <option value="document">Documentos</option>
+              <option value="meta">Meta / Sistema</option>
+            </select>
+          </div>
+          <div class="skill-editor-field">
+            <label for="skillEditorIcon">Icono (emoji)</label>
+            <input type="text" id="skillEditorIcon" maxlength="4" placeholder="\u2728" />
+          </div>
+          <div class="skill-editor-field">
+            <label for="skillEditorColor">Color</label>
+            <input type="color" id="skillEditorColor" value="#f59e0b" />
+          </div>
+        </div>
+        <div class="skill-editor-row">
+          <label class="skill-toggle-label">
+            <input type="checkbox" id="skillEditorExternal" />
+            <span>Requiere servicios externos (búsqueda, web)</span>
+          </label>
+        </div>
+        <div class="skill-editor-row">
+          <label for="skillEditorPrompt">Contenido del Prompt *</label>
+          <textarea id="skillEditorPrompt" rows="8" placeholder="Escribe las instrucciones detalladas que el modelo seguirá cuando esta skill esté activa..."></textarea>
+        </div>
+        <input type="hidden" id="skillEditorId" value="" />
+      </div>
+      <footer class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeSkillEditor()">Cancelar</button>
+        <button class="btn btn-primary" onclick="saveSkillFromEditor()">Guardar</button>
+      </footer>
+    </div>
+  </div>
+</body>
+</html>

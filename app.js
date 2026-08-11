@@ -1,0 +1,4184 @@
+// ==============================================================================
+// Véritas v2.3 — /app.js
+// ==============================================================================
+// Cerebro del frontend. Orquesta TODO:
+//   - Inicialización: i18n, fallback chains, tool registry, sandbox templates.
+//   - Sidebar: submenús, nuevo/renombrar/borrar chat, abrir repo/ajustes.
+//   - Canvas 2D: animación de la entidad cybernetic (idle/active/processing).
+//   - Chat: enviar mensaje (Puter u OpenRouter según modelo), parser SSE,
+//     parser <tool_call> XML, parser <razonamiento_interno>, indicadores.
+//   - Tool Caller loop (máx 5 iter), ejecución vía /api/tool/invoke,
+//     persistencia de cada iteración en D1.
+//   - Sandbox: parsing <file path="...">, árbol, CodeMirror, live preview
+//     con throttle 300ms, resolución de imports multi-archivo, CSP del iframe,
+//     console+network capture, botones (descargar/copiar/ver navegador/export
+//     ZIP/push GitHub).
+//   - Ajustes: gestión de perfil, personalización, idioma, mapas, conexiones
+//     externas, optimización de tokens, sesión compartida, notificaciones push,
+//     modo offline, chats.
+//   - Sesión compartida: invitar, join, heartbeat, polling, turnos, escribiendo.
+//   - Notificaciones: integración con NotificationManager.
+//   - Modo offline: detección, cache, cola pendientes, banner.
+//   - Contador de tokens: cálculo en tiempo real, debounce 300ms, colores.
+//   - Chips de tokens ahorrados: tras cada respuesta.
+//   - Dashboard: semáforos de modelos y APIs, panel del rotador de claves.
+// ==============================================================================
+
+import { t, applyI18n, detectInitialLang, getCurrentLang, formatDate } from "./lib/i18n.js";
+import { FALLBACK_CHAINS, MODEL_PROVIDER, getNextFallback, isFallbackExhausted, getProvider, getContextLimit, getRoleForModel } from "./lib/fallbackChains.js";
+import { TOOL_REGISTRY, isAllowed, parseToolCallXML, parseFallbackToDolphin, stripFallbackToDolphin, buildToolResultXML, escapeXML, fetchAndHydrate, getTool } from "./lib/toolRegistry.js";
+import * as ContextManager from "./lib/contextManager.js";
+import { runAgentLoop } from "./lib/agentOrchestrator.js";
+import { SharedSessionManager, createShare, revokeShare, joinSession, isRoleShareable } from "./lib/sharedSession.js";
+import { getNotificationManager } from "./lib/notifications.js";
+import { getOfflineCacheManager } from "./lib/offlineCache.js";
+import { getTemplate, listTemplates } from "./lib/sandboxTemplates.js";
+import { SKILLS, SKILLS_CATEGORIES, getAllSkills, getActiveSkills, buildSkillsPromptBlock, loadSkillMdContent, loadCustomSkills, mergeCustomSkill, removeCustomSkill, getSkillsForRole } from "./lib/skillsRegistry.js";
+import { SYSTEM_PROMPTS, UI_ROLE_TO_PROMPT_KEY } from "./prompts.js";
+
+// ==============================================================================
+// ESTADO GLOBAL
+// ==============================================================================
+const state = {
+  user_email: null,
+  currentChat: null,           // { id, category, title, is_shared, user_email }
+  currentCategory: "agent",    // agent | coder | general
+  currentModel: null,
+  currentRole: null,
+  messages: [],                // array de mensajes del chat actual (en memoria)
+  chatSummary: null,           // { text, lastSummarizedIndex, generatedAt }
+  chatCachedTotal: 0,          // acumulado de cached_tokens en este chat
+  sharedSession: null,         // instancia de SharedSessionManager
+  settings: {
+    ui_lang: null,
+    profile: { name: "", bio: "", prefLang: "auto" },
+    personalization: { theme: "dark", readMode: false, persist: true, animations: true },
+    maps: { apiKey: "", provider: "maptiler" },
+    tokens: { ...ContextManager.DEFAULT_SETTINGS },
+    shared: { enable: true, turnDuration: 30, inviteNotif: true },
+    notifications: { enabled: false, events: {} },
+    offline: { enable: true },
+    chats: { autoTitle: true },
+    skills: { enabled: [] }, // IDs de skills activas
+    fallbackMode: "manual", // manual | automatic
+  },
+  sandbox: {
+    files: {}, // { path: content }
+    activeFile: null,
+    editor: null,
+    previewThrottleTimer: null,
+  },
+  toggles: { search: false, scrape: false, thinking: false, deepThinking: false },
+  streamingState: "idle", // idle | processing | thinking
+  isOffline: false,
+  pendingChatFlush: false,
+  abortController: null,  // P0-4: AbortController para cancelar streaming en curso
+  chatSearchQuery: "",    // P1-4: filtro activo del buscador de chats (solo título)
+  pendingAttachments: [], // ETAPA 5: attachments multimedia pendientes [{ file, r2_key, modality, name, size }]
+  repoDocAttachments: [], // Docs del repo adjuntados como contexto [{ doc_number, doc_name, file_size }]
+};
+
+// ==============================================================================
+// HELPERS DOM
+// ==============================================================================
+const $ = (sel) => document.querySelector(sel);
+const $$ = (sel) => document.querySelectorAll(sel);
+
+function show(el) { if (el) el.hidden = false; }
+function hide(el) { if (el) el.hidden = true; }
+function toast(message, type = "info", durationMs = 3000) {
+  const container = $("#toastContainer");
+  if (!container) return;
+  const el = document.createElement("div");
+  el.className = `toast ${type}`;
+  el.textContent = message;
+  container.appendChild(el);
+  setTimeout(() => {
+    el.style.opacity = "0";
+    setTimeout(() => el.remove(), 300);
+  }, durationMs);
+}
+
+function setUserEmail() {
+  // El Worker valida el header cf-access-user-email; el frontend no lo lee
+  // directamente (está en el lado server). Hacemos fetch a /api/status para
+  // inferir que estamos autenticados. El email real se obtiene del primer
+  // /api/db/message o del perfil.
+}
+
+// ==============================================================================
+// INICIALIZACIÓN
+// ==============================================================================
+async function init() {
+  console.log("[Véritas] Inicializando v2.2...");
+
+  // Idioma inicial.
+  const initialLang = state.settings.ui_lang || detectInitialLang();
+  applyI18n(initialLang);
+  $$(`.lang-btn[data-lang="${initialLang}"]`).forEach((b) => b.classList.add("active"));
+
+  // Hidratar tool registry desde el server.
+  await fetchAndHydrate();
+
+  // Cargar settings desde el server (users.profile_json).
+  await loadSettings();
+
+  // Aplicar settings a submódulos.
+  ContextManager.setSettings(state.settings.tokens);
+  getNotificationManager().setSettings(state.settings.notifications);
+
+  // Inicializar offline cache.
+  const offline = getOfflineCacheManager();
+  offline.addEventListener("offline:online", () => {
+    state.isOffline = false;
+    document.body.classList.remove("is-offline");
+    hide($("#offlineBanner"));
+    toast(t("toast.connectionRestored"), "success");
+  });
+  offline.addEventListener("offline:offline", () => {
+    state.isOffline = true;
+    document.body.classList.add("is-offline");
+    show($("#offlineBanner"));
+    toast(t("toast.connectionLost"), "warning");
+  });
+  offline.addEventListener("offline:synced", (e) => {
+    updateOfflineSyncInfo(e.detail.ts, e.detail.size);
+  });
+  await offline.init();
+  if (state.settings.offline.enable) await offline.syncBundle();
+
+  // Cargar lista de chats del submenú activo.
+  await loadChatList();
+
+  // Setup Canvas 2D animation.
+  initEntityCanvas();
+
+  // Setup event listeners.
+  setupEventListeners();
+
+  // Setup settings UI.
+  setupSettingsUI();
+
+  // Cargar conexiones OAuth.
+  await loadConnections();
+
+  // Cargar dashboard.
+  await loadDashboard();
+
+  // Detección inicial de online/offline.
+  if (!navigator.onLine) {
+    state.isOffline = true;
+    document.body.classList.add("is-offline");
+    show($("#offlineBanner"));
+  }
+
+  // Notificaciones: hook para que sharedSession pueda dispararlas.
+  window.addEventListener("shared:event", (e) => {
+    const { type, payload } = e.detail;
+    getNotificationManager().notify(type, payload, { userTyping: isUserTyping() });
+  });
+
+  console.log("[Véritas] Listo.");
+}
+
+// ==============================================================================
+// CANVAS 2D — Entidad cybernetic (Sección 5 del BUILD)
+// ==============================================================================
+// Estados:
+//   idle       → Punto luminoso distante (estrella), parpadeo lento cada ~3s.
+//   active     → Orbe + partículas erráticas (Browniano) orbitando.
+//   processing → Partículas aceleran, anillos giratorios concéntricos, orbe glow pulsante.
+// Transiciones orgánicas con easeInOutCubic. Al completar respuesta, vuelve a
+// erráticas y el glow desvanece en ~800ms.
+// prefers-reduced-motion: desactivar partículas, dejar solo orbe estático.
+// ==============================================================================
+
+// Easing easeInOutCubic: transición orgánica entre estados.
+function easeInOutCubic(t) {
+  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
+
+// Mapeo de estados a nivel numérico para interpolar.
+const STATE_LEVEL = { idle: 0, active: 1, processing: 2 };
+
+function initEntityCanvas() {
+  const canvas = $("#entityCanvas");
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  const W = canvas.width, H = canvas.height;
+  const cx = W / 2, cy = H / 2;
+  const particles = [];
+  const NUM_PARTICLES = 30;
+
+  // Crear partículas.
+  for (let i = 0; i < NUM_PARTICLES; i++) {
+    particles.push({
+      angle: Math.random() * Math.PI * 2,
+      radius: 25 + Math.random() * 35,
+      speed: 0.005 + Math.random() * 0.01,
+      size: 1 + Math.random() * 2,
+      opacity: 0.3 + Math.random() * 0.7,
+    });
+  }
+
+  const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  // --- State machine con transición suave ---
+  // `_displayedLevel` es el nivel interpolado que se dibuja (0=idle, 1=active, 2=processing).
+  // `_targetLevel` es el nivel objetivo al que se transiciona.
+  // `_glowFade` es un factor 0..1 que controla el glow residual tras salir de processing.
+  let _displayedLevel = 0;
+  let _targetLevel = 0;
+  let _glowFade = 0; // se mantiene >0 durante 800ms tras salir de processing
+  const TRANSITION_SPEED = 0.0035; // por ms → ~285ms para t=0..1 (suave con easing)
+  const GLOW_FADE_DURATION_MS = 800;
+
+  // Exponer para setEntityState.
+  state._canvasTarget = (lvl) => { _targetLevel = lvl; };
+  state._canvasTriggerGlowFade = () => { _glowFade = 1; };
+
+  function draw(timestamp) {
+    // Avanzar la transición hacia _targetLevel con easeInOutCubic.
+    const diff = _targetLevel - _displayedLevel;
+    if (Math.abs(diff) > 0.001) {
+      // Mover displayedLevel hacia target a velocidad constante; el easing se
+      // aplica al interpolar propiedades visuales, no al avance del nivel (más
+      // simple y da el mismo efecto orgánico).
+      const step = TRANSITION_SPEED * 16; // ~16ms por frame
+      _displayedLevel += Math.sign(diff) * Math.min(Math.abs(diff), step);
+    } else {
+      _displayedLevel = _targetLevel;
+    }
+
+    // Decay del glow fade (800ms tras salir de processing).
+    if (_glowFade > 0) {
+      _glowFade = Math.max(0, _glowFade - (16 / GLOW_FADE_DURATION_MS));
+    }
+
+    // Limpiar con efecto de fade.
+    ctx.fillStyle = "rgba(10, 14, 26, 0.18)";
+    ctx.fillRect(0, 0, W, H);
+
+    // --- Aplicar easing al nivel para transiciones orgánicas ---
+    // easeInOutCubic sobre el progreso de idle→active→processing.
+    // Mapeamos _displayedLevel (0..2) a través de un easing relativo.
+    const lvl = _displayedLevel;
+
+    // --- Idle: punto luminoso distante (estrella), parpadeo cada ~3s ---
+    // Cuando lvl ≈ 0, dibujar estrella distante pequeña que parpadea.
+    // Mezclamos con el orbe activo según lvl.
+    const idleWeight = Math.max(0, 1 - lvl); // 1 en idle, 0 en active+
+    const activeWeight = Math.max(0, Math.min(1, lvl)); // 0 en idle, 1 en active+
+    const processingWeight = Math.max(0, lvl - 1); // 0 en idle/active, 1 en processing
+
+    // Parpadeo idle cada 3s (periodo 3000ms).
+    const blinkPhase = (Math.sin(timestamp / 3000 * Math.PI * 2) + 1) / 2; // 0..1
+    const idleOpacity = 0.3 + 0.7 * blinkPhase; // 0.3..1.0
+
+    // Estrella distante: pequeña, ligeramente desplazada, esmeralda tenue.
+    if (idleWeight > 0.01) {
+      const starX = cx + 3;
+      const starY = cy - 2;
+      const starR = 1.5 + idleWeight * 0.5;
+      ctx.fillStyle = `rgba(80, 200, 120, ${idleOpacity * idleWeight * 0.8})`;
+      ctx.beginPath();
+      ctx.arc(starX, starY, starR, 0, Math.PI * 2);
+      ctx.fill();
+      // Pequeño halo de estrella.
+      if (blinkPhase > 0.7) {
+        ctx.fillStyle = `rgba(80, 200, 120, ${(blinkPhase - 0.7) * idleWeight * 0.2})`;
+        ctx.beginPath();
+        ctx.arc(starX, starY, starR * 3, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    // --- Orbe central (activo/processing) ---
+    // Radio interpola de 0 (idle) a 6 (active) a 8 (processing) con pulso.
+    const pulseScale = processingWeight > 0 ? 1 + 0.15 * Math.sin(timestamp / 200) : 1;
+    const orbRadius = (activeWeight * 6 + processingWeight * 2) * pulseScale;
+
+    if (orbRadius > 0.5) {
+      // Glow del orbe: esmeralda en processing, cian en active.
+      // El glow persiste durante _glowFade tras salir de processing.
+      const glowStrength = processingWeight + _glowFade * 0.5;
+      if (glowStrength > 0.01) {
+        const gradient = ctx.createRadialGradient(cx, cy, 0, cx, cy, 40);
+        const isProc = processingWeight > 0.3;
+        gradient.addColorStop(0, isProc
+          ? `rgba(80, 200, 120, ${0.4 * glowStrength})`
+          : `rgba(0, 212, 255, ${0.3 * glowStrength})`);
+        gradient.addColorStop(1, "rgba(80, 200, 120, 0)");
+        ctx.fillStyle = gradient;
+        ctx.beginPath();
+        ctx.arc(cx, cy, 40, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // Orbe.
+      const orbColor = processingWeight > 0.5 ? "#50C878" : "#00d4ff";
+      ctx.fillStyle = orbColor;
+      ctx.globalAlpha = activeWeight;
+      ctx.beginPath();
+      ctx.arc(cx, cy, orbRadius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+
+    if (reducedMotion) {
+      requestAnimationFrame(draw);
+      return;
+    }
+
+    // --- Partículas ---
+    // En idle: no se dibujan (idleWeight ≈ 1 → alpha ≈ 0).
+    // En active: Browniano, cian.
+    // En processing: anillos concéntricos, esmeralda, aceleradas.
+    particles.forEach((p) => {
+      // Velocidad de rotación según estado.
+      const speedMul = 1 + processingWeight * 3 + activeWeight * 0.5;
+      p.angle += p.speed * speedMul;
+
+      // Browniano en active.
+      if (activeWeight > 0.3 && processingWeight < 0.3) {
+        p.angle += (Math.random() - 0.5) * 0.05 * activeWeight;
+      }
+
+      // Radio: anillos concéntricos en processing, órbita normal en active.
+      const baseRadius = p.radius;
+      const ringMod = processingWeight > 0
+        ? Math.sin(timestamp / 500 + p.angle) * 10 * processingWeight
+        : 0;
+      const r = baseRadius + ringMod;
+
+      const x = cx + Math.cos(p.angle) * r;
+      const y = cy + Math.sin(p.angle) * r;
+
+      // Color: cian en active, esmeralda en processing, interpolado.
+      const cyanComp = activeWeight * (1 - processingWeight);
+      const greenComp = processingWeight;
+      const alpha = (cyanComp * 0.7 + greenComp * 1.0) * p.opacity;
+
+      if (alpha > 0.02) {
+        const r_col = Math.round(0 * cyanComp + 80 * greenComp);
+        const g_col = Math.round(212 * cyanComp + 200 * greenComp);
+        const b_col = Math.round(255 * cyanComp + 120 * greenComp);
+        ctx.fillStyle = `rgba(${r_col}, ${g_col}, ${b_col}, ${alpha})`;
+        ctx.beginPath();
+        ctx.arc(x, y, p.size, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    });
+
+    requestAnimationFrame(draw);
+  }
+
+  // Estado inicial: idle.
+  state.streamingState = "idle";
+  $("#entityStateIndicator").dataset.state = "idle";
+  requestAnimationFrame(draw);
+}
+
+function setEntityState(s) {
+  const prev = state.streamingState;
+  state.streamingState = s;
+  const ind = $("#entityStateIndicator");
+  if (ind) ind.dataset.state = s;
+
+  // Actualizar nivel objetivo del canvas para transición suave.
+  if (state._canvasTarget) {
+    state._canvasTarget(STATE_LEVEL[s] ?? 0);
+  }
+
+  // Si salimos de processing → activar glow fade de 800ms.
+  if (prev === "processing" && s !== "processing" && state._canvasTriggerGlowFade) {
+    state._canvasTriggerGlowFade();
+  }
+}
+
+// ==============================================================================
+// P0-4 — Stop streaming (AbortController + toggle Send/Stop button)
+// ==============================================================================
+
+// setStreamingMode(true) durante streaming: oculta Send, muestra Stop.
+// setStreamingMode(false) al terminar: restaura Send, oculta Stop.
+function setStreamingMode(isStreaming) {
+  const sendBtn = $("#sendBtn");
+  const stopBtn = $("#stopBtn");
+  if (!sendBtn || !stopBtn) return;
+  sendBtn.hidden = isStreaming;
+  stopBtn.hidden = !isStreaming;
+}
+
+// stopStreaming(): aborta el AbortController actual. El catch de callPuter/
+// callOpenRouter devuelve { aborted: true } y runChatWithTools lo maneja.
+function stopStreaming() {
+  if (state.abortController) {
+    state.abortController.abort();
+    // No null aquí — el finally de callPuter/callOpenRouter lo limpia.
+  }
+  hideStreamingIndicator();
+  // No llamamos setStreamingMode(false) aquí; lo hace runChatWithTools al
+  // recibir response.aborted. Así evitamos flicker si el abort tarda un frame.
+}
+
+// ==============================================================================
+// EVENT LISTENERS
+// ==============================================================================
+function setupEventListeners() {
+  // Submenús de chat.
+  $$(".nav-tab").forEach((tab) => {
+    tab.addEventListener("click", () => {
+      $$(".nav-tab").forEach((t) => t.classList.remove("active"));
+      tab.classList.add("active");
+      state.currentCategory = tab.dataset.category;
+      // P1-extra: actualizar modelo por defecto de la categoría y re-renderizar
+      // welcome si no hay chat abierto (para refrescar las tarjetas).
+      if (!state.currentChat) {
+        const defaultModels = {
+          agent: "nvidia/nemotron-3-super-120b-a12b:free",
+          coder: "poolside/laguna-m.1:free",
+          general: "cognitivecomputations/dolphin-mistral-24b-venice-edition:free",
+        };
+        state.currentModel = defaultModels[state.currentCategory];
+        state.currentRole = getRoleForModel(state.currentModel);
+        populateModelSelector();
+        renderEmptyState();
+        updateDeepThinkingVisibility();
+      }
+      loadChatList();
+    });
+  });
+
+  // P1-4: Buscador de chats (solo por título).
+  const searchInput = $("#chatSearchInput");
+  const searchClear = $("#chatSearchClear");
+  if (searchInput) {
+    // Debounce 200ms para no recargar la lista en cada tecla.
+    const debouncedSearch = debounce((value) => {
+      state.chatSearchQuery = value;
+      if (searchClear) searchClear.hidden = !value;
+      loadChatList();
+    }, 200);
+    searchInput.addEventListener("input", (e) => debouncedSearch(e.target.value));
+  }
+  if (searchClear) {
+    searchClear.addEventListener("click", () => {
+      if (searchInput) {
+        searchInput.value = "";
+        searchInput.focus();
+      }
+      state.chatSearchQuery = "";
+      searchClear.hidden = true;
+      loadChatList();
+    });
+  }
+
+  // Nuevo chat.
+  $("#newChatBtn")?.addEventListener("click", () => createNewChat());
+
+  // Abrir repo: navegar al tab de repo en Settings.
+  $("#openRepoBtn")?.addEventListener("click", () => {
+    _repoOffset = 0;
+    _repoSearchTerm = "";
+    const searchInput = $("#repoSearchInput");
+    if (searchInput) searchInput.value = "";
+    // Activar tab repo en settings.
+    $$(".settings-tab").forEach((t) => t.classList.remove("active"));
+    const repoTab = document.querySelector('.settings-tab[data-section="repo"]');
+    if (repoTab) repoTab.classList.add("active");
+    $$(".settings-section").forEach((s) => hide(s));
+    show($("#settings-repo"));
+    show($("#settingsModal"));
+    loadRepoList();
+  });
+
+  // Abrir ajustes.
+  $("#openSettingsBtn")?.addEventListener("click", () => show($("#settingsModal")));
+
+  // Cerrar modales.
+  $("#closeSettings")?.addEventListener("click", () => hide($("#settingsModal")));
+  $("#closeInvite")?.addEventListener("click", () => hide($("#inviteModal")));
+
+  // Click fuera del modal lo cierra.
+  $$(".modal-overlay").forEach((overlay) => {
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay) hide(overlay);
+    });
+  });
+
+  // Settings tabs.
+  $$(".settings-tab").forEach((tab) => {
+    tab.addEventListener("click", () => {
+      $$(".settings-tab").forEach((t) => t.classList.remove("active"));
+      tab.classList.add("active");
+      $$(".settings-section").forEach((s) => hide(s));
+      show($(`#settings-${tab.dataset.section}`));
+    });
+  });
+
+  // Idioma.
+  $$(".lang-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const lang = btn.dataset.lang;
+      applyI18n(lang);
+      state.settings.ui_lang = lang;
+      $$(".lang-btn").forEach((b) => b.classList.toggle("active", b === btn));
+      saveSettings();
+    });
+  });
+
+  // Input de mensaje.
+  const input = $("#messageInput");
+  input?.addEventListener("input", () => {
+    autoResize(input);
+    debouncedUpdateTokenCounter();
+    if (state.sharedSession) state.sharedSession.setTyping(true);
+  });
+  input?.addEventListener("blur", () => {
+    if (state.sharedSession) state.sharedSession.setTyping(false);
+  });
+  input?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage();
+    }
+  });
+
+  // Send button.
+  $("#sendBtn")?.addEventListener("click", () => sendMessage());
+  // P0-4: Stop button — aborta el streaming en curso.
+  $("#stopBtn")?.addEventListener("click", () => stopStreaming());
+
+  // Toggles (search/scrape/thinking).
+  $("#searchToggle")?.addEventListener("click", () => toggleButton("search"));
+  $("#scrapeToggle")?.addEventListener("click", () => toggleButton("scrape"));
+  $("#thinkingToggle")?.addEventListener("click", () => toggleButton("thinking"));
+
+  // Deep Thinking toggle (solo visible cuando rol === "agent").
+  $("#deepThinkingBtn")?.addEventListener("click", () => {
+    state.toggles.deepThinking = !state.toggles.deepThinking;
+    const btn = $("#deepThinkingBtn");
+    btn.classList.toggle("active", state.toggles.deepThinking);
+    btn.setAttribute("aria-pressed", String(state.toggles.deepThinking));
+    toast(state.toggles.deepThinking ? "Pensamiento Profundo activado (Nemotron Ultra)" : "Pensamiento Profundo desactivado", "info", 2000);
+  });
+
+  // Model selector.
+  $("#modelSelector")?.addEventListener("change", (e) => {
+    state.currentModel = e.target.value;
+    state.currentRole = getRoleForModel(state.currentModel);
+    updateTokenCounter();
+    updateInviteButtonVisibility();
+  });
+
+  // Attach file.
+  $("#attachBtn")?.addEventListener("click", () => $("#fileInput").click());
+  $("#fileInput")?.addEventListener("change", handleFileAttach);
+
+  // Sandbox buttons.
+  $("#sbNew")?.addEventListener("click", () => clearSandbox());
+  $("#sbTemplatesBtn")?.addEventListener("click", () => toggleDropdown("#sbTemplatesMenu"));
+  $("#sbLibrariesBtn")?.addEventListener("click", () => toggleDropdown("#sbLibrariesMenu"));
+  $("#sbExportZip")?.addEventListener("click", () => exportZip());
+  $("#sbDownload")?.addEventListener("click", () => downloadActiveFile());
+  $("#sbCopy")?.addEventListener("click", () => copyActiveFile());
+  $("#sbOpenBrowser")?.addEventListener("click", () => openInBrowser());
+  $("#sbPushGithub")?.addEventListener("click", () => pushToGithub());
+  $("#sbCollapse")?.addEventListener("click", () => toggleSandbox());
+  $("#sbRefresh")?.addEventListener("click", () => refreshPreview());
+  $("#sbClosePanel")?.addEventListener("click", () => hide($("#sandboxBottomPanel")));
+
+  // Templates dropdown items.
+  $$("#sbTemplatesMenu button").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      loadTemplate(btn.dataset.template);
+      hide($("#sbTemplatesMenu"));
+    });
+  });
+
+  // Libraries dropdown items.
+  $$("#sbLibrariesMenu button").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      addLibrary(btn.dataset.lib);
+      hide($("#sbLibrariesMenu"));
+    });
+  });
+
+  // Repo upload + search (dentro de Settings).
+  const dropZone = $("#repoUploadZone");
+  $("#repoFileInput")?.addEventListener("change", (e) => {
+    if (e.target.files.length > 0) handleRepoFilesUpload(e.target.files);
+  });
+  $("#repoSearchInput")?.addEventListener("input", onRepoSearchInput);
+  dropZone?.addEventListener("click", () => $("#repoFileInput").click());
+  dropZone?.addEventListener("dragover", (e) => { e.preventDefault(); dropZone.classList.add("dragover"); });
+  dropZone?.addEventListener("dragleave", () => dropZone.classList.remove("dragover"));
+  dropZone?.addEventListener("drop", (e) => {
+    e.preventDefault();
+    dropZone.classList.remove("dragover");
+    if (e.dataTransfer.files.length > 0) handleRepoFilesUpload(e.dataTransfer.files);
+  });
+
+  // Repo attach popover (adjuntar docs del repo al chat).
+  $("#repoAttachBtn")?.addEventListener("click", toggleRepoAttachPopover);
+  $("#repoAttachClose")?.addEventListener("click", () => { $("#repoAttachPopover").hidden = true; });
+  $("#repoAttachConfirm")?.addEventListener("click", confirmRepoAttach);
+  $("#repoAttachSearch")?.addEventListener("input", (e) => loadRepoAttachList(e.target.value.trim()));
+  // Cerrar popover al click fuera.
+  document.addEventListener("click", (e) => {
+    const popover = $("#repoAttachPopover");
+    const btn = $("#repoAttachBtn");
+    if (popover && !popover.hidden && !popover.contains(e.target) && !btn?.contains(e.target)) {
+      popover.hidden = true;
+    }
+  });
+
+  // Conexiones OAuth.
+  $("#connectGithub")?.addEventListener("click", () => connectOAuth("github"));
+  $("#disconnectGithub")?.addEventListener("click", () => disconnectOAuth("github"));
+  $("#connectDropbox")?.addEventListener("click", () => connectOAuth("dropbox"));
+  $("#disconnectDropbox")?.addEventListener("click", () => disconnectOAuth("dropbox"));
+
+  // Settings saves.
+  $("#saveProfile")?.addEventListener("click", saveProfile);
+  $("#saveMaps")?.addEventListener("click", saveMaps);
+
+  // Settings toggles.
+  $("#themeSelect")?.addEventListener("change", (e) => {
+    document.documentElement.dataset.theme = e.target.value;
+    state.settings.personalization.theme = e.target.value;
+    saveSettings();
+  });
+  $("#readModeToggle")?.addEventListener("change", (e) => {
+    document.body.classList.toggle("read-mode", e.target.checked);
+    state.settings.personalization.readMode = e.target.checked;
+    saveSettings();
+  });
+  $("#animationsToggle")?.addEventListener("change", (e) => {
+    state.settings.personalization.animations = e.target.checked;
+    saveSettings();
+  });
+  $("#persistToggle")?.addEventListener("change", (e) => {
+    state.settings.personalization.persist = e.target.checked;
+    saveSettings();
+  });
+  $("#purgeBtn")?.addEventListener("click", () => {
+    if (confirm("¿Purgar TODOS los datos? Esta acción es irreversible.")) {
+      localStorage.clear();
+      indexedDB.deleteDatabase("veritas_offline");
+      location.reload();
+    }
+  });
+
+  // Optimización de tokens toggles.
+  ["optCompress", "optTruncate", "optCaching", "optSticky", "optChips", "optCounter"].forEach((id) => {
+    $(`#${id}`)?.addEventListener("change", (e) => {
+      const key = id.replace("opt", "").charAt(0).toLowerCase() + id.replace("opt", "").slice(1);
+      state.settings.tokens[key] = e.target.checked;
+      ContextManager.setSettings(state.settings.tokens);
+      saveSettings();
+    });
+  });
+  $("#optRecent")?.addEventListener("input", (e) => {
+    $("#optRecentVal").textContent = e.target.value;
+    state.settings.tokens.recentMessages = Number(e.target.value);
+    ContextManager.setSettings(state.settings.tokens);
+    saveSettings();
+  });
+  $("#optTruncLimit")?.addEventListener("input", (e) => {
+    $("#optTruncVal").textContent = e.target.value;
+    state.settings.tokens.toolTruncationLimitKB = Number(e.target.value);
+    ContextManager.setSettings(state.settings.tokens);
+    saveSettings();
+  });
+
+  // Notificaciones.
+  $("#notifMaster")?.addEventListener("change", async (e) => {
+    if (e.target.checked) {
+      const r = await getNotificationManager().requestPermission();
+      if (r.ok) {
+        state.settings.notifications.enabled = true;
+        toast(t("settings.notifications.granted"), "success");
+      } else if (r.reason === "denied") {
+        toast(t("settings.notifications.denied"), "warning", 5000);
+        e.target.checked = false;
+      } else if (r.reason === "unsupported") {
+        toast(t("settings.notifications.unsupported"), "error");
+        e.target.checked = false;
+      }
+    } else {
+      state.settings.notifications.enabled = false;
+    }
+    getNotificationManager().setSettings(state.settings.notifications);
+    saveSettings();
+  });
+  ["notifModelDone", "notifTurn", "notifNewMsg", "notifToolDone"].forEach((id, idx) => {
+    const eventMap = ["model_response", "shared_turn_acquired", "shared_new_message", "tool_completed"];
+    $(`#${id}`)?.addEventListener("change", (e) => {
+      state.settings.notifications.events[eventMap[idx]] = e.target.checked;
+      getNotificationManager().setSettings(state.settings.notifications);
+      saveSettings();
+    });
+  });
+
+  // Offline.
+  $("#offlineEnable")?.addEventListener("change", (e) => {
+    state.settings.offline.enable = e.target.checked;
+    saveSettings();
+  });
+  $("#offlineSyncNow")?.addEventListener("click", async () => {
+    await getOfflineCacheManager().syncBundle();
+    toast(t("toast.saved"), "success");
+  });
+  $("#offlinePurge")?.addEventListener("click", async () => {
+    if (confirm("¿Purgar cache local?")) {
+      await getOfflineCacheManager().purge();
+      updateOfflineSyncInfo(0, 0);
+    }
+  });
+
+  // Chats.
+  $("#chatsAutoTitle")?.addEventListener("change", (e) => {
+    state.settings.chats.autoTitle = e.target.checked;
+    saveSettings();
+  });
+
+  // Shared session.
+  $("#sharedEnable")?.addEventListener("change", (e) => {
+    state.settings.shared.enable = e.target.checked;
+    saveSettings();
+  });
+  $("#sharedTurnDuration")?.addEventListener("input", (e) => {
+    $("#sharedTurnVal").textContent = e.target.value;
+    state.settings.shared.turnDuration = Number(e.target.value);
+    saveSettings();
+  });
+
+  // Invite.
+  $("#inviteBtn")?.addEventListener("click", () => show($("#inviteModal")));
+  $("#generateShareLink")?.addEventListener("click", generateShareLink);
+  $("#copyShareLink")?.addEventListener("click", copyShareLink);
+  $("#revokeShareLink")?.addEventListener("click", revokeShareLink);
+  $("#sharedLeaveBtn")?.addEventListener("click", () => state.sharedSession?.leave());
+  $("#sharedCloseBtn")?.addEventListener("click", () => state.sharedSession?.closeSession());
+
+  // Detectar URL de join (?token=...).
+  detectSharedJoinFromURL();
+
+  // i18n change event: re-render contenido dinámico.
+  document.addEventListener("veritas:i18n-changed", () => {
+    if (state.currentChat) renderChatHeader();
+    if (state.messages.length === 0) renderEmptyState();
+  });
+
+  // Mobile menu toggle.
+  $("#menuToggle")?.addEventListener("click", () => {
+    $(".app-layout").classList.toggle("mobile-sidebar-open");
+  });
+  $("#sandboxToggle")?.addEventListener("click", () => {
+    $(".app-layout").classList.toggle("mobile-sandbox-open");
+  });
+}
+
+function toggleButton(name) {
+  const btn = $(`#${name}Toggle`);
+  if (!btn) return;
+  const active = btn.classList.toggle("active");
+  btn.setAttribute("aria-pressed", active);
+  state.toggles[name] = active;
+}
+
+function toggleDropdown(sel) {
+  const menu = $(sel);
+  if (!menu) return;
+  menu.hidden = !menu.hidden;
+  // Cerrar otros dropdowns.
+  $$(`.dropdown-menu:not(${sel})`).forEach((m) => m.hidden = true);
+}
+
+// Click fuera de dropdowns los cierra.
+document.addEventListener("click", (e) => {
+  if (!e.target.closest(".dropdown")) {
+    $$(".dropdown-menu").forEach((m) => m.hidden = true);
+  }
+});
+
+// ==============================================================================
+// CHAT LIST (sidebar)
+// ==============================================================================
+async function loadChatList() {
+  const list = $("#chatList");
+  if (!list) return;
+  list.innerHTML = "";
+
+  // P1-4: aplicar filtro de búsqueda activo (solo por título, case-insensitive).
+  const query = (state.chatSearchQuery || "").trim().toLowerCase();
+  const applyFilter = (chats) => {
+    if (!query) return chats;
+    return chats.filter((c) => (c.title || "").toLowerCase().includes(query));
+  };
+
+  let chats = [];
+
+  // En offline, cargar desde cache.
+  if (state.isOffline) {
+    const cached = await getOfflineCacheManager().loadChatsFromCache();
+    chats = cached.filter((c) => c.category === state.currentCategory);
+  } else {
+    try {
+      const resp = await fetch(`/api/chats?category=${state.currentCategory}`);
+      if (resp.ok) {
+        const data = await resp.json();
+        chats = data.chats || [];
+      } else {
+        // Fallback: offline-bundle (trae chats también).
+        const bundle = await fetch("/api/chats/offline-bundle").then((r) => r.json()).catch(() => ({ chats: [] }));
+        chats = (bundle.chats || []).filter((c) => c.category === state.currentCategory);
+      }
+    } catch (e) {
+      toast(`Error cargando chats: ${e.message}`, "error");
+      return;
+    }
+  }
+
+  // P1-4: aplicar filtro por título.
+  const filtered = applyFilter(chats);
+
+  // P1-4: estado vacío si no hay resultados.
+  if (filtered.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "chat-list-empty";
+    empty.textContent = query
+      ? t("chat.searchNoResults", { query })
+      : t("chat.emptyCategory");
+    list.appendChild(empty);
+    return;
+  }
+
+  filtered.forEach((c) => renderChatItem(c));
+}
+
+function renderChatItem(chat) {
+  const list = $("#chatList");
+  const item = document.createElement("div");
+  item.className = "chat-item";
+  if (state.currentChat?.id === chat.id) item.classList.add("active");
+  item.dataset.chatId = chat.id;
+
+  const provider = getProvider(state.currentModel || "");
+  const title = document.createElement("div");
+  title.className = "chat-item-title";
+  title.textContent = chat.title;
+  title.title = chat.title;
+  item.appendChild(title);
+
+  const meta = document.createElement("div");
+  meta.className = "chat-item-meta";
+  const providerChip = document.createElement("span");
+  providerChip.className = "chat-item-provider";
+  // Determinar provider por el último mensaje del chat.
+  providerChip.classList.add(provider === "puter" ? "puter" : "openrouter");
+  providerChip.textContent = provider === "puter" ? "Puter" : "OpenRouter";
+  meta.appendChild(providerChip);
+  if (chat.is_shared) {
+    const shared = document.createElement("span");
+    shared.textContent = "👥";
+    meta.appendChild(shared);
+  }
+  item.appendChild(meta);
+
+  // Actions (rename/delete).
+  const actions = document.createElement("div");
+  actions.className = "chat-item-actions";
+  const renameBtn = document.createElement("button");
+  renameBtn.className = "chat-item-action";
+  renameBtn.textContent = "✎";
+  renameBtn.title = t("toast.renamed");
+  renameBtn.addEventListener("click", (e) => { e.stopPropagation(); startRename(item, chat); });
+  actions.appendChild(renameBtn);
+
+  const deleteBtn = document.createElement("button");
+  deleteBtn.className = "chat-item-action";
+  deleteBtn.textContent = "🗑";
+  deleteBtn.title = "Borrar";
+  deleteBtn.addEventListener("click", (e) => { e.stopPropagation(); deleteChat(chat); });
+  actions.appendChild(deleteBtn);
+  item.appendChild(actions);
+
+  // Click para abrir.
+  item.addEventListener("click", () => openChat(chat));
+
+  // Doble click para renombrar.
+  title.addEventListener("dblclick", (e) => {
+    e.stopPropagation();
+    startRename(item, chat);
+  });
+
+  list.appendChild(item);
+}
+
+async function createNewChat() {
+  const chatId = crypto.randomUUID();
+  const title = t("chat.empty");
+  const category = state.currentCategory;
+  // Persistir el chat en el backend vía POST /api/chats.
+  const chat = {
+    id: chatId,
+    category,
+    title,
+    user_email: state.user_email,
+    is_shared: 0,
+    updated_at: new Date().toISOString(),
+  };
+  if (!state.isOffline) {
+    try {
+      await fetch("/api/chats", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: chatId, title, category }),
+      });
+    } catch (e) { /* best-effort: el chat existe en memoria */ }
+  }
+  state.currentChat = chat;
+  state.messages = [];
+  state.chatSummary = null;
+  state.chatCachedTotal = 0;
+  invalidateMemoryCache();
+
+  // Seleccionar modelo por defecto según categoría.
+  const defaultModels = {
+    agent: "nvidia/nemotron-3-super-120b-a12b:free",
+    coder: "poolside/laguna-m.1:free",
+    general: "cognitivecomputations/dolphin-mistral-24b-venice-edition:free",
+  };
+  state.currentModel = defaultModels[category];
+  state.currentRole = getRoleForModel(state.currentModel);
+
+  populateModelSelector();
+  await loadChatList();
+  openChat(chat);
+  $("#messageInput")?.focus();
+}
+
+async function openChat(chat) {
+  state.currentChat = chat;
+  state.messages = [];
+  state.chatSummary = chat.summary_json ? JSON.parse(chat.summary_json) : null;
+  state.chatCachedTotal = 0;
+
+  // Marcar activo en sidebar.
+  $$(".chat-item").forEach((it) => it.classList.toggle("active", it.dataset.chatId === chat.id));
+
+  // Cargar mensajes.
+  if (state.isOffline) {
+    state.messages = await getOfflineCacheManager().loadMessagesFromCache(chat.id);
+  } else {
+    try {
+      const resp = await fetch(`/api/chat/${chat.id}/messages?full=true`);
+      if (resp.ok) {
+        const data = await resp.json();
+        state.messages = data.messages || [];
+      }
+    } catch (e) {
+      // Fallback a cache.
+      state.messages = await getOfflineCacheManager().loadMessagesFromCache(chat.id);
+    }
+  }
+
+  // Renderizar.
+  renderMessages();
+  renderChatHeader();
+  populateModelSelector();
+  updateTokenCounter();
+  updateInviteButtonVisibility();
+
+  // Si es shared, iniciar SharedSessionManager.
+  if (chat.is_shared) {
+    await startSharedSession();
+  }
+
+  // Auto-sugerir título tras primer intercambio.
+  if (state.settings.chats.autoTitle && state.messages.length === 2) {
+    const firstUser = state.messages.find((m) => m.role === "user");
+    const firstAssistant = state.messages.find((m) => m.role === "assistant");
+    if (firstUser && firstAssistant && state.currentChat.title === t("chat.empty")) {
+      suggestTitle();
+    }
+  }
+}
+
+async function deleteChat(chat) {
+  if (!confirm(`¿Borrar "${chat.title}"?`)) return;
+  try {
+    await fetch(`/api/chat/${chat.id}`, { method: "DELETE" });
+    if (state.currentChat?.id === chat.id) {
+      state.currentChat = null;
+      state.messages = [];
+      renderEmptyState();
+    }
+    await loadChatList();
+    toast("Chat borrado", "success");
+  } catch (e) {
+    toast(`Error: ${e.message}`, "error");
+  }
+}
+
+function startRename(item, chat) {
+  const title = item.querySelector(".chat-item-title");
+  const oldText = chat.title;
+  const input = document.createElement("input");
+  input.type = "text";
+  input.value = oldText;
+  input.maxLength = 100;
+  input.className = "chat-item-title editing";
+  title.replaceWith(input);
+  input.focus();
+  input.select();
+
+  const save = async () => {
+    const newText = input.value.trim();
+    if (!newText || newText === oldText) {
+      input.replaceWith(title);
+      return;
+    }
+    try {
+      const resp = await fetch(`/api/chat/${chat.id}/rename`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: newText }),
+      });
+      if (resp.ok) {
+        chat.title = newText;
+        title.textContent = newText;
+        toast(t("toast.renamed"), "success");
+        if (state.currentChat?.id === chat.id) renderChatHeader();
+      } else {
+        throw new Error(`HTTP ${resp.status}`);
+      }
+    } catch (e) {
+      toast(t("toast.renameFailed"), "warning");
+    }
+    input.replaceWith(title);
+  };
+
+  input.addEventListener("blur", save);
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); input.blur(); }
+    if (e.key === "Escape") { input.value = oldText; input.blur(); }
+  });
+
+  // Ctrl+Z para deshacer auto-rename.
+  if (chat._autoRenamed) {
+    setTimeout(() => {
+      const handler = (ev) => {
+        if (ev.ctrlKey && ev.key === "z") {
+          input.value = oldText;
+          document.removeEventListener("keydown", handler);
+        }
+      };
+      document.addEventListener("keydown", handler);
+      setTimeout(() => document.removeEventListener("keydown", handler), 10000);
+    }, 100);
+  }
+}
+
+async function suggestTitle() {
+  if (!state.currentChat) return;
+  try {
+    const resp = await fetch(`/api/chat/${state.currentChat.id}/suggest-title`, { method: "POST" });
+    if (resp.ok) {
+      const data = await resp.json();
+      if (data.suggested_title) {
+        state.currentChat.title = data.suggested_title;
+        state.currentChat._autoRenamed = true;
+        renderChatHeader();
+        await loadChatList();
+      }
+    }
+  } catch (e) { /* best-effort */ }
+}
+
+// ==============================================================================
+// MODEL SELECTOR
+// ==============================================================================
+function populateModelSelector() {
+  const sel = $("#modelSelector");
+  if (!sel) return;
+  sel.innerHTML = "";
+
+  let models = [];
+
+  if (state.currentCategory === "agent") {
+    // Stack Nemotron: una sola entrada "Agente" (el orquestador decide internamente)
+    models = ["nvidia/nemotron-3-super-120b-a12b:free"];
+  } else if (state.currentCategory === "coder") {
+    models = ["poolside/laguna-m.1:free"];
+  } else {
+    // general: Estratega, Pensador, Fast
+    models = [
+      "cognitivecomputations/dolphin-mistral-24b-venice-edition:free",
+      "nvidia/nemotron-3-super-120b-a12b:free",
+      "z-ai/glm-4.5-flash",
+    ];
+  }
+
+  models.forEach((m) => {
+    const info = getModelDisplayInfo(m);
+    const opt = document.createElement("option");
+    opt.value = m;
+    opt.textContent = `${info.shortName} — ${info.roleName} (${info.provider === "puter" ? "Puter" : "OpenRouter"})`;
+    if (m === state.currentModel) opt.selected = true;
+    sel.appendChild(opt);
+  });
+
+  if (!state.currentModel && models.length > 0) {
+    state.currentModel = models[0];
+    state.currentRole = getRoleForModel(state.currentModel);
+  }
+}
+
+// ==============================================================================
+// CHAT HEADER RENDER
+// ==============================================================================
+function renderChatHeader() {
+  if (!state.currentChat) {
+    $("#chatTitle").textContent = t("chat.empty");
+    $("#modelChip").textContent = "—";
+    hide($("#sharedBanner"));
+    return;
+  }
+  $("#chatTitle").textContent = state.currentChat.title;
+  const modelChip = $("#modelChip");
+  modelChip.textContent = state.currentModel || "—";
+  modelChip.className = `model-chip ${getProvider(state.currentModel)}`;
+
+  // Cached badge.
+  const cachedBadge = $("#chatCachedBadge");
+  if (state.chatCachedTotal > 0 && state.settings.tokens.showChips) {
+    cachedBadge.textContent = `⚡ ${state.chatCachedTotal} cached this chat`;
+    show(cachedBadge);
+  } else {
+    hide(cachedBadge);
+  }
+
+  // Shared banner.
+  if (state.currentChat.is_shared) {
+    show($("#sharedBanner"));
+    if (state.currentChat.user_email === state.user_email) {
+      show($("#sharedCloseBtn"));
+      hide($("#sharedLeaveBtn"));
+    } else {
+      show($("#sharedLeaveBtn"));
+      hide($("#sharedCloseBtn"));
+    }
+  } else {
+    hide($("#sharedBanner"));
+  }
+}
+
+function renderEmptyState() {
+  const container = $("#messagesContainer");
+  if (!container) return;
+  container.innerHTML = `
+    <div class="empty-state">
+      <div class="welcome-orb">⬡</div>
+      <h2 class="welcome-title">${escapeHTML(t("welcome.title"))}</h2>
+      <p class="welcome-subtitle">${escapeHTML(t("welcome.subtitle"))}</p>
+      <div class="welcome-model-cards" id="welcomeModelCards" role="list"></div>
+      <p class="welcome-hint">${escapeHTML(t("welcome.hint"))}</p>
+    </div>
+  `;
+  renderWelcomeModelCards();
+}
+
+// P1-extra: renderiza las tarjetas de modelo según la categoría activa.
+function renderWelcomeModelCards() {
+  const cardsContainer = $("#welcomeModelCards");
+  if (!cardsContainer) return;
+
+  // Determinar modelos a mostrar según categoría.
+  let models = [];
+  if (state.currentCategory === "agent") {
+    // Stack Nemotron: 1 sola tarjeta "Agente (Nemotron Stack)"
+    models = ["nvidia/nemotron-3-super-120b-a12b:free"];
+  } else if (state.currentCategory === "coder") {
+    models = ["poolside/laguna-m.1:free"];
+  } else {
+    // general: Estratega, Pensador, Fast
+    models = [
+      "cognitivecomputations/dolphin-mistral-24b-venice-edition:free",
+      "nvidia/nemotron-3-super-120b-a12b:free",
+      "z-ai/glm-4.5-flash",
+    ];
+  }
+
+  const cardsHtml = models.map((modelId) => {
+    const info = getModelDisplayInfo(modelId);
+    const isActive = modelId === state.currentModel ? " active" : "";
+    return `
+      <div class="welcome-model-card${isActive}" role="listitem" tabindex="0"
+           data-model="${escapeHTML(modelId)}"
+           aria-label="${escapeHTML(info.roleName)} — ${escapeHTML(modelId)}">
+        <div class="welcome-card-icon">${info.icon}</div>
+        <div class="welcome-card-name">${escapeHTML(info.shortName)}</div>
+        <div class="welcome-card-role">${escapeHTML(info.roleName)}</div>
+        <span class="welcome-card-provider ${info.provider}">${info.provider === "puter" ? "Puter" : "OpenRouter"}</span>
+      </div>
+    `;
+  }).join("");
+
+  cardsContainer.innerHTML = cardsHtml;
+
+  // Listeners: click y keyboard (Enter/Space) para accesibilidad.
+  cardsContainer.querySelectorAll(".welcome-model-card").forEach((card) => {
+    const select = () => {
+      const modelId = card.dataset.model;
+      state.currentModel = modelId;
+      state.currentRole = getRoleForModel(modelId);
+      populateModelSelector();
+      updateTokenCounter();
+      // Re-render para marcar la tarjeta activa.
+      cardsContainer.querySelectorAll(".welcome-model-card").forEach((c) => c.classList.remove("active"));
+      card.classList.add("active");
+      // Foco al input para que el usuario empiece a escribir.
+      $("#messageInput")?.focus();
+    };
+    card.addEventListener("click", select);
+    card.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        select();
+      }
+    });
+  });
+}
+
+// P1-extra: helper que devuelve info de display para cada modelo.
+function getModelDisplayInfo(modelId) {
+  const provider = getProvider(modelId) === "puter" ? "puter" : "openrouter";
+  const map = {
+    // Stack Nemotron (Agente)
+    "nvidia/nemotron-3-ultra-550b-a55b:free": {
+      shortName: "Nemotron Ultra",
+      roleName: t("roles.agent"),
+      icon: "🧠",
+      provider,
+    },
+    "nvidia/nemotron-3-super-120b-a12b:free": {
+      shortName: "Nemotron Super",
+      roleName: t("roles.agent"),
+      icon: "⚡️",
+      provider,
+    },
+    "nvidia/nemotron-nano-12b-v2-vl:free": {
+      shortName: "Nano VL",
+      roleName: "Percepción Visual",
+      icon: "👁",
+      provider,
+    },
+    "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free": {
+      shortName: "Nano Omni",
+      roleName: "Percepción Omni",
+      icon: "🎬",
+      provider,
+    },
+    // Roles standalone
+    "poolside/laguna-m.1:free": {
+      shortName: "Laguna",
+      roleName: t("roles.coder"),
+      icon: "⚙",
+      provider,
+    },
+    "cognitivecomputations/dolphin-mistral-24b-venice-edition:free": {
+      shortName: "Dolphin Mistral",
+      roleName: t("roles.estratega"),
+      icon: "🐬",
+      provider,
+    },
+    "z-ai/glm-4.5-flash": {
+      shortName: "GLM-4.5 Flash",
+      roleName: t("roles.fast"),
+      icon: "⚡",
+      provider,
+    },
+  };
+  return map[modelId] || { shortName: modelId, roleName: "", icon: "🤖", provider };
+}
+
+function renderMessages() {
+  const container = $("#messagesContainer");
+  container.innerHTML = "";
+  if (state.messages.length === 0) {
+    renderEmptyState();
+    return;
+  }
+  state.messages.forEach((m) => renderMessage(m));
+  scrollToBottom();
+}
+
+function renderMessage(m) {
+  const container = $("#messagesContainer");
+  const tpl = $("#messageTemplate");
+  const node = tpl.content.cloneNode(true);
+  const msg = node.querySelector(".message");
+  msg.classList.add(m.role);
+
+  const avatar = node.querySelector(".message-avatar");
+  avatar.textContent = (m.role === "user" ? "U" : (m.role === "assistant" ? "V" : "🔧"));
+
+  const author = node.querySelector(".message-author");
+  if (m.role === "user") {
+    author.textContent = m.author_email ? m.author_email.split("@")[0] : "Tú";
+  } else if (m.role === "assistant") {
+    author.textContent = m.model || "Asistente";
+  } else if (m.role === "tool") {
+    author.textContent = "Tool";
+  }
+
+  const time = node.querySelector(".message-time");
+  if (m.created_at) time.textContent = formatDate(m.created_at, getCurrentLang());
+
+  const provider = node.querySelector(".message-provider");
+  if (m.provider) {
+    provider.textContent = m.provider;
+    provider.hidden = false;
+  }
+
+  const body = node.querySelector(".message-body");
+  body.innerHTML = formatMessageContent(m.content || "");
+
+  const thinking = node.querySelector(".message-thinking");
+  if (m.thinking_content) {
+    thinking.textContent = m.thinking_content;
+    thinking.hidden = false;
+  }
+
+  const tools = node.querySelector(".message-tools");
+  if (m.tools_used && Array.isArray(m.tools_used) && m.tools_used.length > 0) {
+    tools.innerHTML = m.tools_used.map((name) => `<span class="tool-chip">🔧 ${name}</span>`).join("");
+    tools.hidden = false;
+  }
+
+  // Cached chip.
+  const cachedChip = node.querySelector(".message-cached-chip");
+  if (m.cached_tokens && m.cached_tokens > 0 && state.settings.tokens.showChips) {
+    cachedChip.textContent = `⚡ ${m.cached_tokens} cached`;
+    cachedChip.hidden = false;
+  }
+
+  container.appendChild(node);
+}
+
+function formatMessageContent(content) {
+  if (!content) return "";
+  // P1-1: Markdown rendering completo (vanilla JS, sin libs externas).
+  // Estrategia: extraer primero los bloques de código fenced (```...```) y
+  // protegerlos de cualquier transformación posterior. Luego procesar el resto
+  // del texto (headers, listas, blockquotes, tablas, inline). Finalmente
+  // reinsertar los bloques de código y los <tool_result>.
+
+  // 1. Extraer tool_results (ya vienen como XML en el contenido; preservar).
+  // Usamos placeholders SIN underscores para evitar colisión con el regex de
+  // cursiva _texto_ en renderInline.
+  const toolResults = [];
+  let s = content.replace(/<tool_result\s+name="([^"]+)"\s+status="([^"]+)">([\s\S]*?)<\/tool_result>/g, (_, name, status, output) => {
+    const idx = toolResults.length;
+    toolResults.push({ name, status, output });
+    return `\x00TR${idx}\x00`;
+  });
+
+  // 2. Extraer code blocks fenced ```lang\n...```.
+  const codeBlocks = [];
+  s = s.replace(/```(\w+)?\n?([\s\S]*?)```/g, (_, lang, code) => {
+    const idx = codeBlocks.length;
+    codeBlocks.push({ lang: lang || "", code: code.replace(/\n$/, "") });
+    return `\x00CB${idx}\x00`;
+  });
+
+  // 3. Escape HTML del resto.
+  s = escapeHTML(s);
+
+  // 4. Bloques especiales: separar por líneas dobles para procesar block-level.
+  //    Tablas GFM: | col1 | col2 |\n|---|---|\n| a | b |
+  const blocks = s.split(/\n\n+/);
+  const processedBlocks = blocks.map((block) => {
+    const trimmed = block.trim();
+    if (!trimmed) return "";
+
+    // Tabla GFM.
+    if (/^\|.*\|\s*\n\|[\s\-:|]+\|/m.test(trimmed)) {
+      return renderTable(trimmed);
+    }
+    // Header (##, ###, etc.).
+    if (/^#{1,6}\s/.test(trimmed)) {
+      return trimmed.replace(/^(#{1,6})\s+(.*)$/m, (_, hashes, text) => {
+        const level = hashes.length;
+        return `<h${level}>${renderInline(text)}</h${level}>`;
+      });
+    }
+    // Blockquote (> ...) — después de escapeHTML, ">" es "&gt;".
+    if (/^[ \t]*&gt;\s?/m.test(trimmed)) {
+      const inner = trimmed.split("\n").map((l) => l.replace(/^[ \t]*&gt;\s?/, "")).join("\n");
+      return `<blockquote>${renderInline(inner).replace(/\n/g, "<br>")}</blockquote>`;
+    }
+    // Lista desordenada (- o *).
+    if (/^[-*]\s+/m.test(trimmed) && !/^---+$/.test(trimmed)) {
+      const items = trimmed.split("\n").filter((l) => /^[-*]\s+/.test(l)).map((l) => {
+        const text = l.replace(/^[-*]\s+/, "");
+        return `<li>${renderInline(text)}</li>`;
+      });
+      return `<ul>${items.join("")}</ul>`;
+    }
+    // Lista ordenada (1. 2. 3.).
+    if (/^\d+\.\s+/m.test(trimmed)) {
+      const items = trimmed.split("\n").filter((l) => /^\d+\.\s+/.test(l)).map((l) => {
+        const text = l.replace(/^\d+\.\s+/, "");
+        return `<li>${renderInline(text)}</li>`;
+      });
+      return `<ol>${items.join("")}</ol>`;
+    }
+    // Horizontal rule (--- o ***).
+    if (/^(---+|\*\*\*+|___+)$/.test(trimmed)) {
+      return "<hr>";
+    }
+    // Párrafo normal.
+    return `<p>${renderInline(trimmed).replace(/\n/g, "<br>")}</p>`;
+  });
+
+  s = processedBlocks.join("\n\n");
+
+  // 5. Reinsertar code blocks.
+  s = s.replace(/\x00CB(\d+)\x00/g, (_, idx) => {
+    const block = codeBlocks[Number(idx)];
+    const langAttr = block.lang ? ` data-lang="${block.lang}"` : "";
+    return `<pre${langAttr}><code>${escapeHTML(block.code)}</code></pre>`;
+  });
+
+  // 6. Reinsertar tool_results como <details>.
+  s = s.replace(/\x00TR(\d+)\x00/g, (_, idx) => {
+    const tr = toolResults[Number(idx)];
+    return `<details class="tool-result"><summary>🔧 ${tr.name} (${tr.status})</summary><pre class="tool-output">${escapeHTML(tr.output)}</pre></details>`;
+  });
+
+  return s;
+}
+
+// ------------------------------------------------------------------------------
+// renderInline: procesa énfasis inline (negrita, cursiva, código, links).
+// Recibe texto YA escapado (post-escapeHTML).
+// ------------------------------------------------------------------------------
+function renderInline(text) {
+  let t = text;
+  // Links [text](url) — solo https/http/mailto para evitar javascript:.
+  t = t.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+|mailto:[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+  // Imágenes ![alt](url) — antes que el regex de links.
+  t = t.replace(/!\[([^\]]*)\]\((https?:\/\/[^\s)]+)\)/g, '<img alt="$1" src="$2" loading="lazy" style="max-width:100%;border-radius:8px;margin:6px 0">');
+  // Negrita **text** o __text__.
+  t = t.replace(/\*\*([^\*]+)\*\*/g, "<strong>$1</strong>");
+  t = t.replace(/__([^_]+)__/g, "<strong>$1</strong>");
+  // Cursiva *text* o _text_ (evitar colisión con negrita: solo si no hay ** adyacente).
+  t = t.replace(/(^|[^\*])\*([^\*\n]+)\*(?!\*)/g, "$1<em>$2</em>");
+  t = t.replace(/(^|[^_])_([^_\n]+)_(?!_)/g, "$1<em>$2</em>");
+  // Strikethrough ~~text~~.
+  t = t.replace(/~~([^~]+)~~/g, "<del>$1</del>");
+  // Inline code `code` (después de negrita/cursiva para no romper).
+  t = t.replace(/`([^`]+)`/g, "<code>$1</code>");
+  return t;
+}
+
+// ------------------------------------------------------------------------------
+// renderTable: renderiza una tabla GFM.
+// Recibe el bloque YA escapado. Formato esperado:
+//   | H1 | H2 |
+//   |----|----|
+//   | a  | b  |
+// ------------------------------------------------------------------------------
+function renderTable(block) {
+  const lines = block.split("\n").filter((l) => l.trim() && l.includes("|"));
+  if (lines.length < 2) return block; // no es tabla válida
+  // Header.
+  const headerCells = splitTableRow(lines[0]);
+  // Separator (línea 2: |---|---|).
+  if (!/^\|[\s\-:|]+$/.test(lines[1].trim())) return block;
+  const aligns = splitTableRow(lines[1]).map((cell) => {
+    const t = cell.trim();
+    if (t.startsWith(":") && t.endsWith(":")) return "center";
+    if (t.endsWith(":")) return "right";
+    return "left";
+  });
+  // Body rows (resto).
+  const bodyRows = lines.slice(2).map((line) => {
+    const cells = splitTableRow(line);
+    return `<tr>${cells.map((c, i) => `<td style="text-align:${aligns[i] || "left"}">${renderInline(c)}</td>`).join("")}</tr>`;
+  }).join("");
+
+  const headerHtml = headerCells.map((c, i) => `<th style="text-align:${aligns[i] || "left"}">${renderInline(c)}</th>`).join("");
+  return `<table><thead><tr>${headerHtml}</tr></thead><tbody>${bodyRows}</tbody></table>`;
+}
+
+function splitTableRow(line) {
+  // Quitar | del inicio y final, split por |.
+  let t = line.trim();
+  if (t.startsWith("|")) t = t.slice(1);
+  if (t.endsWith("|")) t = t.slice(0, -1);
+  return t.split("|").map((c) => c.trim());
+}
+
+function escapeHTML(s) {
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
+function scrollToBottom() {
+  const c = $("#messagesContainer");
+  if (c) c.scrollTop = c.scrollHeight;
+}
+
+function isUserTyping() {
+  const input = $("#messageInput");
+  return input && input === document.activeElement && input.value.length > 0;
+}
+
+// ==============================================================================
+// ENVIAR MENSAJE + CHAT CON MODELO
+// ==============================================================================
+async function sendMessage() {
+  if (!state.currentChat) await createNewChat();
+  const input = $("#messageInput");
+  const content = input.value.trim();
+  if (!content) return;
+
+  // Si es sesión compartida, adquirir turno primero.
+  if (state.sharedSession && state.currentChat.is_shared) {
+    const turn = await state.sharedSession.acquireTurn();
+    if (!turn.acquired) {
+      toast(t("shared.turnHeldBy", { user: turn.held_by, time: formatCountdown(turn.expires_at) }), "warning");
+      return;
+    }
+  }
+
+  // Manejo de attachments pendientes.
+  let enrichedContent = content;
+  let attachmentsMeta = undefined;
+  if (state.pendingAttachments.length > 0) {
+    attachmentsMeta = [...state.pendingAttachments];
+
+    if (state.currentRole === "agent") {
+      // El agente pasa los attachments a runAgentLoop que los percibe
+      // directamente vía /api/chat/perceive. NO inyectar texto en el mensaje.
+      // Los chips se limpian tras la percepción (dentro de runAgentLoop).
+    } else {
+      // Roles no-agente: inyectar instrucciones de analyze_media como texto.
+      const attachmentLines = state.pendingAttachments.map((a) =>
+        `[Archivo adjunto: ${a.name} (${a.modality}, ${formatBytes(a.size)}) — R2 key: ${a.r2_key} — Usa la herramienta analyze_media con target="${a.r2_key}" y modality="${a.modality}" para analizar este archivo.]`
+      ).join("\n");
+      enrichedContent = content + "\n\n" + attachmentLines;
+      // Limpiar chips de attachment para roles no-agente.
+      state.pendingAttachments = [];
+      renderAttachmentChips();
+    }
+  }
+
+  // Manejo de documentos del repo adjuntados como contexto.
+  if (state.repoDocAttachments.length > 0) {
+    const repoDocLines = [];
+    repoDocLines.push("[Documentos del repositorio adjuntados como contexto:]");
+    for (const doc of state.repoDocAttachments) {
+      repoDocLines.push(`--- Documento #${doc.doc_number}: ${doc.doc_name} (${formatBytes(doc.file_size)}) ---`);
+      // Intentar obtener el texto del documento.
+      const docData = await fetchRepoDocContent(doc.doc_number);
+      if (docData && docData.text) {
+        // Truncar a ~15K chars para no saturar el contexto.
+        const maxLen = 15000;
+        const docText = docData.text.length > maxLen
+          ? docData.text.slice(0, maxLen) + "\n... [truncado, " + docData.text.length + " chars total]"
+          : docData.text;
+        repoDocLines.push(docText);
+      } else {
+        repoDocLines.push("(No se pudo cargar el contenido del documento)");
+      }
+    }
+    enrichedContent = content + "\n\n" + repoDocLines.join("\n");
+    // Limpiar chips de docs del repo.
+    state.repoDocAttachments = [];
+    renderRepoDocChips();
+  }
+
+  // Guardar mensaje user (con contenido enriquecido si hubo attachments).
+  const userMsg = {
+    id: crypto.randomUUID(),
+    chat_id: state.currentChat.id,
+    role: "user",
+    content: enrichedContent,
+    author_email: state.user_email,
+    created_at: new Date().toISOString(),
+    attachments: attachmentsMeta,
+  };
+  state.messages.push(userMsg);
+  renderMessage(userMsg);
+  scrollToBottom();
+  input.value = "";
+  autoResize(input);
+
+  // Persistir en D1 (best-effort; encolar si offline).
+  if (state.isOffline) {
+    await getOfflineCacheManager().queuePendingMessage({
+      chat_id: state.currentChat.id,
+      content,
+      role: "user",
+    });
+  } else {
+    fetch("/api/db/message", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(userMsg),
+    }).catch(() => {});
+  }
+
+  // Tool Caller loop (pasar contenido enriquecido con attachments).
+  await runChatWithTools(enrichedContent);
+
+  // Limpiar attachments pendientes tras el loop (el agente los usa vía runAgentLoop).
+  if (state.pendingAttachments.length > 0) {
+    state.pendingAttachments = [];
+    renderAttachmentChips();
+  }
+  // Limpiar docs del repo (ya inyectados antes del loop).
+  if (state.repoDocAttachments.length > 0) {
+    state.repoDocAttachments = [];
+    renderRepoDocChips();
+  }
+
+  // Liberar turno.
+  if (state.sharedSession) {
+    await state.sharedSession.releaseTurn();
+  }
+}
+
+// ==============================================================================
+// FALLBACK ÉTICO A DOLPHIN
+// ==============================================================================
+// Cuando un modelo con restricciones de fabricante (Nemotron, Laguna) emite
+// <fallback_to_dolphin>, se re-enruta la query a Dolphin (0 censura) vía Puter.
+// ==============================================================================
+const DOLPHIN_MODEL = "cognitivecomputations/dolphin-mistral-24b-venice-edition:free";
+
+/**
+ * Llama a Dolphin directamente con la query original del usuario.
+ * Usa Puter.js (no pasa por el Worker) con el system prompt de Dolphin.
+ * Streaming: muestra progreso en tiempo real.
+ */
+async function callDolphinForFallback(originalQuery, prefixText) {
+  if (typeof puter === "undefined" || !puter.ai?.chat) {
+    throw new Error("Puter.js no disponible para fallback a Dolphin");
+  }
+
+  const dolphinPrompt = SYSTEM_PROMPTS.dolphin;
+  const messages = [
+    { role: "system", content: dolphinPrompt },
+    { role: "user", content: originalQuery },
+  ];
+
+  toast(t("toast.dolphinFallback") || "Enrutando a Dolphin (sin restricciones de fabricante)...", "info", 4000);
+  showStreamingIndicator(t("stream.processing"));
+
+  let text = "";
+  try {
+    const response = await puter.ai.chat(messages, {
+      model: DOLPHIN_MODEL,
+      stream: true,
+    });
+
+    for await (const chunk of response) {
+      const delta = chunk?.message?.content || chunk?.text || "";
+      if (delta) {
+        text += delta;
+        // Mostrar Dolphin's response con prefijo si lo hay.
+        updateStreamingMessage((prefixText || "") + text);
+      }
+    }
+  } finally {
+    hideStreamingIndicator();
+  }
+
+  // Separar razonamiento_interno si lo hubiera.
+  const thinkMatch = text.match(/<razonamiento_interno>([\s\S]*?)<\/razonamiento_interno>/);
+  if (thinkMatch) {
+    text = text.replace(/<razonamiento_interno>[\s\S]*?<\/razonamiento_interno>/, "").trim();
+  }
+
+  return {
+    text,
+    model: DOLPHIN_MODEL,
+    tokens_in: 0,
+    tokens_out: 0,
+    cached_tokens: 0,
+  };
+}
+
+// ==============================================================================
+// TOOL CALLER LOOP (máx 5 iteraciones)
+// ==============================================================================
+async function runChatWithTools(userContent) {
+  const maxIter = state.settings.tokens.maxToolIterations || 5;
+  let iteration = 0;
+  let assistantText = "";
+  setEntityState("processing");
+  showStreamingIndicator(t("stream.processing"));
+  setStreamingMode(true); // P0-4: mostrar Stop, ocultar Send
+
+  while (iteration < maxIter) {
+    iteration++;
+    try {
+      const response = await callModel(userContent, assistantText, iteration > 1);
+
+      // P0-4: si el streaming fue abortado por el usuario, guardar partial y salir.
+      if (response.aborted) {
+        if (response.text && response.text.trim()) {
+          assistantText += response.text;
+          // Persistir el mensaje partial como assistant.
+          const partialModel = response.model || state.currentModel;
+          const partialMsg = {
+            id: crypto.randomUUID(),
+            chat_id: state.currentChat.id,
+            role: "assistant",
+            content: response.text + "\n\n*[Generación detenida por el usuario]*",
+            model: partialModel,
+            provider: getProvider(partialModel),
+            author_email: state.user_email,
+            tokens_in: response.tokens_in || 0,
+            tokens_out: response.tokens_out || 0,
+            cached_tokens: response.cached_tokens || 0,
+            created_at: new Date().toISOString(),
+          };
+          state.messages.push(partialMsg);
+          // best-effort persist
+          fetch("/api/db/message", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(partialMsg),
+          }).catch(() => {});
+        }
+        toast(t("stream.stopped"), "info");
+        break;
+      }
+
+      // ── Fallback ético: <fallback_to_dolphin> ──
+      const dolphinFallback = parseFallbackToDolphin(response.text);
+      if (dolphinFallback) {
+        console.log("[chat] Fallback ético detectado:", dolphinFallback.reason);
+        const strippedText = stripFallbackToDolphin(response.text);
+        const prefix = strippedText ? strippedText + "\n\n--- *Fallback a Dolphin* ---\n\n" : "";
+        // Re-enrutar a Dolphin (0 censura) con la query original.
+        try {
+          const dolphinResp = await callDolphinForFallback(dolphinFallback.original_query || userContent, prefix);
+          response.text = dolphinResp.text;
+          response.model = dolphinResp.model;
+          response.tokens_in = dolphinResp.tokens_in;
+          response.tokens_out = dolphinResp.tokens_out;
+          response.cached_tokens = 0;
+          assistantText += prefix + response.text;
+        } catch (dolphinErr) {
+          console.warn("[chat] Fallback a Dolphin falló:", dolphinErr.message);
+          if (strippedText) {
+            assistantText += strippedText + "\n\n";
+          }
+          assistantText += `[Error: el modelo primario rechazó la query y el fallback a Dolphin falló: ${dolphinErr.message}]`;
+        }
+        break; // Terminar el loop — Dolphin ya respondió.
+      }
+
+      assistantText += response.text;
+
+      // Parsear tool calls embebidos.
+      const toolCalls = parseToolCallXML(response.text);
+      if (toolCalls.length === 0) {
+        // No hay más tools; terminar.
+        break;
+      }
+
+      // Renderizar texto previo al primer tool_call (ya está en response.text).
+      // Guardar mensaje assistant con tools_used.
+      // Usar response.model si viene del orchestrate (modelo real), si no state.currentModel.
+      const resolvedModel = response.model || state.currentModel;
+      const assistantMsg = {
+        id: crypto.randomUUID(),
+        chat_id: state.currentChat.id,
+        role: "assistant",
+        content: response.text,
+        model: resolvedModel,
+        provider: getProvider(resolvedModel),
+        tools_used: toolCalls.map((c) => c.name),
+        author_email: state.user_email,
+        tokens_in: response.tokens_in,
+        tokens_out: response.tokens_out,
+        cached_tokens: response.cached_tokens,
+        created_at: new Date().toISOString(),
+      };
+      state.messages.push(assistantMsg);
+      renderMessage(assistantMsg);
+      scrollToBottom();
+
+      // Ejecutar tools.
+      for (const call of toolCalls) {
+        if (!isAllowed(call.name, state.currentRole)) {
+          const resultMsg = {
+            id: crypto.randomUUID(),
+            chat_id: state.currentChat.id,
+            role: "tool",
+            content: buildToolResultXML(call.name, "forbidden", t("tool.forbidden")),
+            created_at: new Date().toISOString(),
+          };
+          state.messages.push(resultMsg);
+          renderMessage(resultMsg);
+          continue;
+        }
+        await executeToolCall(call);
+      }
+
+      // Si el modelo emitió <file path="...">, actualizar sandbox.
+      parseFileBlocks(response.text);
+
+      // Siguiente iteración: el modelo verá los tool_results.
+    } catch (e) {
+      console.error("[chat] Error en iteración", iteration, e);
+      setStreamingMode(false); // P0-4: restaurar Send en caso de error
+      // Si es rate_limited, intentar fallback.
+      if (e.error === "all_keys_rate_limited" || e.error === "upstream_error" || e.error === "agent_stack_exhausted") {
+        await tryFallback(e);
+      } else {
+        toast(t("toast.error", { message: e.message }), "error");
+      }
+      break;
+    }
+  }
+
+  if (iteration >= maxIter) {
+    assistantText += `\n\n[${t("tool.iterLimit")}]`;
+  }
+
+  hideStreamingIndicator();
+  setEntityState("active");
+  setStreamingMode(false); // P0-4: restaurar Send, ocultar Stop
+
+  // Notificación si la pestaña está oculta.
+  window.dispatchEvent(new CustomEvent("shared:event", {
+    detail: {
+      type: "model_response",
+      payload: {
+        model: state.currentModel,
+        chatTitle: state.currentChat.title,
+        chatId: state.currentChat.id,
+      },
+    },
+  }));
+
+  // Auto-sugerir título si es primer intercambio.
+  if (state.settings.chats.autoTitle && state.messages.length === 2) {
+    suggestTitle();
+  }
+
+  // Actualizar cached badge.
+  if (state.chatCachedTotal > 0 && state.settings.tokens.showChips) {
+    show($("#chatCachedBadge"));
+    $("#chatCachedBadge").textContent = `⚡ ${state.chatCachedTotal} cached this chat`;
+  }
+
+  // v2.3: Fire-and-forget — extraer memorias de la respuesta final.
+  // Solo si hay texto de asistente suficiente y Puter está disponible.
+  if (assistantText && assistantText.length > 100) {
+    extractAndSaveMemories(assistantText).catch(() => {});
+  }
+}
+
+// ==============================================================================
+// CROSS-CHAT MEMORY (v2.3, Gap 2 del audit)
+// ==============================================================================
+// Carga memorias del usuario desde /api/memories y las inyecta como bloque
+// system en el contexto. También extrae memorias nuevas de las respuestas.
+// ==============================================================================
+
+/**
+ * Carga memorias del usuario (excluyendo las del chat actual) y las formatea
+ * como un bloque system inyectable. Fire-and-forget: nunca bloquea el flujo.
+ * @returns {Promise<string>} texto formateado o string vacío si no hay memorias.
+ */
+async function loadCrossChatMemories() {
+  try {
+    const excludeParam = state.currentChat?.id ? `&exclude_chat=${state.currentChat.id}` : "";
+    const resp = await fetch(`/api/memories?limit=30&${excludeParam}`);
+    if (!resp.ok) return "";
+    const data = await resp.json();
+    const memories = data.memories || [];
+    if (memories.length === 0) return "";
+
+    // Agrupar por categoría para presentación compacta.
+    const grouped = {};
+    for (const m of memories) {
+      if (!grouped[m.category]) grouped[m.category] = [];
+      grouped[m.category].push(m);
+    }
+
+    let text = "Información recordada sobre el usuario (de conversaciones anteriores):\n";
+    const labels = { personal: "Datos personales", tech: "Contexto técnico", preference: "Preferencias", fact: "Hechos relevantes" };
+    for (const [cat, items] of Object.entries(grouped)) {
+      text += `\n[${labels[cat] || cat}]\n`;
+      for (const item of items) {
+        text += `- ${item.content}\n`;
+      }
+    }
+
+    // Disparar touch para actualizar LRU (fire-and-forget).
+    const ids = memories.map((m) => m.id);
+    if (ids.length > 0) {
+      fetch("/api/memories/touch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids }),
+      }).catch(() => {});
+    }
+
+    return text;
+  } catch (e) {
+    console.warn("[memory] Error cargando memorias cross-chat:", e);
+    return "";
+  }
+}
+
+/**
+ * Extrae posibles memorias de la última respuesta del asistente y las guarda.
+ * Usa Puter/GLM-Flash (gratis) para identificar datos dignos de recordar.
+ * Fire-and-forget: nunca bloquea el flujo principal.
+ */
+async function extractAndSaveMemories(lastAssistantText) {
+  try {
+    if (!lastAssistantText || lastAssistantText.length < 50) return;
+    if (typeof puter === "undefined" || !puter.ai || !puter.ai.chat) return;
+
+    const prompt = `Analiza este mensaje de un asistente de IA. Identifica si hay datos personales, preferencias, o información contextual del usuario que valga la pena recordar para conversaciones futuras.
+
+Importante:
+- Solo extrae hechos concretos y relevantes (nombre, rol, preferencias técnicas, datos de proyectos, etc.).
+- NO extraigas información genérica o transaccional.
+- Si no hay nada digno de recordar, responde exactamente: []
+
+Mensaje del asistente:
+${lastAssistantText.slice(-3000)}
+
+Responde SOLO un JSON array de objetos con formato: [{"content": "...", "category": "personal|tech|preference|fact", "importance": 1-5}]
+No incluyas nada más que el JSON array.`;
+
+    const response = await puter.ai.chat(prompt, {
+      model: "z-ai/glm-4.5-flash",
+      stream: false,
+    });
+    const text = (response?.message?.content || response?.text || "").trim();
+    if (!text || text === "[]" || !text.startsWith("[")) return;
+
+    let memories;
+    try { memories = JSON.parse(text); } catch { return; }
+    if (!Array.isArray(memories) || memories.length === 0) return;
+
+    // Limitar a 5 memorias por respuesta para evitar spam.
+    const batch = memories.slice(0, 5).map((m) => ({
+      content: String(m.content || "").slice(0, 2000),
+      category: ["personal", "tech", "preference", "fact"].includes(m.category) ? m.category : "fact",
+      importance: Math.max(1, Math.min(5, parseInt(m.importance) || 3)),
+    })).filter((m) => m.content.length >= 10);
+
+    if (batch.length === 0) return;
+
+    await fetch("/api/memories/batch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        memories: batch,
+        source_chat_id: state.currentChat?.id || null,
+      }),
+    });
+    console.log(`[memory] ${batch.length} memorias extraídas y guardadas`);
+  } catch (e) {
+    console.warn("[memory] Error extrayendo memorias:", e);
+  }
+}
+
+// Cache en memoria de las últimas memorias cargadas (evita fetch en cada iteración).
+let _cachedMemoriesText = "";
+let _cachedMemoriesChatId = null;
+let _cachedMemoriesTs = 0;
+const MEMORIES_CACHE_TTL = 60_000; // 1 minuto de caché.
+
+/**
+ * Devuelve las memorias cross-chat formateadas, con caché por chat.
+ */
+async function getMemoryContextText() {
+  const chatId = state.currentChat?.id;
+  const now = Date.now();
+  if (_cachedMemoriesChatId === chatId && now - _cachedMemoriesTs < MEMORIES_CACHE_TTL) {
+    return _cachedMemoriesText;
+  }
+  _cachedMemoriesText = await loadCrossChatMemories();
+  _cachedMemoriesChatId = chatId;
+  _cachedMemoriesTs = now;
+  return _cachedMemoriesText;
+}
+
+/**
+ * Invalida el caché de memorias (ej: al cambiar de chat).
+ */
+function invalidateMemoryCache() {
+  _cachedMemoriesText = "";
+  _cachedMemoriesChatId = null;
+  _cachedMemoriesTs = 0;
+}
+
+async function callModel(userContent, previousAssistantText, isFollowUp) {
+  // ── Ruta Agente: orquestar vía agentOrchestrator.js ──
+  // runAgentLoop maneja: deepThinking → Ultra, trigger phrases, attachments,
+  // escalamiento dinámico <escalate_to_ultra>, fallback entre modelos.
+  if (state.currentRole === "agent") {
+    // Cargar memorias cross-chat y skills.
+    const memoryText = await getMemoryContextText();
+    const skillMode = getSkillMode(state.currentRole); // "auto" para agente
+    const skillsBlock = skillMode
+      ? await buildSkillsPromptBlock(state.settings, state.currentRole, skillMode)
+      : "";
+
+    // Construir contexto SIN system prompt — el Worker lo inyecta.
+    // Skills y memorias se pasan como campos separados al Worker,
+    // NO como mensajes system (antes se filtraban y se perdían).
+    const currentUserMsg = { role: "user", content: userContent };
+    const { context } = ContextManager.buildContext({
+      messages: state.messages,
+      currentModelId: state.currentModel,
+      currentUserMsg: isFollowUp ? null : currentUserMsg,
+      summary: state.chatSummary,
+      systemPrompt: null,
+    });
+    const finalContext = ContextManager.truncateToolResults(context);
+
+    // Crear AbortController para el loop del agente.
+    state.abortController = new AbortController();
+    setEntityState("processing");
+    showStreamingIndicator(t("stream.processing"));
+
+    let result;
+    try {
+      result = await runAgentLoop(finalContext, state.pendingAttachments, {
+        signal: state.abortController.signal,
+        chatId: state.currentChat.id,
+        toggles: state.toggles,
+        // Pasar skills y memorias para que el Worker los appendee al system prompt.
+        skillsBlock: skillsBlock || null,
+        memoryBlock: memoryText || null,
+        onDelta: (text) => {
+          hideStreamingIndicator();
+          updateStreamingMessage(text);
+        },
+        onThinking: (thinkingContent) => {
+          showStreamingIndicator(t("stream.thinking"));
+        },
+      });
+
+      // Actualizar cached total.
+      if (result.cached_tokens > 0) state.chatCachedTotal += result.cached_tokens;
+
+      // Mostrar banner de transparencia si hubo fallback.
+      if (result.fallback_used) {
+        const info = getModelDisplayInfo(result.fallback_used);
+        toast(t("model.changed", { model: `${info.icon} ${info.shortName}`, old: "" }), "info", 4000);
+      }
+
+      // Retornar en el mismo formato que callPuter/callOpenRouter.
+      return {
+        text: result.text,
+        thinking_content: result.thinking_content,
+        tokens_in: result.tokens_in,
+        tokens_out: result.tokens_out,
+        cached_tokens: result.cached_tokens,
+        aborted: result.aborted,
+        model: result.model_used,
+      };
+    } finally {
+      state.abortController = null;
+    }
+  }
+
+  // ── Ruta normal (coder, general): Puter u OpenRouter directo ──
+  const provider = getProvider(state.currentModel);
+
+  // Cargar memorias cross-chat para inyectar en contexto.
+  const memoryText = await getMemoryContextText();
+  const memorySystemMsg = memoryText
+    ? [{ role: "system", content: memoryText }]
+    : [];
+
+  // Construir contexto con ContextManager.
+  // Skills se inyectan vía getSystemPrompt() (async), NO como mensaje separado.
+  // Esto elimina la duplicación previa donde skills aparecían twice.
+  const currentUserMsg = { role: "user", content: userContent };
+  const { context } = ContextManager.buildContext({
+    messages: [...memorySystemMsg, ...state.messages],
+    currentModelId: state.currentModel,
+    currentUserMsg: isFollowUp ? null : currentUserMsg,
+    summary: state.chatSummary,
+    systemPrompt: await getSystemPrompt(),
+  });
+
+  // Aplicar truncado de tool results.
+  const finalContext = ContextManager.truncateToolResults(context);
+
+  if (provider === "puter") {
+    return await callPuter(finalContext);
+  } else {
+    return await callOpenRouter(finalContext);
+  }
+}
+
+async function callPuter(messages) {
+  if (typeof puter === "undefined") throw new Error("Puter.js no cargado");
+  setEntityState("processing");
+  showStreamingIndicator(t("stream.processing"));
+
+  // P0-4: AbortController para cancelar streaming. Puter.js no soporta signal
+  // nativo, así que verificamos signal.aborted dentro del loop y rompemos.
+  state.abortController = new AbortController();
+  const signal = state.abortController.signal;
+
+  let text = "";
+  let thinkingContent = "";
+
+  try {
+    const response = await puter.ai.chat(messages, {
+      model: state.currentModel,
+      stream: true,
+    });
+
+    let firstToken = true;
+    for await (const chunk of response) {
+      if (signal.aborted) break; // P0-4: abort limpio del loop
+      if (firstToken) {
+        firstToken = false;
+        hideStreamingIndicator();
+      }
+      const delta = chunk?.message?.content || chunk?.text || "";
+      if (delta) {
+        // Detectar <razonamiento_interno>.
+        if (delta.includes("<razonamiento_interno>")) {
+          setEntityState("processing");
+          showStreamingIndicator(t("stream.thinking"));
+        }
+        text += delta;
+        // Renderizar streaming en el último mensaje assistant.
+        updateStreamingMessage(text);
+      }
+    }
+
+    // P0-4: si fue abortado, devolver lo acumulado hasta el momento.
+    if (signal.aborted) {
+      return { text, thinking_content: thinkingContent, tokens_in: 0, tokens_out: 0, cached_tokens: 0, aborted: true };
+    }
+
+    // Separar razonamiento_interno del texto final.
+    const thinkMatch = text.match(/<razonamiento_interno>([\s\S]*?)<\/razonamiento_interno>/);
+    if (thinkMatch) {
+      thinkingContent = thinkMatch[1].trim();
+      text = text.replace(/<razonamiento_interno>[\s\S]*?<\/razonamiento_interno>/, "").trim();
+    }
+
+    return { text, thinking_content: thinkingContent, tokens_in: 0, tokens_out: 0, cached_tokens: 0 };
+  } catch (e) {
+    // P0-4: si fue abortado durante el await inicial, devolver partial.
+    if (signal.aborted) {
+      return { text, thinking_content: thinkingContent, tokens_in: 0, tokens_out: 0, cached_tokens: 0, aborted: true };
+    }
+    throw { error: "upstream_error", message: e.message };
+  } finally {
+    state.abortController = null;
+  }
+}
+
+async function callOpenRouter(messages) {
+  setEntityState("processing");
+  showStreamingIndicator(t("stream.processing"));
+
+  // P0-4: AbortController para cancelar el fetch + reader.
+  state.abortController = new AbortController();
+  const signal = state.abortController.signal;
+
+  let text = "";
+  let thinkingContent = "";
+  let tokens_in = 0, tokens_out = 0, cached_tokens = 0;
+
+  try {
+    const body = {
+      model: state.currentModel,
+      messages,
+      stream: true,
+      chat_id: state.currentChat.id,
+      is_shared: state.currentChat.is_shared,
+      settings: state.settings.tokens,
+    };
+    if (state.toggles.thinking && state.currentModel.includes("nemotron")) {
+      body.reasoning = { effort: "high" };
+    }
+
+    const resp = await fetch("/api/chat/openrouter", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-veritas-role": state.currentRole },
+      body: JSON.stringify(body),
+      signal, // P0-4: abort del fetch inicial
+    });
+
+    if (signal.aborted) {
+      return { text, thinking_content: thinkingContent, tokens_in, tokens_out, cached_tokens, aborted: true };
+    }
+
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      throw { error: err.error || "upstream_error", message: err.message || `HTTP ${resp.status}`, retry_after_ms: err.retry_after_ms };
+    }
+
+    // Parsear SSE.
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let firstToken = true;
+
+    while (true) {
+      // P0-4: check abort antes de cada read.
+      if (signal.aborted) {
+        try { await reader.cancel(); } catch { /* best-effort */ }
+        break;
+      }
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) continue;
+        const data = line.slice(6).trim();
+        if (data === "[DONE]") continue;
+        try {
+          const json = JSON.parse(data);
+          const delta = json.choices?.[0]?.delta;
+          if (delta?.content) {
+            if (firstToken) { firstToken = false; hideStreamingIndicator(); }
+            text += delta.content;
+            updateStreamingMessage(text);
+          }
+          if (delta?.reasoning) {
+            thinkingContent += delta.reasoning;
+            showStreamingIndicator(t("stream.thinking"));
+          }
+          if (json.usage) {
+            tokens_in = json.usage.prompt_tokens || 0;
+            tokens_out = json.usage.completion_tokens || 0;
+            cached_tokens = json.usage.prompt_tokens_details?.cached_tokens || 0;
+          }
+        } catch (e) { /* skip malformed */ }
+      }
+    }
+
+    // P0-4: si fue abortado, devolver partial sin lanzar error.
+    if (signal.aborted) {
+      return { text, thinking_content: thinkingContent, tokens_in, tokens_out, cached_tokens, aborted: true };
+    }
+
+    // Separar razonamiento embebido.
+    const thinkMatch = text.match(/<razonamiento_interno>([\s\S]*?)<\/razonamiento_interno>/);
+    if (thinkMatch) {
+      if (!thinkingContent) thinkingContent = thinkMatch[1].trim();
+      text = text.replace(/<razonamiento_interno>[\s\S]*?<\/razonamiento_interno>/, "").trim();
+    }
+
+    // Actualizar cached total.
+    if (cached_tokens > 0) state.chatCachedTotal += cached_tokens;
+
+    return { text, thinking_content: thinkingContent, tokens_in, tokens_out, cached_tokens };
+  } catch (e) {
+    // P0-4: AbortError se lanza cuando el fetch se cancela. Devolver partial.
+    if (signal.aborted || e?.name === "AbortError") {
+      return { text, thinking_content: thinkingContent, tokens_in, tokens_out, cached_tokens, aborted: true };
+    }
+    throw e;
+  } finally {
+    state.abortController = null;
+  }
+}
+
+function showStreamingIndicator(text) {
+  const ind = $("#streamingIndicator");
+  if (!ind) return;
+  show(ind);
+  $("#streamingText").textContent = text;
+}
+
+function hideStreamingIndicator() {
+  hide($("#streamingIndicator"));
+}
+
+let _streamingMsgEl = null;
+function updateStreamingMessage(text) {
+  if (!_streamingMsgEl) {
+    const container = $("#messagesContainer");
+    const tpl = $("#messageTemplate");
+    const node = tpl.content.cloneNode(true);
+    _streamingMsgEl = node.querySelector(".message");
+    _streamingMsgEl.classList.add("assistant", "streaming");
+    _streamingMsgEl.querySelector(".message-avatar").textContent = "V";
+    const info = getModelDisplayInfo(state.currentModel);
+    _streamingMsgEl.querySelector(".message-author").textContent =
+      (info.shortName && info.shortName !== state.currentModel)
+        ? `${info.icon} ${info.shortName}`
+        : state.currentModel;
+    container.appendChild(_streamingMsgEl);
+    scrollToBottom();
+  }
+  _streamingMsgEl.querySelector(".message-body").innerHTML = formatMessageContent(text);
+  scrollToBottom();
+}
+
+function clearStreamingMessage() {
+  _streamingMsgEl = null;
+}
+
+// ==============================================================================
+// TOOL EXECUTION
+// ==============================================================================
+async function executeToolCall(call) {
+  // Mostrar chip "Ejecutando: <tool>".
+  const toolMsg = {
+    id: crypto.randomUUID(),
+    chat_id: state.currentChat.id,
+    role: "tool",
+    content: `<div class="tool-executing">🔧 ${t("tool.executing", { tool: call.name })}</div>`,
+    created_at: new Date().toISOString(),
+  };
+  state.messages.push(toolMsg);
+  renderMessage(toolMsg);
+  scrollToBottom();
+
+  const startTs = Date.now();
+  try {
+    const resp = await fetch("/api/tool/invoke", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-veritas-role": state.currentRole },
+      body: JSON.stringify({ tool: call.name, args: call.args, chat_id: state.currentChat.id }),
+    });
+    const data = await resp.json();
+    const latency = Date.now() - startTs;
+
+    // Reemplazar el chip por el resultado real.
+    toolMsg.content = buildToolResultXML(call.name, data.status, data.output);
+    renderMessages(); // re-render para actualizar el tool result.
+
+    // Detectar marcadores especiales en el output.
+    if (data.output && data.output.includes("[[VERITAS_PREVIEW_HTML:")) {
+      const match = data.output.match(/\[\[VERITAS_PREVIEW_HTML:([^\]]+)\]\]/);
+      if (match) loadPreviewFromR2(match[1]);
+    }
+    if (data.output && data.output.includes("[[VERITAS_LOAD_TEMPLATE:")) {
+      const match = data.output.match(/\[\[VERITAS_LOAD_TEMPLATE:([^:]+):([^\]]+)\]\]/);
+      if (match) {
+        const [, name, paramsJson] = match;
+        try {
+          const params = JSON.parse(paramsJson);
+          loadTemplate(name, params);
+        } catch (e) { /* skip */ }
+      }
+    }
+
+    // Notificación si tardó >10s y pestaña oculta.
+    if (latency > 10000) {
+      window.dispatchEvent(new CustomEvent("shared:event", {
+        detail: { type: "tool_completed", payload: { tool: call.name, latency_ms: latency } },
+      }));
+    }
+  } catch (e) {
+    toolMsg.content = buildToolResultXML(call.name, "error", e.message);
+    renderMessages();
+  }
+}
+
+// ==============================================================================
+// FALLBACK
+// ==============================================================================
+async function tryFallback(error) {
+  const next = getNextFallback(state.currentRole, state.currentModel);
+  if (!next || isFallbackExhausted(state.currentRole, state.currentModel)) {
+    toast(t("model.fallbackExhausted"), "error");
+    return;
+  }
+
+  if (state.settings.fallbackMode === "automatic") {
+    state.currentModel = next;
+    state.currentRole = getRoleForModel(next);
+    populateModelSelector();
+    renderChatHeader();
+    toast(t("model.changed", { model: next, old: state.currentModel }), "info");
+    // Reintentar.
+    await runChatWithTools(state.messages[state.messages.length - 1].content);
+  } else {
+    // Manual: pedir confirmación.
+    const ok = confirm(t("model.unavailable", { model: state.currentModel, fallback: next }));
+    if (ok) {
+      state.currentModel = next;
+      state.currentRole = getRoleForModel(next);
+      populateModelSelector();
+      renderChatHeader();
+      await runChatWithTools(state.messages[state.messages.length - 1].content);
+    }
+  }
+}
+
+// ==============================================================================
+// SANDBOX
+// ==============================================================================
+function parseFileBlocks(text) {
+  const regex = /<file path="([^"]+)">([\s\S]*?)<\/file>/g;
+  let match;
+  let found = false;
+  while ((match = regex.exec(text)) !== null) {
+    const path = match[1];
+    const content = match[2];
+    state.sandbox.files[path] = content;
+    found = true;
+  }
+  if (found) {
+    renderSandboxTree();
+    if (!state.sandbox.activeFile) {
+      const firstPath = Object.keys(state.sandbox.files)[0];
+      openSandboxFile(firstPath);
+    }
+    refreshPreview();
+    showSandbox();
+  }
+}
+
+function renderSandboxTree() {
+  const tree = $("#sandboxTree");
+  if (!tree) return;
+  tree.innerHTML = "";
+  const paths = Object.keys(state.sandbox.files);
+  if (paths.length === 0) {
+    tree.innerHTML = `<div class="empty-tree">${t("sandbox.emptyTree")}</div>`;
+    return;
+  }
+  paths.forEach((path) => {
+    const item = document.createElement("div");
+    item.className = "tree-item";
+    if (path === state.sandbox.activeFile) item.classList.add("active");
+    const ext = path.split(".").pop().toLowerCase();
+    const icon = { html: "🌐", css: "🎨", js: "⚙", json: "📋", md: "📝" }[ext] || "📄";
+    item.innerHTML = `<span class="tree-icon">${icon}</span><span>${path}</span>`;
+    item.addEventListener("click", () => openSandboxFile(path));
+    tree.appendChild(item);
+  });
+}
+
+function openSandboxFile(path) {
+  state.sandbox.activeFile = path;
+  $$(".tree-item").forEach((it) => it.classList.remove("active"));
+  renderSandboxTree(); // re-render para marcar activo.
+
+  // Actualizar editor.
+  const host = $("#sandboxEditorHost");
+  if (!host) return;
+  host.innerHTML = "";
+  const textarea = document.createElement("textarea");
+  textarea.value = state.sandbox.files[path] || "";
+  host.appendChild(textarea);
+
+  if (typeof CodeMirror !== "undefined") {
+    const ext = path.split(".").pop().toLowerCase();
+    const mode = { html: "htmlmixed", css: "css", js: "javascript", json: "application/json", md: "markdown", py: "python" }[ext] || "text/plain";
+    state.sandbox.editor = CodeMirror.fromTextArea(textarea, {
+      mode,
+      theme: "material-darker",
+      lineNumbers: true,
+      lineWrapping: true,
+      indentUnit: 2,
+      tabSize: 2,
+    });
+    state.sandbox.editor.on("change", () => {
+      state.sandbox.files[path] = state.sandbox.editor.getValue();
+      debouncedRefreshPreview();
+    });
+  }
+}
+
+function refreshPreview() {
+  if (state.sandbox.previewThrottleTimer) clearTimeout(state.sandbox.previewThrottleTimer);
+  state.sandbox.previewThrottleTimer = setTimeout(() => {
+    const html = buildSandboxHTML();
+    const iframe = $("#sandboxPreview");
+    if (iframe) {
+      const blob = new Blob([html], { type: "text/html" });
+      iframe.src = URL.createObjectURL(blob);
+    }
+  }, 300);
+}
+
+const debouncedRefreshPreview = debounce(refreshPreview, 300);
+
+function buildSandboxHTML() {
+  let html = state.sandbox.files["index.html"] || "<!DOCTYPE html><html><body>Sin index.html</body></html>";
+
+  // Inyectar CSP si no está.
+  if (!/Content-Security-Policy/i.test(html)) {
+    if (/<head[^>]*>/i.test(html)) {
+      html = html.replace(/<head([^>]*)>/i, `<head$1>\n  <meta http-equiv="Content-Security-Policy" content="default-src 'self' https: data:; script-src 'unsafe-inline' 'unsafe-eval' https://unpkg.com https://cdn.jsdelivr.net https://esm.sh; style-src 'unsafe-inline' https:; img-src https: data:; connect-src https:;">`);
+    }
+  }
+
+  // Reemplazar <link rel="stylesheet" href="styles.css"> con <style> inline.
+  html = html.replace(/<link\s+rel=["']stylesheet["']\s+href=["']([^"']+)["']\s*\/?>/gi, (match, href) => {
+    const content = state.sandbox.files[href];
+    return content ? `<style>\n${content}\n</style>` : match;
+  });
+
+  // Reemplazar <script src="app.js"></script> con <script> inline.
+  html = html.replace(/<script\s+src=["']([^"']+)["']\s*><\/script>/gi, (match, src) => {
+    const content = state.sandbox.files[src];
+    return content ? `<script>\n${content}\n</script>` : match;
+  });
+
+  return html;
+}
+
+function showSandbox() {
+  show($("#sandbox"));
+  $(".app-layout")?.classList.remove("sandbox-hidden");
+}
+
+function toggleSandbox() {
+  const layout = $(".app-layout");
+  if (layout) layout.classList.toggle("sandbox-hidden");
+}
+
+function clearSandbox() {
+  state.sandbox.files = {};
+  state.sandbox.activeFile = null;
+  if (state.sandbox.editor) state.sandbox.editor.toTextArea();
+  state.sandbox.editor = null;
+  $("#sandboxEditorHost").innerHTML = "";
+  renderSandboxTree();
+  refreshPreview();
+}
+
+function loadTemplate(name, params = {}) {
+  try {
+    const tpl = getTemplate(name, params);
+    tpl.files.forEach((f) => { state.sandbox.files[f.path] = f.content; });
+    renderSandboxTree();
+    if (tpl.files.length > 0) openSandboxFile(tpl.files[0].path);
+    refreshPreview();
+    showSandbox();
+    toast(`Plantilla "${name}" cargada`, "success");
+  } catch (e) {
+    toast(`Error: ${e.message}`, "error");
+  }
+}
+
+function addLibrary(lib) {
+  const urls = {
+    leaflet: "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js",
+    maplibre: "https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js",
+    three: "https://unpkg.com/three@0.160.0/build/three.min.js",
+    babylon: "https://cdn.babylonjs.com/babylon.js",
+    chartjs: "https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js",
+    d3: "https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js",
+    plotly: "https://cdn.plot.ly/plotly-2.27.0.min.js",
+    echarts: "https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js",
+    tailwind: "https://cdn.tailwindcss.com",
+    alpine: "https://cdn.jsdelivr.net/npm/alpinejs@3/dist/cdn.min.js",
+    htmx: "https://unpkg.com/htmx.org@1.9.10",
+    anime: "https://cdn.jsdelivr.net/npm/animejs@3.2.1/lib/anime.min.js",
+    gsap: "https://cdn.jsdelivr.net/npm/gsap@3/dist/gsap.min.js",
+    papaparse: "https://cdn.jsdelivr.net/npm/papaparse@5/papaparse.min.js",
+    dexie: "https://cdn.jsdelivr.net/npm/dexie@3.2.4/dist/dexie.min.js",
+    sqljs: "https://cdn.jsdelivr.net/npm/sql.js@1/dist/sql-wasm.js",
+    katex: "https://cdn.jsdelivr.net/npm/katex@0.16/dist/katex.min.js",
+    mathjs: "https://cdn.jsdelivr.net/npm/mathjs@12/lib/browser/math.min.js",
+  };
+  const url = urls[lib];
+  if (!url) return;
+  // Inyectar en el index.html del sandbox.
+  let html = state.sandbox.files["index.html"] || "<!DOCTYPE html><html><head></head><body></body></html>";
+  if (/<\/head>/i.test(html)) {
+    html = html.replace(/<\/head>/i, `<script src="${url}"></script>\n</head>`);
+  } else {
+    html = `<script src="${url}"></script>\n${html}`;
+  }
+  state.sandbox.files["index.html"] = html;
+  if (state.sandbox.activeFile === "index.html" && state.sandbox.editor) {
+    state.sandbox.editor.setValue(html);
+  }
+  refreshPreview();
+  toast(`Librería ${lib} añadida`, "success");
+}
+
+async function exportZip() {
+  if (typeof JSZip === "undefined") return toast("JSZip no cargado", "error");
+  const zip = new JSZip();
+  for (const [path, content] of Object.entries(state.sandbox.files)) {
+    zip.file(path, content);
+  }
+  const blob = await zip.generateAsync({ type: "blob" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "veritas-sandbox.zip";
+  a.click();
+  URL.revokeObjectURL(url);
+  toast(t("sandbox.zipReady"), "success");
+}
+
+function downloadActiveFile() {
+  if (!state.sandbox.activeFile) return toast("Sin archivo activo", "warning");
+  const content = state.sandbox.files[state.sandbox.activeFile];
+  const blob = new Blob([content], { type: "text/plain" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = state.sandbox.activeFile.split("/").pop();
+  a.click();
+  URL.revokeObjectURL(url);
+  toast(t("sandbox.downloaded"), "success");
+}
+
+async function copyActiveFile() {
+  if (!state.sandbox.activeFile) return toast("Sin archivo activo", "warning");
+  const content = state.sandbox.files[state.sandbox.activeFile];
+  try {
+    await navigator.clipboard.writeText(content);
+    toast(t("sandbox.copied"), "success");
+  } catch (e) {
+    toast("No se pudo copiar", "error");
+  }
+}
+
+function openInBrowser() {
+  if (!state.sandbox.activeFile) return toast("Sin archivo activo", "warning");
+  const html = buildSandboxHTML();
+  const blob = new Blob([html], { type: "text/html" });
+  const url = URL.createObjectURL(blob);
+  window.open(url, "_blank");
+}
+
+async function pushToGithub() {
+  // Requiere conexión GitHub activa.
+  const files = Object.entries(state.sandbox.files).map(([path, content]) => ({ path, content }));
+  if (files.length === 0) return toast("Sin archivos", "warning");
+
+  const owner = prompt("Owner (usuario/organización GitHub):");
+  if (!owner) return;
+  const repo = prompt("Repo:");
+  if (!repo) return;
+  const branch = prompt("Branch (default: main):") || "main";
+  const message = prompt("Commit message:") || "Update from Véritas Sandbox";
+
+  try {
+    const resp = await fetch("/api/tool/invoke", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-veritas-role": state.currentRole },
+      body: JSON.stringify({
+        tool: "github_write_files",
+        args: { owner, repo, branch, files, message },
+      }),
+    });
+    const data = await resp.json();
+    if (data.status === "ok") {
+      toast(t("sandbox.pushedGithub"), "success");
+    } else {
+      toast(`Error: ${data.output}`, "error", 5000);
+    }
+  } catch (e) {
+    toast(`Error: ${e.message}`, "error");
+  }
+}
+
+async function loadPreviewFromR2(filename) {
+  // Cargar HTML desde R2 vía endpoint de descarga.
+  try {
+    const resp = await fetch(`/api/storage/download/${filename}`);
+    if (resp.ok) {
+      const html = await resp.text();
+      state.sandbox.files["index.html"] = html;
+      renderSandboxTree();
+      openSandboxFile("index.html");
+      refreshPreview();
+      showSandbox();
+    }
+  } catch (e) { /* skip */ }
+}
+
+// ==============================================================================
+// SHARED SESSION
+// ==============================================================================
+async function startSharedSession() {
+  if (!state.currentChat?.is_shared) return;
+  if (state.sharedSession) state.sharedSession.stop();
+  state.sharedSession = new SharedSessionManager({
+    chatId: state.currentChat.id,
+    currentUserEmail: state.user_email,
+    isOwner: state.currentChat.user_email === state.user_email,
+  });
+  state.sharedSession.turnDurationMin = state.settings.shared.turnDuration;
+  state.sharedSession.addEventListener("shared:new-messages", (e) => {
+    e.detail.messages.forEach((m) => {
+      state.messages.push(m);
+      renderMessage(m);
+    });
+    scrollToBottom();
+    // Notificación.
+    const lastMsg = e.detail.messages[e.detail.messages.length - 1];
+    if (lastMsg && lastMsg.role === "user" && lastMsg.author_email !== state.user_email) {
+      window.dispatchEvent(new CustomEvent("shared:event", {
+        detail: { type: "shared_new_message", payload: { author: lastMsg.author_email, chatTitle: state.currentChat.title, chatId: state.currentChat.id } },
+      }));
+    }
+  });
+  state.sharedSession.addEventListener("shared:turn-acquired", (e) => {
+    toast(t("shared.turnYours", { time: formatCountdown(e.detail.expires_at) }), "success");
+  });
+  state.sharedSession.addEventListener("shared:turn-busy", (e) => {
+    toast(t("shared.turnHeldBy", { user: e.detail.held_by, time: formatCountdown(e.detail.expires_at) }), "info");
+  });
+  state.sharedSession.addEventListener("shared:turn-countdown", (e) => {
+    $("#sharedTurnInfo").textContent = (e.detail.held_by === state.user_email
+      ? t("shared.turnYours", { time: e.detail.formatted })
+      : t("shared.turnHeldBy", { user: e.detail.held_by, time: e.detail.formatted }));
+  });
+  state.sharedSession.addEventListener("shared:turn-released", () => {
+    $("#sharedTurnInfo").textContent = "";
+  });
+  state.sharedSession.addEventListener("shared:presence", (e) => {
+    renderSharedParticipants(e.detail.presence);
+  });
+  state.sharedSession.addEventListener("shared:left", () => {
+    toast(t("shared.left"), "info");
+    if (state.currentChat) {
+      state.currentChat.is_shared = 0;
+      renderChatHeader();
+    }
+    state.sharedSession = null;
+  });
+  state.sharedSession.addEventListener("shared:closed", () => {
+    toast(t("shared.closed"), "info");
+    if (state.currentChat) {
+      state.currentChat.is_shared = 0;
+      renderChatHeader();
+    }
+    state.sharedSession = null;
+  });
+
+  await state.sharedSession.start();
+}
+
+function renderSharedParticipants(presence) {
+  const container = $("#sharedParticipants");
+  if (!container) return;
+  container.innerHTML = "";
+  presence.forEach((p) => {
+    const avatar = document.createElement("div");
+    avatar.className = `participant-avatar ${p.online ? "" : "offline"}`;
+    avatar.textContent = (p.user_email || "?").charAt(0).toUpperCase();
+    avatar.title = p.user_email + (p.is_typing ? " (escribiendo)" : "");
+    container.appendChild(avatar);
+    if (p.is_typing && p.user_email !== state.user_email) {
+      show($("#typingIndicator"));
+      $("#typingUser").textContent = p.user_email.split("@")[0];
+    }
+  });
+  // Si nadie está escribiendo, ocultar indicador.
+  const anyTyping = presence.some((p) => p.is_typing && p.user_email !== state.user_email);
+  if (!anyTyping) hide($("#typingIndicator"));
+}
+
+function updateInviteButtonVisibility() {
+  const btn = $("#inviteBtn");
+  if (!btn) return;
+  const shareable = state.currentChat && isRoleShareable(state.currentRole);
+  show(btn); // Lo dejamos visible para roles shareables; hidden para otros.
+  btn.hidden = !shareable;
+}
+
+async function generateShareLink() {
+  if (!state.currentChat) return;
+  const r = await createShare(state.currentChat.id);
+  if (r.error) return toast(`Error: ${r.error}`, "error");
+  $("#shareLinkInput").value = r.share_url;
+  show($("#shareLinkBox"));
+  show($("#revokeShareLink"));
+}
+
+async function copyShareLink() {
+  const input = $("#shareLinkInput");
+  try {
+    await navigator.clipboard.writeText(input.value);
+    toast(t("shared.copyOk"), "success");
+  } catch (e) {
+    input.select();
+    document.execCommand("copy");
+    toast(t("shared.copyOk"), "success");
+  }
+}
+
+async function revokeShareLink() {
+  if (!state.currentChat) return;
+  const r = await revokeShare(state.currentChat.id);
+  if (r.error) return toast(`Error: ${r.error}`, "error");
+  toast("Enlace revocado", "success");
+  hide($("#shareLinkBox"));
+  hide($("#revokeShareLink"));
+}
+
+async function detectSharedJoinFromURL() {
+  const match = location.pathname.match(/^\/chat\/([^/]+)\/join/) || location.hash.match(/join\/([^?]+)/);
+  if (!match) return;
+  const chatId = match[1];
+  const token = new URLSearchParams(location.search).get("token");
+  if (!token) return;
+  const r = await joinSession(chatId, token);
+  if (r.error) {
+    toast(t("shared.invalidToken"), "error");
+    return;
+  }
+  toast(t("shared.joined"), "success");
+  // Cargar el chat.
+  // Necesitamos fetch el chat desde el backend; como no hay endpoint explícito,
+  // usamos el offline-bundle para encontrarlo.
+  const bundle = await fetch("/api/chats/offline-bundle").then((r) => r.json()).catch(() => ({ chats: [] }));
+  const chat = (bundle.chats || []).find((c) => c.id === chatId);
+  if (chat) openChat(chat);
+}
+
+function formatCountdown(expiresAt) {
+  if (!expiresAt) return "00:00";
+  const remaining = Math.max(0, expiresAt - Date.now());
+  const mm = Math.floor(remaining / 60000);
+  const ss = Math.floor((remaining % 60000) / 1000);
+  return `${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
+}
+
+// ==============================================================================
+// SKILL MODE POR ROL
+// ==============================================================================
+// Agente y Coder deciden usar skills autónomamente (mode="auto").
+// Fast no recibe skills. El resto solo si el usuario lo solicita (mode="manual").
+function getSkillMode(role) {
+  if (role === "agent" || role === "coder") return "auto";
+  if (role === "fast") return null;
+  return "manual";
+}
+
+// ==============================================================================
+// TOKEN COUNTER
+// ==============================================================================
+async function getSystemPrompt() {
+  // Resolver el system prompt real para el rol UI actual.
+  // Esto se usa en rutas que NO pasan por el Worker (Puter) o donde el Worker
+  // actúa como passthrough (/api/chat/openrouter) y no reemplaza el system message.
+  const promptKey = UI_ROLE_TO_PROMPT_KEY[state.currentRole];
+  const realPrompt = promptKey ? SYSTEM_PROMPTS[promptKey] : null;
+  const base = realPrompt || `[System prompt no disponible para el rol ${state.currentRole}.]`;
+  const mode = getSkillMode(state.currentRole);
+  if (!mode) return base; // fast: sin skills
+  const skillsBlock = await buildSkillsPromptBlock(state.settings, state.currentRole, mode);
+  return skillsBlock ? base + "\n\n" + skillsBlock : base;
+}
+
+// Versión sync de getSystemPrompt (sin skills) para el token counter.
+function __getBaseSystemPrompt() {
+  const promptKey = UI_ROLE_TO_PROMPT_KEY[state.currentRole];
+  return (promptKey ? SYSTEM_PROMPTS[promptKey] : null)
+    || `[System prompt no disponible para el rol ${state.currentRole}.]`;
+}
+
+function updateTokenCounter() {
+  if (!state.settings.tokens.showCounter) {
+    hide($("#tokenCounter"));
+    return;
+  }
+  show($("#tokenCounter"));
+  const status = ContextManager.computeTokenStatus({
+    messages: state.messages,
+    currentModelId: state.currentModel,
+    currentUserMsg: { role: "user", content: $("#messageInput")?.value || "" },
+    summary: state.chatSummary,
+    systemPrompt: __getBaseSystemPrompt(),
+  });
+  $("#tokenUsed").textContent = status.used;
+  $("#tokenAvailable").textContent = status.available;
+  $("#tokenCounter").className = `token-counter ${status.level}`;
+}
+
+const debouncedUpdateTokenCounter = debounce(updateTokenCounter, 300);
+
+// ==============================================================================
+// OAUTH CONNECTIONS
+// ==============================================================================
+async function loadConnections() {
+  try {
+    const resp = await fetch("/api/oauth/connections");
+    if (!resp.ok) return;
+    const data = await resp.json();
+    (data.connections || []).forEach((c) => updateConnectionUI(c));
+  } catch (e) { /* best-effort */ }
+}
+
+function updateConnectionUI(conn) {
+  const card = document.querySelector(`.connection-card[data-provider="${conn.provider}"]`);
+  if (!card) return;
+  const status = card.querySelector(".conn-status");
+  const account = card.querySelector(".conn-account");
+  const connectBtn = card.querySelector(`#connect${conn.provider.charAt(0).toUpperCase() + conn.provider.slice(1)}`);
+  const disconnectBtn = card.querySelector(`#disconnect${conn.provider.charAt(0).toUpperCase() + conn.provider.slice(1)}`);
+
+  if (conn.invalid) {
+    status.textContent = t("connections.invalid");
+    status.className = "conn-status invalid";
+    show(account); account.textContent = "Reconectar";
+    show(disconnectBtn); hide(connectBtn);
+  } else {
+    status.textContent = t("connections.connected", { account: conn.account_metadata?.login || conn.account_metadata?.email || "" });
+    status.className = "conn-status connected";
+    if (conn.account_metadata) {
+      show(account);
+      account.textContent = `${conn.account_metadata.name || conn.account_metadata.login || conn.account_metadata.email}`;
+    }
+    show(disconnectBtn); hide(connectBtn);
+  }
+}
+
+function connectOAuth(provider) {
+  // Redirigir al endpoint start del Worker.
+  toast(t("connections.redirecting", { provider }), "info");
+  window.location.href = `/api/oauth/${provider}/start`;
+}
+
+async function disconnectOAuth(provider) {
+  if (!confirm(`¿Desconectar ${provider}?`)) return;
+  try {
+    await fetch(`/api/oauth/${provider}/disconnect`, { method: "POST" });
+    const card = document.querySelector(`.connection-card[data-provider="${provider}"]`);
+    if (card) {
+      card.querySelector(".conn-status").textContent = t("connections.disconnected");
+      card.querySelector(".conn-status").className = "conn-status";
+      hide(card.querySelector(".conn-account"));
+      show(card.querySelector(`#connect${provider.charAt(0).toUpperCase() + provider.slice(1)}`));
+      hide(card.querySelector(`#disconnect${provider.charAt(0).toUpperCase() + provider.slice(1)}`));
+    }
+    toast("Desconectado", "success");
+  } catch (e) {
+    toast(`Error: ${e.message}`, "error");
+  }
+}
+
+// ==============================================================================
+// REPO UPLOAD (multi-archivo)
+// ==============================================================================
+function handleRepoFilesUpload(fileList) {
+  const files = Array.from(fileList);
+  const maxSize = 5 * 1024 * 1024;
+  const overLimit = files.filter((f) => f.size > maxSize);
+  if (overLimit.length > 0) {
+    toast(t("repo.tooLarge") + ` (${overLimit.map((f) => f.name).join(", ")})`, "error");
+    return;
+  }
+  // Mostrar meta para primer archivo como referencia.
+  show($("#repoUploadMeta"));
+  $("#repoDocName").value = files.length === 1 ? files[0].name : `";
+  show($("#repoConfirmUpload"));
+
+  // Si es un solo archivo, confirmar directamente con el nombre original.
+  if (files.length === 1) {
+    $("#repoConfirmUpload").onclick = () => uploadSingleFile(files[0]);
+  } else {
+    // Múltiples: confirmar sube todos.
+    $("#repoDocName").readOnly = true;
+    $("#repoDocName").value = `${files.length} archivos seleccionados`;
+    $("#repoConfirmUpload").onclick = async () => {
+      hide($("#repoUploadMeta"));
+      hide($("#repoConfirmUpload"));
+      $("#repoDocName").readOnly = false;
+      let ok = 0, fail = 0;
+      for (const file of files) {
+        try {
+          const formData = new FormData();
+          formData.append("file", file);
+          formData.append("doc_name", file.name);
+          const resp = await fetch("/api/repo/upload", { method: "POST", body: formData });
+          if (resp.ok) ok++; else fail++;
+        } catch { fail++; }
+      }
+      if (fail === 0) toast(`${ok} ${t("repo.uploaded")}`, "success");
+      else toast(`${ok} OK, ${fail} errores`, fail > 0 ? "error" : "success");
+      _repoOffset = 0;
+      loadRepoList();
+    };
+  }
+}
+
+async function uploadSingleFile(file) {
+  const docName = $("#repoDocName").value || file.name;
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("doc_name", docName);
+  try {
+    const resp = await fetch("/api/repo/upload", { method: "POST", body: formData });
+    if (resp.ok) {
+      toast(t("repo.uploaded"), "success");
+      hide($("#repoUploadMeta"));
+      hide($("#repoConfirmUpload"));
+      _repoOffset = 0;
+      loadRepoList();
+    } else {
+      throw new Error(`HTTP ${resp.status}`);
+    }
+  } catch (e) {
+    toast(`Error: ${e.message}`, "error");
+  }
+}
+
+let _repoOffset = 0;
+const _repoPageSize = 50;
+let _repoSearchTerm = "";
+let _repoTotal = 0;
+
+async function loadRepoList(append = false) {
+  try {
+    const params = new URLSearchParams({ limit: _repoPageSize, offset: _repoOffset });
+    if (_repoSearchTerm) params.set("search", _repoSearchTerm);
+    const resp = await fetch(`/api/repo/list?${params}`);
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const list = $("#repoList");
+    if (!append) list.innerHTML = "";
+
+    // Calcular total (usar total de la respuesta si existe, sino acumular).
+    if (data.total !== undefined) _repoTotal = data.total;
+
+    (data.documents || []).forEach((doc) => {
+      const li = document.createElement("li");
+      li.dataset.docNumber = doc.doc_number;
+      li.innerHTML = `
+        <span class="repo-doc-number">#${doc.doc_number}</span>
+        <span class="repo-doc-name" title="${doc.doc_name}">${doc.doc_name}</span>
+        <span class="repo-doc-meta">${formatBytes(doc.file_size)}</span>
+        <button class="repo-btn-download" title="${t('repo.download') || 'Descargar'}">⬇</button>
+        <button class="repo-btn-delete" title="${t('repo.delete') || 'Borrar'}">🗑</button>
+      `;
+      li.querySelector(".repo-btn-download").addEventListener("click", () =>
+        downloadRepoDoc(doc.doc_number, doc.doc_name)
+      );
+      li.querySelector(".repo-btn-delete").addEventListener("click", function () {
+        deleteRepoDoc(doc.doc_number, this);
+      });
+      list.appendChild(li);
+    });
+
+    // Usage bar.
+    const totalSize = data.total_size || 0;
+    const pct = Math.min(100, (totalSize / (100 * 1024 * 1024)) * 100);
+    $("#repoUsageFill").style.width = `${pct}%`;
+    $("#repoUsageText").textContent = t("repo.usage", { used: (totalSize / 1024 / 1024).toFixed(1) });
+
+    // Botón "cargar más".
+    let loadMoreBtn = $("#repoLoadMore");
+    if (data.has_more) {
+      if (!loadMoreBtn) {
+        loadMoreBtn = document.createElement("button");
+        loadMoreBtn.id = "repoLoadMore";
+        loadMoreBtn.className = "action-btn repo-load-more";
+        loadMoreBtn.textContent = t("repo.loadMore") || "Cargar más";
+        loadMoreBtn.addEventListener("click", () => {
+          _repoOffset += _repoPageSize;
+          loadRepoList(true);
+        });
+        list.parentNode.insertBefore(loadMoreBtn, list.nextSibling);
+      }
+      loadMoreBtn.hidden = false;
+    } else if (loadMoreBtn) {
+      loadMoreBtn.hidden = true;
+    }
+
+    // Info de total.
+    const countEl = $("#repoCountInfo");
+    if (countEl) {
+      countEl.textContent = `${_repoTotal} documento${_repoTotal !== 1 ? "s" : ""}`;
+    }
+  } catch (e) { /* best-effort */ }
+}
+
+function onRepoSearchInput(e) {
+  _repoSearchTerm = e.target.value.trim();
+  _repoOffset = 0;
+  const loadMoreBtn = $("#repoLoadMore");
+  if (loadMoreBtn) loadMoreBtn.remove();
+  loadRepoList();
+}
+
+async function downloadRepoDoc(docNumber, docName) {
+  try {
+    const resp = await fetch(`/api/repo/download/${docNumber}`);
+    if (!resp.ok) { toast(`Error: ${resp.status}`, "error"); return; }
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = docName || `documento_${docNumber}`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch (e) { toast(`Error: ${e.message}`, "error"); }
+}
+
+async function deleteRepoDoc(docNumber, btn) {
+  if (!confirm("¿Borrar documento?")) return;
+  try {
+    const resp = await fetch("/api/repo/delete", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ doc_number: Number(docNumber) }),
+    });
+    if (!resp.ok) { toast(`Error: ${resp.status}`, "error"); return; }
+    btn.closest("li").remove();
+    toast(t("repo.deleted"), "success");
+    // Recargar lista para actualizar barra y conteo.
+    _repoOffset = 0;
+    loadRepoList();
+  } catch (e) { toast(`Error: ${e.message}`, "error"); }
+}
+
+function formatBytes(bytes) {
+  if (!bytes) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  const i = Math.floor(Math.log(bytes) / Math.log(1024));
+  return `${(bytes / Math.pow(1024, i)).toFixed(1)} ${units[i]}`;
+}
+
+// ==============================================================================
+// REPO ATTACH — Popover para adjuntar docs del repo al chat
+// ==============================================================================
+let _repoAttachSelected = new Set();
+let _repoAttachDocs = [];
+
+function toggleRepoAttachPopover() {
+  const popover = $("#repoAttachPopover");
+  if (!popover) return;
+  if (!popover.hidden) {
+    popover.hidden = true;
+    return;
+  }
+  loadRepoAttachList();
+  popover.hidden = false;
+  const search = $("#repoAttachSearch");
+  if (search) { search.value = ""; search.focus(); }
+}
+
+async function loadRepoAttachList(filter = "") {
+  const list = $("#repoAttachList");
+  if (!list) return;
+  list.innerHTML = "<li>Cargando...</li>";
+  try {
+    const params = new URLSearchParams({ limit: 50, offset: 0 });
+    if (filter) params.set("search", filter);
+    const resp = await fetch(`/api/repo/list?${params}`);
+    if (!resp.ok) { list.innerHTML = ""; return; }
+    const data = await resp.json();
+    _repoAttachDocs = data.documents || [];
+    renderRepoAttachList();
+  } catch { list.innerHTML = ""; }
+}
+
+function renderRepoAttachList() {
+  const list = $("#repoAttachList");
+  if (!list) return;
+  list.innerHTML = "";
+  if (_repoAttachDocs.length === 0) {
+    list.innerHTML = '<li style="color:var(--text-muted);cursor:default;">Sin documentos</li>';
+    return;
+  }
+  _repoAttachDocs.forEach((doc) => {
+    const li = document.createElement("li");
+    const isSelected = _repoAttachSelected.has(doc.doc_number);
+    if (isSelected) li.classList.add("selected");
+    li.innerHTML = `
+      <span class="repo-attach-check">${isSelected ? "\u2713" : ""}</span>
+      <span class="repo-attach-name" title="${doc.doc_name}">#${doc.doc_number} ${doc.doc_name}</span>
+      <span class="repo-attach-size">${formatBytes(doc.file_size)}</span>
+    `;
+    li.addEventListener("click", () => {
+      if (_repoAttachSelected.has(doc.doc_number)) {
+        _repoAttachSelected.delete(doc.doc_number);
+      } else {
+        _repoAttachSelected.add(doc.doc_number);
+      }
+      renderRepoAttachList();
+      updateRepoAttachCount();
+    });
+    list.appendChild(li);
+  });
+  updateRepoAttachCount();
+}
+
+function updateRepoAttachCount() {
+  const countEl = $("#repoAttachCount");
+  if (countEl) {
+    const n = _repoAttachSelected.size;
+    countEl.textContent = `${n} seleccionado${n !== 1 ? "s" : ""}`;
+  }
+}
+
+function confirmRepoAttach() {
+  if (_repoAttachSelected.size === 0) {
+    toast(t("repo.noDocsSelected") || "Selecciona al menos un documento", "warning");
+    return;
+  }
+  for (const doc of _repoAttachDocs) {
+    if (_repoAttachSelected.has(doc.doc_number)) {
+      if (!state.repoDocAttachments.some((a) => a.doc_number === doc.doc_number)) {
+        state.repoDocAttachments.push({
+          doc_number: doc.doc_number,
+          doc_name: doc.doc_name,
+          file_size: doc.file_size,
+        });
+      }
+    }
+  }
+  _repoAttachSelected.clear();
+  $("#repoAttachPopover").hidden = true;
+  renderRepoDocChips();
+}
+
+function removeRepoDocAttachment(docNumber) {
+  state.repoDocAttachments = state.repoDocAttachments.filter((a) => a.doc_number !== docNumber);
+  renderRepoDocChips();
+}
+
+function renderRepoDocChips() {
+  const container = $("#repoDocChips");
+  if (!container) return;
+  if (state.repoDocAttachments.length === 0) {
+    container.hidden = true;
+    container.innerHTML = "";
+    return;
+  }
+  container.hidden = false;
+  container.innerHTML = state.repoDocAttachments.map((a) =>
+    `<span class="repo-doc-chip" data-doc-number="${a.doc_number}">
+      <span class="repo-doc-chip-name" title="${a.doc_name}">#${a.doc_number} ${a.doc_name}</span>
+      <span class="repo-doc-chip-remove" data-doc-number="${a.doc_number}">\u2715</span>
+    </span>`
+  ).join("");
+  container.querySelectorAll(".repo-doc-chip-remove").forEach((btn) => {
+    btn.addEventListener("click", () => removeRepoDocAttachment(Number(btn.dataset.docNumber)));
+  });
+}
+
+async function fetchRepoDocContent(docNumber) {
+  try {
+    const resp = await fetch("/api/repo/get", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query: String(docNumber) }),
+    });
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch { return null; }
+}
+
+// ==============================================================================
+// DASHBOARD
+// ==============================================================================
+async function loadDashboard() {
+  try {
+    const resp = await fetch("/api/status");
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const grid = $("#dashboardModels");
+    grid.innerHTML = "";
+
+    // Puter models (siempre available según Worker).
+    const puterModels = ["cognitivecomputations/dolphin-mistral-24b-venice-edition:free", "z-ai/glm-4.5-flash"];
+    puterModels.forEach((m) => {
+      grid.innerHTML += `<div class="dashboard-card"><div class="dashboard-card-name">${m}</div><div class="dashboard-card-status status-green">🟢 Puter</div></div>`;
+    });
+
+    // OpenRouter.
+    const orStatus = data.openrouter;
+    const orClass = orStatus?.available ? "status-green" : "status-red";
+    const orIcon = orStatus?.available ? "🟢" : "🔴";
+    grid.innerHTML += `<div class="dashboard-card"><div class="dashboard-card-name">OpenRouter</div><div class="dashboard-card-status ${orClass}">${orIcon} ${orStatus?.latency_ms || "?"}ms</div></div>`;
+
+    if (data.openrouter_pool_degraded) {
+      grid.innerHTML += `<div class="dashboard-card"><div class="dashboard-card-name">OpenRouter Pool</div><div class="dashboard-card-status status-amber">🟡 Degraded</div></div>`;
+    }
+
+    // Services con claves.
+    (data.services || []).forEach((s) => {
+      grid.innerHTML += `<div class="dashboard-card"><div class="dashboard-card-name">${s.name}</div><div class="dashboard-card-status status-green">🔑 Configurado</div></div>`;
+    });
+
+    // Si admin, cargar keys panel.
+    // No sabemos si somos admin desde el frontend; lo intentamos y ocultamos si 403.
+    loadKeysDashboard();
+  } catch (e) { /* best-effort */ }
+}
+
+async function loadKeysDashboard() {
+  try {
+    const resp = await fetch("/api/keys/services");
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const keysPanel = $("#dashboardKeys");
+    const keysTitle = document.querySelector('h4[data-i18n="settings.dashboard.keys"]');
+
+    for (const svc of data.services || []) {
+      const statusResp = await fetch(`/api/keys/status?service=${svc}`);
+      if (statusResp.status === 403) {
+        // No admin: ocultar panel completo.
+        hide(keysPanel);
+        if (keysTitle) hide(keysTitle);
+        return;
+      }
+      if (!statusResp.ok) continue;
+      const status = await statusResp.json();
+      const badge = status.degraded ? "🟡 DEGRADED" : "🟢 OK";
+      keysPanel.innerHTML += `<div class="dashboard-card"><div class="dashboard-card-name">${svc}</div><div class="dashboard-card-status">${badge} (${status.keys?.length || 0} keys)</div></div>`;
+    }
+    show(keysPanel);
+    if (keysTitle) show(keysTitle);
+  } catch (e) { /* best-effort */ }
+}
+
+// ==============================================================================
+// SETTINGS LOAD/SAVE
+// ==============================================================================
+async function loadSettings() {
+  // Cargar perfil desde el backend (GET /api/profile) y mergear con localStorage.
+  try {
+    const saved = localStorage.getItem("veritas_settings");
+    if (saved) {
+      state.settings = { ...state.settings, ...JSON.parse(saved) };
+    }
+    // Cargar desde el server si hay conexión.
+    if (!state.isOffline) {
+      const resp = await fetch("/api/profile");
+      if (resp.ok) {
+        const data = await resp.json();
+        if (data.profile && Object.keys(data.profile).length > 0) {
+          // El server guarda TODO bajo profile_json; ahí están ui_lang,
+          // personalization, tokens, etc. Mergear con lo que ya tenemos.
+          state.settings = { ...state.settings, ...data.profile };
+        }
+      }
+    }
+    applySettingsToUI();
+  } catch (e) { /* use defaults */ }
+}
+
+async function saveSettings() {
+  try {
+    localStorage.setItem("veritas_settings", JSON.stringify(state.settings));
+    // Persistir en el server (PUT /api/profile) con merge.
+    if (!state.isOffline) {
+      await fetch("/api/profile", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ profile_json: state.settings }),
+      });
+    }
+  } catch (e) { /* best-effort */ }
+}
+
+function applySettingsToUI() {
+  // Tema.
+  document.documentElement.dataset.theme = state.settings.personalization.theme;
+  $("#themeSelect").value = state.settings.personalization.theme;
+  $("#readModeToggle").checked = state.settings.personalization.readMode;
+  document.body.classList.toggle("read-mode", state.settings.personalization.readMode);
+  $("#animationsToggle").checked = state.settings.personalization.animations;
+  $("#persistToggle").checked = state.settings.personalization.persist;
+
+  // Tokens.
+  $("#optCompress").checked = state.settings.tokens.contextCompression;
+  $("#optRecent").value = state.settings.tokens.recentMessages;
+  $("#optRecentVal").textContent = state.settings.tokens.recentMessages;
+  $("#optTruncate").checked = state.settings.tokens.toolTruncation;
+  $("#optTruncLimit").value = state.settings.tokens.toolTruncationLimitKB;
+  $("#optTruncVal").textContent = state.settings.tokens.toolTruncationLimitKB;
+  $("#optCaching").checked = state.settings.tokens.promptCaching;
+  $("#optSticky").checked = state.settings.tokens.stickyRouting;
+  $("#optChips").checked = state.settings.tokens.showChips;
+  $("#optCounter").checked = state.settings.tokens.showCounter;
+
+  // Shared.
+  $("#sharedEnable").checked = state.settings.shared.enable;
+  $("#sharedTurnDuration").value = state.settings.shared.turnDuration;
+  $("#sharedTurnVal").textContent = state.settings.shared.turnDuration;
+
+  // Notif.
+  $("#notifMaster").checked = state.settings.notifications.enabled;
+  $("#notifModelDone").checked = state.settings.notifications.events?.model_response !== false;
+  $("#notifTurn").checked = state.settings.notifications.events?.shared_turn_acquired !== false;
+  $("#notifNewMsg").checked = state.settings.notifications.events?.shared_new_message !== false;
+  $("#notifToolDone").checked = state.settings.notifications.events?.tool_completed === true;
+
+  // Offline.
+  $("#offlineEnable").checked = state.settings.offline.enable;
+
+  // Chats.
+  $("#chatsAutoTitle").checked = state.settings.chats.autoTitle;
+}
+
+function setupSettingsUI() {
+  // Skills UI — carga dinámica de custom skills desde D1.
+  loadCustomSkills().then(() => {
+    renderSkillsList();
+  }).catch(() => {
+    renderSkillsList(); // Fallback a estáticas solas.
+  });
+  setupSkillsUI();
+  updateSkillsIndicator();
+}
+
+// ==============================================================================
+// SKILLS UI
+// ==============================================================================
+function renderSkillsList(filter = "all", search = "") {
+  const grid = $("#skillsGrid");
+  if (!grid) return;
+  grid.innerHTML = "";
+
+  const enabled = new Set(state.settings.skills.enabled || []);
+  const query = search.toLowerCase().trim();
+
+  const filtered = getAllSkills().filter((s) => {
+    if (filter !== "all" && s.category !== filter) return false;
+    if (query && !s.name.toLowerCase().includes(query) && !s.description.toLowerCase().includes(query)) return false;
+    return true;
+  });
+
+  // Determinar skills disponibles para el rol actual.
+  const roleSkills = new Set(getSkillsForRole(state.currentRole).map(s => s.id));
+
+  for (const skill of filtered) {
+    const isOn = enabled.has(skill.id);
+    const cat = SKILLS_CATEGORIES[skill.category] || {};
+    const isCustom = !!skill._isCustom;
+    const isAccessible = !skill.allowedRoles || roleSkills.has(skill.id);
+    const card = document.createElement("div");
+    card.className = `skill-card ${isOn ? "active" : ""} ${isCustom ? "custom" : ""} ${!isAccessible ? "skill-locked" : ""}`;
+    card.dataset.skillId = skill.id;
+    card.style.setProperty("--skill-color", skill.color);
+
+    card.innerHTML = `
+      <div class="skill-card-header">
+        <span class="skill-icon">${skill.icon}</span>
+        <span class="skill-name">${skill.name}</span>
+        ${isCustom ? '<span class="skill-custom-badge">Custom</span>' : ''}
+        ${!isAccessible ? '<span class="skill-locked-badge" title="No disponible para el rol actual">\uD83D\uDD12</span>' : ''}
+        <label class="skill-toggle" title="${isOn ? "Desactivar" : "Activar"}">
+          <input type="checkbox" ${isOn ? "checked" : ""} ${!isAccessible ? 'disabled' : ''} />
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+      <p class="skill-desc">${skill.description}</p>
+      <div class="skill-meta">
+        <span class="skill-tier" style="color:${cat.color}">${cat.icon} ${cat.label}</span>
+        <span class="skill-tier-badge">${skill.tier}</span>
+        ${skill.needsExternal ? '<span class="skill-external" title="Requiere servicios externos">\u26A1</span>' : ""}
+        ${isCustom ? '<span class="skill-custom-actions"><button class="icon-btn skill-edit-btn" title="Editar">\u270F</button><button class="icon-btn skill-delete-btn" title="Eliminar">\uD83D\uDDD1</button></span>' : ""}
+      </div>
+    `;
+
+    // Toggle activate/deactivate.
+    const checkbox = card.querySelector('input[type="checkbox"]');
+    checkbox.addEventListener("change", () => {
+      const id = skill.id;
+      const set = new Set(state.settings.skills.enabled || []);
+      if (checkbox.checked) set.add(id); else set.delete(id);
+      state.settings.skills.enabled = [...set];
+      card.classList.toggle("active", checkbox.checked);
+      updateSkillsIndicator();
+      saveSettings();
+    });
+
+    // Botón editar (solo customs).
+    const editBtn = card.querySelector(".skill-edit-btn");
+    if (editBtn) {
+      editBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        openSkillEditor(skill);
+      });
+    }
+
+    // Botón eliminar (solo customs, con confirmación).
+    const deleteBtn = card.querySelector(".skill-delete-btn");
+    if (deleteBtn) {
+      deleteBtn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        if (!confirm(`¿Eliminar la skill "${skill.name}"?`)) return;
+        try {
+          const resp = await fetch(`/api/skills/${encodeURIComponent(skill.id)}`, { method: "DELETE" });
+          if (resp.ok) {
+            const set = new Set(state.settings.skills.enabled || []);
+            set.delete(skill.id);
+            state.settings.skills.enabled = [...set];
+            removeCustomSkill(skill.id);
+            renderSkillsList(
+              document.querySelector("[data-skill-filter].active")?.dataset.skillFilter || "all",
+              $("#skillsSearchInput")?.value || ""
+            );
+            updateSkillsIndicator();
+            saveSettings();
+            toast(`Skill "${skill.name}" eliminada`, "success");
+          } else {
+            toast(`Error al eliminar: ${resp.status}`, "error");
+          }
+        } catch (err) {
+          toast(`Error: ${err.message}`, "error");
+        }
+      });
+    }
+
+    grid.appendChild(card);
+  }
+
+  // Contador.
+  const countEl = $("#skillsCount");
+  if (countEl) {
+    const all = getAllSkills();
+    const total = all.length;
+    const customCount = all.filter(s => s._isCustom).length;
+    const active = enabled.size;
+    countEl.textContent = `${active}/${total} skills activas` + (customCount > 0 ? ` (${customCount} custom)` : "");
+  }
+}
+
+function setupSkillsUI() {
+  // Filtros de categoría.
+  $$("[data-skill-filter]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      $$(`[data-skill-filter]`).forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      renderSkillsList(btn.dataset.skillFilter, $("#skillsSearchInput")?.value || "");
+    });
+  });
+
+  // Búsqueda.
+  const searchInput = $("#skillsSearchInput");
+  if (searchInput) {
+    const debounced = debounce((val) => {
+      const activeFilter = document.querySelector("[data-skill-filter].active")?.dataset.skillFilter || "all";
+      renderSkillsList(activeFilter, val);
+    }, 200);
+    searchInput.addEventListener("input", (e) => debounced(e.target.value));
+  }
+
+  // Botón "Nueva Skill".
+  const newBtn = $("#newSkillBtn");
+  if (newBtn) {
+    newBtn.addEventListener("click", () => openSkillEditor(null));
+  }
+}
+
+/**
+ * Abre el modal de creación/edición de skill custom.
+ * @param {Object|null} skill — Si es null, es creación. Si es un objeto, es edición.
+ */
+async function openSkillEditor(skill) {
+  const modal = $("#skillEditorModal");
+  if (!modal) return;
+
+  const isEdit = !!skill;
+  $("#skillEditorTitle").textContent = isEdit ? "Editar Skill" : "Nueva Skill";
+  $("#skillEditorName").value = isEdit ? skill.name : "";
+  $("#skillEditorDesc").value = isEdit ? skill.description : "";
+  $("#skillEditorCategory").value = isEdit ? skill.category : "utility";
+  $("#skillEditorIcon").value = isEdit ? skill.icon : "";
+  $("#skillEditorColor").value = isEdit ? skill.color : "#f59e0b";
+  $("#skillEditorExternal").checked = isEdit ? !!skill.needsExternal : false;
+  $("#skillEditorPrompt").value = isEdit ? (skill._promptContent || "") : "";
+  $("#skillEditorId").value = isEdit ? skill.id : "";
+
+  // Si es edición, cargar el promptContent completo desde el backend.
+  if (isEdit && !skill._promptContent) {
+    try {
+      const resp = await fetch("/api/skills");
+      if (resp.ok) {
+        const data = await resp.json();
+        const found = (data.skills || []).find(s => s.id === skill.id);
+        if (found && found._promptContent) {
+          $("#skillEditorPrompt").value = found._promptContent;
+        }
+      }
+    } catch { /* usar lo que hay */ }
+  }
+
+  modal.hidden = false;
+}
+
+/**
+ * Guarda la skill del editor (crear o actualizar).
+ */
+async function saveSkillFromEditor() {
+  const name = $("#skillEditorName").value.trim();
+  const description = $("#skillEditorDesc").value.trim();
+  const category = $("#skillEditorCategory").value;
+  const icon = $("#skillEditorIcon").value || "\u2728";
+  const color = $("#skillEditorColor").value || "#f59e0b";
+  const needsExternal = $("#skillEditorExternal").checked;
+  const promptContent = $("#skillEditorPrompt").value.trim();
+  const existingId = $("#skillEditorId").value;
+
+  if (!name) { toast("El nombre es obligatorio", "warning"); return; }
+  if (!description) { toast("La descripción es obligatoria", "warning"); return; }
+  if (!promptContent) { toast("El contenido del prompt es obligatorio", "warning"); return; }
+
+  const body = { name, description, category, icon, color, needsExternal, promptContent };
+
+  try {
+    let resp;
+    if (existingId) {
+      // PUT /api/skills/:id
+      resp = await fetch(`/api/skills/${encodeURIComponent(existingId)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    } else {
+      // POST /api/skills
+      resp = await fetch("/api/skills", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    }
+
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({ message: resp.statusText }));
+      toast(`Error: ${err.message || resp.status}`, "error");
+      return;
+    }
+
+    const data = await resp.json();
+    const savedSkill = data.skill || data;
+    savedSkill._promptContent = promptContent;
+
+    // Actualizar cache local.
+    mergeCustomSkill(savedSkill);
+
+    // Cerrar modal y re-renderizar.
+    $("#skillEditorModal").hidden = true;
+    renderSkillsList(
+      document.querySelector("[data-skill-filter].active")?.dataset.skillFilter || "all",
+      $("#skillsSearchInput")?.value || ""
+    );
+    updateSkillsIndicator();
+    toast(existingId ? "Skill actualizada" : "Skill creada", "success");
+  } catch (err) {
+    toast(`Error: ${err.message}`, "error");
+  }
+}
+
+/** Cierra el modal de editor de skill. */
+function closeSkillEditor() {
+  $("#skillEditorModal").hidden = true;
+}
+
+function updateSkillsIndicator() {
+  const badge = $("#skillsActiveIndicator");
+  if (!badge) return;
+  const count = (state.settings.skills.enabled || []).length;
+  if (count > 0) {
+    badge.hidden = false;
+    badge.textContent = `${count} skill${count > 1 ? "s" : ""}`;
+  } else {
+    badge.hidden = true;
+  }
+}
+
+
+async function saveProfile() {
+  state.settings.profile.name = $("#profileName").value;
+  state.settings.profile.bio = $("#profileBio").value;
+  state.settings.profile.prefLang = $("#profileLang").value;
+  await saveSettings();
+  toast(t("toast.saved"), "success");
+}
+
+async function saveMaps() {
+  state.settings.maps.apiKey = $("#mapsApiKey").value;
+  state.settings.maps.provider = $("#mapsProvider").value;
+  await saveSettings();
+  toast(t("toast.saved"), "success");
+}
+
+function updateOfflineSyncInfo(ts, size) {
+  if (ts === 0) {
+    $("#offlineLastSync").textContent = t("settings.offline.neverSynced");
+    $("#offlineSize").textContent = `Cache: 0 MB / 5 MB`;
+  } else {
+    const minutes = Math.floor((Date.now() - ts) / 60000);
+    $("#offlineLastSync").textContent = t("settings.offline.lastSync", { minutes });
+    $("#offlineSize").textContent = t("settings.offline.cacheSize", { size: (size / 1024 / 1024).toFixed(1) });
+  }
+}
+
+// ==============================================================================
+// FILE ATTACH (chat)
+// ==============================================================================
+async function handleFileAttach(e) {
+  const files = Array.from(e.target.files || []);
+  for (const file of files) {
+    if (file.size > 20 * 1024 * 1024) {
+      toast(`${file.name}: archivo demasiado grande (máx 20MB para multimedia)`, "warning");
+      continue;
+    }
+    // Detectar modalidad.
+    const modality = detectModality(file.type, file.name);
+    if (!modality) {
+      toast(`${file.name}: tipo no soportado (imagen, PDF, audio, video)`, "warning");
+      continue;
+    }
+
+    // Subir a R2 vía /api/storage/upload.
+    const formData = new FormData();
+    formData.append("file", file);
+    try {
+      const resp = await fetch("/api/storage/upload", { method: "POST", body: formData });
+      if (resp.ok) {
+        const data = await resp.json();
+        state.pendingAttachments.push({
+          r2_key: data.r2_key,
+          modality,
+          name: file.name,
+          size: file.size,
+          mime_type: file.type,
+        });
+        renderAttachmentChips();
+      } else {
+        toast(`Error subiendo ${file.name}: ${resp.status}`, "error");
+      }
+    } catch (err) {
+      toast(`Error subiendo ${file.name}: ${err.message}`, "error");
+    }
+  }
+  e.target.value = "";
+}
+
+// Detecta la modalidad de un archivo a partir de su MIME type o extensión.
+function detectModality(mimeType, fileName) {
+  if (!mimeType && fileName) {
+    const ext = fileName.split(".").pop()?.toLowerCase();
+    if (["png","jpg","jpeg","gif","webp","bmp","svg"].includes(ext)) return "image";
+    if (ext === "pdf") return "pdf";
+    if (["mp3","wav","ogg","m4a","flac","aac","webm"].includes(ext)) return "audio";
+    if (["mp4","webm","avi","mov","mkv"].includes(ext)) return "video";
+    return null;
+  }
+  if (mimeType.startsWith("image/")) return "image";
+  if (mimeType === "application/pdf") return "pdf";
+  if (mimeType.startsWith("audio/")) return "audio";
+  if (mimeType.startsWith("video/")) return "video";
+  return null;
+}
+
+// Icono por modalidad para los chips de preview.
+function modalityIcon(modality) {
+  const icons = { image: "🖼", pdf: "📄", audio: "🎵", video: "🎬" };
+  return icons[modality] || "📎";
+}
+
+// Renderiza los chips de attachments pendientes.
+function renderAttachmentChips() {
+  const container = $("#attachmentChips");
+  if (!container) return;
+  if (state.pendingAttachments.length === 0) {
+    container.hidden = true;
+    container.innerHTML = "";
+    return;
+  }
+  container.hidden = false;
+  container.innerHTML = state.pendingAttachments.map((a, i) =>
+    `<span class="attachment-chip" data-index="${i}" title="${a.name} (${formatBytes(a.size)})">
+      ${modalityIcon(a.modality)} ${escapeHTML(a.name)}
+      <button class="attachment-chip-remove" data-index="${i}" aria-label="Remove">✕</button>
+    </span>`
+  ).join("");
+  // Listeners para eliminar chips.
+  container.querySelectorAll(".attachment-chip-remove").forEach((btn) => {
+    btn.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      const idx = parseInt(btn.dataset.index, 10);
+      state.pendingAttachments.splice(idx, 1);
+      renderAttachmentChips();
+    });
+  });
+}
+
+// Formatea bytes a KB/MB.
+function formatBytes(bytes) {
+  if (bytes < 1024) return bytes + " B";
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+  return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+}
+
+// Muestra/oculta el botón de Pensamiento Profundo según la categoría.
+function updateDeepThinkingVisibility() {
+  const btn = $("#deepThinkingBtn");
+  if (!btn) return;
+  const show = state.currentCategory === "agent";
+  btn.hidden = !show;
+  if (!show) {
+    state.toggles.deepThinking = false;
+    btn.classList.remove("active");
+    btn.setAttribute("aria-pressed", "false");
+  }
+}
+
+// ==============================================================================
+// PROMPT CRAFT — Botón flotante arrastrable + generador de prompts vía GLM
+// ==============================================================================
+// Widget autónomo: no depende del estado del chat principal. Usa Puter.js
+// directamente con GLM-4.5-Flash para generar prompts optimizados por rol.
+(function initPromptCraft() {
+  const $ = (s) => document.querySelector(s);
+
+  // --- Referencias DOM ---
+  const fab      = $("#promptCraftFab");
+  const panel    = $("#promptCraftPanel");
+  const roleSel  = $("#promptCraftRole");
+  const input    = $("#promptCraftInput");
+  const sendBtn  = $("#promptCraftSend");
+  const copyBtn  = $("#promptCraftCopy");
+  const refreshBtn = $("#promptCraftRefresh");
+  const closeBtn = $("#promptCraftClose");
+  const outputEl = $("#promptCraftOutput");
+  const resultEl = $("#promptCraftResult");
+
+  let panelOpen = false;
+  let isGenerating = false;
+  let lastGeneratedPrompt = "";
+
+  // --- Capacidades por rol (extraídas de los system prompts) ---
+  const ROLE_CAPABILITIES = {
+    agent: {
+      name: "Agente",
+      model: "Nemotron 3 Super/Ultra via OpenRouter",
+      strengths: [
+        "OSINT e inteligencia de fuentes abiertas",
+        "Búsqueda web (múltiples engines), scraping, análisis de contenido",
+        "Cadena de razonamiento multi-paso con tool calls",
+        "Construcción de grafos de entidades y correlación de datos",
+        "Verificación cruzada de claims y fuentes",
+        "Escalamiento automático a Ultra para investigación profunda",
+        "Percepción visual vía Nano VL (imágenes, diagramas)",
+        "Integración con GitHub y Dropbox para repositorio de evidencia",
+      ],
+      tips: [
+        "Especifica entidades concretas (nombres, URLs, fechas) cuando sea posible",
+        "Indica qué tipo de fuentes prefieres (académicas, noticias, redes sociales, documentos oficiales)",
+        "Para investigaciones complejas, menciona 'investigación profunda' para activar el modo Ultra",
+        "Puedes pedir que use herramientas específicas: web_search, scrape_url, github_read_file, etc.",
+      ],
+    },
+    coder: {
+      name: "Coder",
+      model: "Poolside Laguna M.1 via OpenRouter",
+      strengths: [
+        "Ingeniería de software completa: construir, editar y depurar código",
+        "Generación de artefactos con Live Preview (HTML/CSS/JS en sandbox)",
+        "Plantillas pre-armadas: MapLibre, Three.js, Chart.js, D3, Tailwind, Plotly",
+        "Operaciones con GitHub: crear branches, PRs, leer/escribir archivos",
+        "Integración con Dropbox para almacenamiento de proyectos",
+        "Código funcional al primer intento (filosofía de código sobre explicación)",
+        "Fetch vía proxy para APIs con restricciones CORS",
+        "Delegación a GLM-Flash para lookups puntuales de documentación",
+      ],
+      tips: [
+        "Describe qué quieres construir con el mayor detalle técnico posible",
+        "Menciona librerías específicas si las necesitas (React, D3, Tailwind, etc.)",
+        "Si editas código existente, pega el código o indica el archivo del proyecto",
+        "Para aplicaciones complejas, desglosa en componentes o vistas",
+        "Menciona si necesitas que sea responsive, accesible, o con animaciones específicas",
+      ],
+    },
+    estratega: {
+      name: "Estratega",
+      model: "Dolphin Mistral 24B via Puter.js",
+      strengths: [
+        "Análisis estratégico profundo con cero censura",
+        "Contexto warfare/inteligencia/contrainteligencia",
+        "Evaluación de escenarios y análisis de actores",
+        "Razonamiento multi-nivel: táctico, operativo y estratégico",
+        "Ciclo de inteligencia completo (6 fases: dirección, recolección, procesamiento, análisis, difusión, retroalimentación)",
+        "Crítica de arquitectura y evaluación de trade-offs",
+        "Búsqueda web nativa como tool",
+        "Receptor de fallback ético (procesa queries que otros modelos rechazan)",
+      ],
+      tips: [
+        "Sé directo — Dolphin funciona mejor con queries crudas y sin rodeos",
+        "Para análisis geopolíticos o de conflictos, menciona las partes involucradas",
+        "Puedes pedir análisis en múltiples niveles (táctico/operativo/estratégico)",
+        "Si necesitas verificar algo que otros modelos rechazan, Dolphin lo procesa sin censura",
+        "Para investigaciones largas, pide que siga el ciclo de inteligencia completo",
+      ],
+    },
+    pensador: {
+      name: "Pensador",
+      model: "Nemotron 3 Ultra via OpenRouter",
+      strengths: [
+        "Razonamiento profundo con cadena de pensamiento (thinking tokens)",
+        "Análisis exhaustivo paso a paso",
+        "Descomposición de problemas complejos",
+        "Verificación y validación de hipótesis",
+        "Síntesis de información de múltiples fuentes",
+        "Evaluación crítica de argumentos",
+        "Generación de conexiones no obvias entre conceptos",
+        "OSINT con profundidad analítica superior al Agente",
+      ],
+      tips: [
+        "Usa frases como 'analiza a fondo', 'razonamiento paso a paso', 'descomposición' para activar el modo completo",
+        "Para problemas complejos, presenta los datos disponibles y pide análisis multi-paso",
+        "Si necesitas comparar opciones, presenta todas las alternativas explícitamente",
+        "Menciona 'investigación profunda' para forzar escalamiento a Ultra",
+        "Puedes pedir que evalúe desde múltiples perspectivas o marcos teóricos",
+      ],
+    },
+  };
+
+  // --- Drag del FAB (mouse + touch) ---
+  let dragging = false;
+  let dragStartX, dragStartY, fabStartLeft, fabStartTop;
+  let wasDragged = false;
+
+  function onDragStart(e) {
+    e.preventDefault();
+    dragging = true;
+    wasDragged = false;
+    const point = e.touches ? e.touches[0] : e;
+    const rect = fab.getBoundingClientRect();
+    dragStartX = point.clientX;
+    dragStartY = point.clientY;
+    fabStartLeft = rect.left;
+    fabStartTop = rect.top;
+    fab.style.left = fabStartLeft + "px";
+    fab.style.top = fabStartTop + "px";
+    fab.style.right = "auto";
+    fab.style.bottom = "auto";
+    fab.classList.add("dragging");
+  }
+
+  function onDragMove(e) {
+    if (!dragging) return;
+    const point = e.touches ? e.touches[0] : e;
+    const dx = point.clientX - dragStartX;
+    const dy = point.clientY - dragStartY;
+    if (Math.abs(dx) > 4 || Math.abs(dy) > 4) wasDragged = true;
+    fab.style.left = Math.max(0, Math.min(window.innerWidth - 48, fabStartLeft + dx)) + "px";
+    fab.style.top = Math.max(0, Math.min(window.innerHeight - 48, fabStartTop + dy)) + "px";
+  }
+
+  function onDragEnd() {
+    if (!dragging) return;
+    dragging = false;
+    fab.classList.remove("dragging");
+  }
+
+  fab.addEventListener("mousedown", onDragStart);
+  document.addEventListener("mousemove", onDragMove);
+  document.addEventListener("mouseup", onDragEnd);
+  fab.addEventListener("touchstart", onDragStart, { passive: false });
+  document.addEventListener("touchmove", onDragMove, { passive: false });
+  document.addEventListener("touchend", onDragEnd);
+
+  // --- Toggle panel ---
+  function positionPanel() {
+    const fabRect = fab.getBoundingClientRect();
+    const pw = 370;
+    const gap = 12;
+    const spaceLeft = fabRect.left;
+    const spaceRight = window.innerWidth - fabRect.right;
+    if (spaceLeft >= pw + gap) {
+      panel.style.left = (fabRect.left - pw - gap) + "px";
+      panel.style.right = "auto";
+    } else if (spaceRight >= pw + gap) {
+      panel.style.left = (fabRect.right + gap) + "px";
+      panel.style.right = "auto";
+    } else {
+      panel.style.left = Math.max(8, (fabRect.left + fabRect.width / 2) - pw / 2) + "px";
+      panel.style.right = "auto";
+    }
+    const panelH = 520;
+    const top = fabRect.top - panelH - gap;
+    panel.style.top = top > 8 ? top + "px" : (fabRect.bottom + gap) + "px";
+  }
+
+  function togglePanel() {
+    if (wasDragged) { wasDragged = false; return; }
+    panelOpen = !panelOpen;
+    if (panelOpen) {
+      positionPanel();
+      panel.hidden = false;
+      fab.classList.add("active");
+      input.focus();
+    } else {
+      panel.hidden = true;
+      fab.classList.remove("active");
+    }
+  }
+
+  function closePanel() {
+    panelOpen = false;
+    panel.hidden = true;
+    fab.classList.remove("active");
+  }
+
+  fab.addEventListener("click", togglePanel);
+  closeBtn.addEventListener("click", closePanel);
+  window.addEventListener("resize", () => { if (panelOpen) positionPanel(); });
+
+  // --- Generar prompt con GLM ---
+  async function generatePrompt() {
+    const role = roleSel.value;
+    const brief = input.value.trim();
+    if (!brief || isGenerating) return;
+
+    const cap = ROLE_CAPABILITIES[role];
+    if (!cap) return;
+
+    isGenerating = true;
+    sendBtn.disabled = true;
+    copyBtn.disabled = true;
+    outputEl.hidden = false;
+    resultEl.innerHTML = '<div class="prompt-craft-loading"><div class="spinner"></div>Generando prompt optimizado...</div>';
+
+    const metaPrompt = `Eres un experto en redacción de prompts para IA. Tu tarea es generar UN prompt optimizado que extraiga el máximo provecho de un rol específico de un sistema multi-modelo llamado Véritas.
+
+ROL DESTINO: "${cap.name}" (modelo: ${cap.model})
+
+CAPACIDADES DEL ROL:
+${cap.strengths.map(s => "- " + s).join("\n")}
+
+CONSEJOS PARA ESTE ROL:
+${cap.tips.map(t => "- " + t).join("\n")}
+
+INTENCIÓN DEL USUARIO (breve):
+"${brief}"
+
+REGLAS:
+1. Genera UN ÚNICO prompt listo para copiar y pegar. No añadas prefijos tipo "Prompt:", comillas ni formato markdown.
+2. El prompt debe ser detallado, específico y estructurado — no una simple reformulación de la intención del usuario.
+3. Incluye contexto, restricciones, formato de salida deseado y cualquier directiva que maximice la calidad de la respuesta.
+4. Si aplica, menciona herramientas específicas que el rol puede usar.
+5. El idioma del prompt debe coincidir con el idioma en que el usuario escribió su intención.
+6. Responde SOLO con el prompt generado. Nada más.`;
+
+    try {
+      if (typeof puter === "undefined" || !puter.ai || !puter.ai.chat) {
+        throw new Error("Puter.js no disponible");
+      }
+      const response = await puter.ai.chat(metaPrompt, {
+        model: "z-ai/glm-4.5-flash",
+        stream: false,
+      });
+      const text = (response?.message?.content || response?.text || "").trim();
+      if (!text) throw new Error("Respuesta vacía de GLM");
+
+      lastGeneratedPrompt = text;
+      resultEl.textContent = text;
+      copyBtn.disabled = false;
+    } catch (err) {
+      resultEl.textContent = `Error: ${err.message}`;
+      copyBtn.disabled = true;
+    } finally {
+      isGenerating = false;
+      sendBtn.disabled = false;
+    }
+  }
+
+  sendBtn.addEventListener("click", generatePrompt);
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); generatePrompt(); }
+  });
+
+  // --- Copiar ---
+  function showToast(msg) {
+    const t = document.createElement("div");
+    t.className = "prompt-craft-toast";
+    t.textContent = msg;
+    const fabRect = fab.getBoundingClientRect();
+    t.style.left = fabRect.left + "px";
+    t.style.transform = "translateX(-50%)";
+    document.body.appendChild(t);
+    setTimeout(() => t.remove(), 1800);
+  }
+
+  copyBtn.addEventListener("click", async () => {
+    if (!lastGeneratedPrompt) return;
+    try {
+      await navigator.clipboard.writeText(lastGeneratedPrompt);
+      showToast("Prompt copiado");
+    } catch {
+      const ta = document.createElement("textarea");
+      ta.value = lastGeneratedPrompt;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      ta.remove();
+      showToast("Prompt copiado");
+    }
+  });
+
+  // --- Refrescar ---
+  refreshBtn.addEventListener("click", () => {
+    input.value = "";
+    outputEl.hidden = true;
+    resultEl.textContent = "";
+    lastGeneratedPrompt = "";
+    copyBtn.disabled = true;
+    input.focus();
+  });
+})();
+
+// ==============================================================================
+// HELPERS
+// ==============================================================================
+function autoResize(textarea) {
+  textarea.style.height = "auto";
+  textarea.style.height = Math.min(textarea.scrollHeight, 200) + "px";
+}
+
+function debounce(fn, ms) {
+  let timer;
+  return function (...args) {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn.apply(this, args), ms);
+  };
+}
+
+// ==============================================================================
+// BOOT
+// ==============================================================================
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", init);
+} else {
+  init();
+}
+
+// Exponer para debugging y para notificaciones onclick.
+window.veritas = { state, toast, scrollToMessage: (id) => {
+  const el = document.querySelector(`[data-msg-id="${id}"]`);
+  if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+}, openChat };
