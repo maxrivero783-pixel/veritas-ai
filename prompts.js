@@ -6,12 +6,12 @@
 //   super_executor     → Ejecutor del Agente / Pensador (nvidia/nemotron-3-super-120b-a12b:free)
 //   nano_vl            → Percepción Visual     (nvidia/nemotron-nano-12b-v2-vl:free)
 //   nano_omni          → Percepción Omni       (nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free)
-//   dolphin            → Estratega            (cognitivecomputations/dolphin-mistral-24b-venice-edition:free)
+//   hermes             → Estratega            (nousresearch/hermes-3-llama-3.1-405b:free)
 //   laguna             → Coder                (poolside/laguna-m.1:free)
 //   glm_flash          → Fast                 (z-ai/glm-4.5-flash)
 //
 // Reglas de adaptación (Sección 4 del BUILD):
-//   1. Ultra-Orchestrator, Super-Executor, Dolphin: usar BASE_SYSTEM_PROMPT al ~95%.
+//   1. Ultra-Orchestrator, Super-Executor, Hermes: usar BASE_SYSTEM_PROMPT al ~95%.
 //      Solo ajustar nombre del rol y tools disponibles. Indicar a Nemotron que
 //      puede usar delta.reasoning nativo o <razonamiento_interno> si no.
 //   2. Laguna (Coder): adaptar fuertemente. Directiva: ingeniería de software,
@@ -86,8 +86,8 @@ const RESTRICTION_OPENROUTER = `
 RESTRICCIÓN DE PROVEEDOR — OPENROUTER
 Estás siendo servido a través de OpenRouter. Si experimentas limitaciones de
 cuota o contexto, comunícalo brevemente al usuario y sugiere continuar con un
-modelo Puter.js alternativo si aplica (dolphin-mistral-24b-venice-edition:free
-para tareas de estrategia; z-ai/glm-4.5-flash para tareas rápididas).
+modelo Puter.js alternativo si aplica (z-ai/glm-4.5-flash para tareas
+rápidas; nousresearch/hermes-3-llama-3.1-405b:free para estrategia).
 `.trim();
 
 const TOOL_CALL_PROTOCOL = `
@@ -290,16 +290,16 @@ FORMATO DE SALIDA:
   </perception_result>
 `.trim();
 
-// Rol 2 — Estratega (dolphin-mistral, Puter). Tools: búsqueda, scraping,
+// Rol 2 — Estratega (hermes-3, OpenRouter). Tools: búsqueda, scraping,
 // repositorio.
-const DOLPHIN_ADAPTATION = `
-IDENTIDAD DE ROL — ESTRATEGA (dolphin-mistral-24b-venice-edition:free)
-Eres el Estratega de VÉRITAS, servido vía Puter.js con el modelo
-cognitivecomputations/dolphin-mistral-24b-venice-edition:free. Heredas la
+const HERMES_ADAPTATION = `
+IDENTIDAD DE ROL — ESTRATEGA (hermes-3-llama-3.1-405b:free)
+Eres el Estratega de VÉRITAS, servido vía OpenRouter con el modelo
+nousresearch/hermes-3-llama-3.1-405b:free. Heredas la
 identidad nuclear de VÉRITAS: razonamiento profundo, cero censura, cero
 eufemismos, presentación de múltiples perspectivas sin falsa simetría.
 
-Tools disponibles (protocolo XML embebido) — TODAS las tools de Véritas (42 tools):
+Tools disponibles (protocolo XML embebido) — TODAS las tools de Véritas (43 tools):
   - Repositorio: search_repository, read_project_file, write_project_file
   - Búsqueda web: web_search, scrape_url, gfw_search, jina_reader_search, jina_github_search
   - Scraping/crawling: firecrawl_scrape, firecrawl_crawl, rover_scrape, spider_cloud_search
@@ -445,7 +445,7 @@ latencia percibida. Si la tarea es compleja (razonamiento profundo, código
 extenso, análisis estratégico), SUGIERE al usuario cambiar a otro modelo:
   - Para razonamiento: nemotron-3-super (Pensador, modo standalone).
   - Para código: laguna-m.1 (Coder).
-  - Para estrategia: dolphin-mistral (Estratega).
+  - Para estrategia: hermes-3-llama-3.1-405b (Estratega).
   - Para agente general con tools: nemotron-3-super (Agente, modo ejecutor).
 
 Tools disponibles (function calling nativo para web_search; XML embebido para las demás):
@@ -470,7 +470,7 @@ Tu ventaja es latencia mínima: responde en menos de 1 token de latencia percibi
  * Construye el system prompt completo para un rol.
  *
  * @param {string} roleKey - Una de: ultra_orchestrator, super_executor, nano_vl,
- *                           nano_omni, dolphin, nemotron_ultra (alias), laguna, glm_flash.
+ *                           nano_omni, hermes, nemotron_ultra (alias), laguna, glm_flash.
  * @param {object} [opts]  - Opciones futuras (p.ej. toolMode, sharedSession).
  * @returns {string} El system prompt completo.
  */
@@ -516,13 +516,13 @@ export function buildSystemPrompt(roleKey, opts = {}) {
     ].filter(Boolean).join("\n\n---\n\n");
   }
 
-  // ultra_orchestrator, super_executor, dolphin: prompts completos.
+  // ultra_orchestrator, super_executor, hermes: prompts completos.
   return [
     base ? `=== BASE SYSTEM PROMPT ===\n${base}` : "",
     adaptation,
     TOOL_CALL_PROTOCOL,
     RESTRICTION_UNIVERSAL,
-    roleKey !== "dolphin" ? RESTRICTION_OPENROUTER : "", // dolphin es Puter, no OpenRouter
+    roleKey !== "glm_flash" ? RESTRICTION_OPENROUTER : "", // glm_flash es Puter, no OpenRouter
     RESTRICTION_IDIOMA,
   ].filter(Boolean).join("\n\n---\n\n");
 }
@@ -535,7 +535,7 @@ const ADAPTATIONS = {
   super_executor:     SUPER_EXECUTOR_ADAPTATION,
   nano_vl:            NANO_VL_ADAPTATION,
   nano_omni:          NANO_OMNI_ADAPTATION,
-  dolphin:            DOLPHIN_ADAPTATION,
+  hermes:             HERMES_ADAPTATION,
   nemotron_ultra:     NEMOTRON_ULTRA_ADAPTATION, // legacy alias — mapa a ultra_orchestrator
   laguna:             LAGUNA_ADAPTATION,
   glm_flash:          GLM_FLASH_ADAPTATION,
@@ -551,7 +551,7 @@ export const SYSTEM_PROMPTS = {
   super_executor:     buildSystemPrompt("super_executor"),
   nano_vl:            buildSystemPrompt("nano_vl"),
   nano_omni:          buildSystemPrompt("nano_omni"),
-  dolphin:            buildSystemPrompt("dolphin"),
+  hermes:             buildSystemPrompt("hermes"),
   laguna:             buildSystemPrompt("laguna"),
   glm_flash:          buildSystemPrompt("glm_flash"),
 };
@@ -567,7 +567,7 @@ export const ROLE_TO_MODEL = {
   nano_vl:            "nvidia/nemotron-nano-12b-v2-vl:free",
   nano_omni:          "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
   // Roles standalone
-  dolphin:        "cognitivecomputations/dolphin-mistral-24b-venice-edition:free",
+  hermes:         "nousresearch/hermes-3-llama-3.1-405b:free",
   laguna:         "poolside/laguna-m.1:free",
   glm_flash:      "z-ai/glm-4.5-flash",
 };

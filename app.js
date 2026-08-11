@@ -26,7 +26,7 @@
 
 import { t, applyI18n, detectInitialLang, getCurrentLang, formatDate } from "./lib/i18n.js";
 import { FALLBACK_CHAINS, MODEL_PROVIDER, getNextFallback, isFallbackExhausted, getProvider, getContextLimit, getRoleForModel } from "./lib/fallbackChains.js";
-import { TOOL_REGISTRY, isAllowed, parseToolCallXML, parseFallbackToDolphin, stripFallbackToDolphin, buildToolResultXML, escapeXML, fetchAndHydrate, getTool } from "./lib/toolRegistry.js";
+import { TOOL_REGISTRY, isAllowed, parseToolCallXML, parseFallbackToAux, stripFallbackToAux, buildToolResultXML, escapeXML, fetchAndHydrate, getTool } from "./lib/toolRegistry.js";
 import * as ContextManager from "./lib/contextManager.js";
 import { runAgentLoop } from "./lib/agentOrchestrator.js";
 import { SharedSessionManager, createShare, revokeShare, joinSession, isRoleShareable } from "./lib/sharedSession.js";
@@ -438,7 +438,7 @@ function setupEventListeners() {
         const defaultModels = {
           agent: "nvidia/nemotron-3-super-120b-a12b:free",
           coder: "poolside/laguna-m.1:free",
-          general: "cognitivecomputations/dolphin-mistral-24b-venice-edition:free",
+          general: "nousresearch/hermes-3-llama-3.1-405b:free",
         };
         state.currentModel = defaultModels[state.currentCategory];
         state.currentRole = getRoleForModel(state.currentModel);
@@ -950,7 +950,7 @@ async function createNewChat() {
   const defaultModels = {
     agent: "nvidia/nemotron-3-super-120b-a12b:free",
     coder: "poolside/laguna-m.1:free",
-    general: "cognitivecomputations/dolphin-mistral-24b-venice-edition:free",
+    general: "nousresearch/hermes-3-llama-3.1-405b:free",
   };
   state.currentModel = defaultModels[category];
   state.currentRole = getRoleForModel(state.currentModel);
@@ -1117,7 +1117,7 @@ function populateModelSelector() {
   } else {
     // general: Estratega, Pensador, Fast
     models = [
-      "cognitivecomputations/dolphin-mistral-24b-venice-edition:free",
+      "nousresearch/hermes-3-llama-3.1-405b:free",
       "nvidia/nemotron-3-super-120b-a12b:free",
       "z-ai/glm-4.5-flash",
     ];
@@ -1184,6 +1184,7 @@ function renderEmptyState() {
     <div class="empty-state">
       <div class="welcome-orb">⬡</div>
       <h2 class="welcome-title">${escapeHTML(t("welcome.title"))}</h2>
+      <p class="welcome-motto">${escapeHTML(t("welcome.motto"))}</p>
       <p class="welcome-subtitle">${escapeHTML(t("welcome.subtitle"))}</p>
       <div class="welcome-model-cards" id="welcomeModelCards" role="list"></div>
       <p class="welcome-hint">${escapeHTML(t("welcome.hint"))}</p>
@@ -1207,7 +1208,7 @@ function renderWelcomeModelCards() {
   } else {
     // general: Estratega, Pensador, Fast
     models = [
-      "cognitivecomputations/dolphin-mistral-24b-venice-edition:free",
+      "nousresearch/hermes-3-llama-3.1-405b:free",
       "nvidia/nemotron-3-super-120b-a12b:free",
       "z-ai/glm-4.5-flash",
     ];
@@ -1290,10 +1291,10 @@ function getModelDisplayInfo(modelId) {
       icon: "⚙",
       provider,
     },
-    "cognitivecomputations/dolphin-mistral-24b-venice-edition:free": {
-      shortName: "Dolphin Mistral",
+    "nousresearch/hermes-3-llama-3.1-405b:free": {
+      shortName: "Hermes-3",
       roleName: t("roles.estratega"),
-      icon: "🐬",
+      icon: "🧭",
       provider,
     },
     "z-ai/glm-4.5-flash": {
@@ -1656,36 +1657,37 @@ async function sendMessage() {
 }
 
 // ==============================================================================
-// FALLBACK ÉTICO A DOLPHIN
+// FALLBACK ASISTIDO (auxiliar de emergencia)
 // ==============================================================================
 // Cuando un modelo con restricciones de fabricante (Nemotron, Laguna) emite
-// <fallback_to_dolphin>, se re-enruta la query a Dolphin (0 censura) vía Puter.
+// <fallback_to_aux> (antes <fallback_to_dolphin>), se re-enruta la query a
+// GLM-4.5 Flash (auxiliar sin restricciones de fabricante) vía Puter.
 // ==============================================================================
-const DOLPHIN_MODEL = "cognitivecomputations/dolphin-mistral-24b-venice-edition:free";
+const AUX_MODEL = "z-ai/glm-4.5-flash";
 
 /**
- * Llama a Dolphin directamente con la query original del usuario.
- * Usa Puter.js (no pasa por el Worker) con el system prompt de Dolphin.
+ * Llama al auxiliar directamente con la query original del usuario.
+ * Usa Puter.js (no pasa por el Worker) con el system prompt del auxiliar.
  * Streaming: muestra progreso en tiempo real.
  */
-async function callDolphinForFallback(originalQuery, prefixText) {
+async function callAuxForFallback(originalQuery, prefixText) {
   if (typeof puter === "undefined" || !puter.ai?.chat) {
-    throw new Error("Puter.js no disponible para fallback a Dolphin");
+    throw new Error("Puter.js no disponible para fallback al auxiliar");
   }
 
-  const dolphinPrompt = SYSTEM_PROMPTS.dolphin;
+  const auxPrompt = SYSTEM_PROMPTS.glm_flash;
   const messages = [
-    { role: "system", content: dolphinPrompt },
+    { role: "system", content: auxPrompt },
     { role: "user", content: originalQuery },
   ];
 
-  toast(t("toast.dolphinFallback") || "Enrutando a Dolphin (sin restricciones de fabricante)...", "info", 4000);
-  showStreamingIndicator(t("stream.processing"));
+  toast(t("stream.auxFallback") || "Enrutando a GLM-4.5 Flash (auxiliar)...", "info", 4000);
+  showStreamingIndicator(t("stream.processing"), "processing");
 
   let text = "";
   try {
     const response = await puter.ai.chat(messages, {
-      model: DOLPHIN_MODEL,
+      model: AUX_MODEL,
       stream: true,
     });
 
@@ -1693,7 +1695,7 @@ async function callDolphinForFallback(originalQuery, prefixText) {
       const delta = chunk?.message?.content || chunk?.text || "";
       if (delta) {
         text += delta;
-        // Mostrar Dolphin's response con prefijo si lo hay.
+        // Mostrar la respuesta del auxiliar con prefijo si lo hay.
         updateStreamingMessage((prefixText || "") + text);
       }
     }
@@ -1709,7 +1711,7 @@ async function callDolphinForFallback(originalQuery, prefixText) {
 
   return {
     text,
-    model: DOLPHIN_MODEL,
+    model: AUX_MODEL,
     tokens_in: 0,
     tokens_out: 0,
     cached_tokens: 0,
@@ -1724,7 +1726,7 @@ async function runChatWithTools(userContent) {
   let iteration = 0;
   let assistantText = "";
   setEntityState("processing");
-  showStreamingIndicator(t("stream.processing"));
+  showStreamingIndicator(t("stream.processing"), "processing");
   setStreamingMode(true); // P0-4: mostrar Stop, ocultar Send
 
   while (iteration < maxIter) {
@@ -1763,29 +1765,29 @@ async function runChatWithTools(userContent) {
         break;
       }
 
-      // ── Fallback ético: <fallback_to_dolphin> ──
-      const dolphinFallback = parseFallbackToDolphin(response.text);
-      if (dolphinFallback) {
-        console.log("[chat] Fallback ético detectado:", dolphinFallback.reason);
-        const strippedText = stripFallbackToDolphin(response.text);
-        const prefix = strippedText ? strippedText + "\n\n--- *Fallback a Dolphin* ---\n\n" : "";
-        // Re-enrutar a Dolphin (0 censura) con la query original.
+      // ── Fallback asistido: <fallback_to_aux> ──
+      const auxFallback = parseFallbackToAux(response.text);
+      if (auxFallback) {
+        console.log("[chat] Fallback asistido detectado:", auxFallback.reason);
+        const strippedText = stripFallbackToAux(response.text);
+        const prefix = strippedText ? strippedText + "\n\n--- *Fallback a GLM-4.5 Flash (auxiliar)* ---\n\n" : "";
+        // Re-enrutar al auxiliar (GLM-4.5 Flash) con la query original.
         try {
-          const dolphinResp = await callDolphinForFallback(dolphinFallback.original_query || userContent, prefix);
-          response.text = dolphinResp.text;
-          response.model = dolphinResp.model;
-          response.tokens_in = dolphinResp.tokens_in;
-          response.tokens_out = dolphinResp.tokens_out;
+          const auxResp = await callAuxForFallback(auxFallback.original_query || userContent, prefix);
+          response.text = auxResp.text;
+          response.model = auxResp.model;
+          response.tokens_in = auxResp.tokens_in;
+          response.tokens_out = auxResp.tokens_out;
           response.cached_tokens = 0;
           assistantText += prefix + response.text;
-        } catch (dolphinErr) {
-          console.warn("[chat] Fallback a Dolphin falló:", dolphinErr.message);
+        } catch (auxErr) {
+          console.warn("[chat] Fallback al auxiliar falló:", auxErr.message);
           if (strippedText) {
             assistantText += strippedText + "\n\n";
           }
-          assistantText += `[Error: el modelo primario rechazó la query y el fallback a Dolphin falló: ${dolphinErr.message}]`;
+          assistantText += `[Error: el modelo primario rechazó la query y el fallback al auxiliar falló: ${auxErr.message}]`;
         }
-        break; // Terminar el loop — Dolphin ya respondió.
+        break; // Terminar el loop — el auxiliar ya respondió.
       }
 
       assistantText += response.text;
@@ -2060,7 +2062,7 @@ async function callModel(userContent, previousAssistantText, isFollowUp) {
     // Crear AbortController para el loop del agente.
     state.abortController = new AbortController();
     setEntityState("processing");
-    showStreamingIndicator(t("stream.processing"));
+    showStreamingIndicator(t("stream.processing"), "processing");
 
     let result;
     try {
@@ -2076,7 +2078,7 @@ async function callModel(userContent, previousAssistantText, isFollowUp) {
           updateStreamingMessage(text);
         },
         onThinking: (thinkingContent) => {
-          showStreamingIndicator(t("stream.thinking"));
+          showStreamingIndicator(t("stream.thinking"), "thinking");
         },
       });
 
@@ -2138,7 +2140,7 @@ async function callModel(userContent, previousAssistantText, isFollowUp) {
 async function callPuter(messages) {
   if (typeof puter === "undefined") throw new Error("Puter.js no cargado");
   setEntityState("processing");
-  showStreamingIndicator(t("stream.processing"));
+  showStreamingIndicator(t("stream.processing"), "processing");
 
   // P0-4: AbortController para cancelar streaming. Puter.js no soporta signal
   // nativo, así que verificamos signal.aborted dentro del loop y rompemos.
@@ -2166,7 +2168,7 @@ async function callPuter(messages) {
         // Detectar <razonamiento_interno>.
         if (delta.includes("<razonamiento_interno>")) {
           setEntityState("processing");
-          showStreamingIndicator(t("stream.thinking"));
+          showStreamingIndicator(t("stream.thinking"), "thinking");
         }
         text += delta;
         // Renderizar streaming en el último mensaje assistant.
@@ -2200,7 +2202,7 @@ async function callPuter(messages) {
 
 async function callOpenRouter(messages) {
   setEntityState("processing");
-  showStreamingIndicator(t("stream.processing"));
+  showStreamingIndicator(t("stream.processing"), "processing");
 
   // P0-4: AbortController para cancelar el fetch + reader.
   state.abortController = new AbortController();
@@ -2271,7 +2273,7 @@ async function callOpenRouter(messages) {
           }
           if (delta?.reasoning) {
             thinkingContent += delta.reasoning;
-            showStreamingIndicator(t("stream.thinking"));
+            showStreamingIndicator(t("stream.thinking"), "thinking");
           }
           if (json.usage) {
             tokens_in = json.usage.prompt_tokens || 0;
@@ -2309,14 +2311,50 @@ async function callOpenRouter(messages) {
   }
 }
 
-function showStreamingIndicator(text) {
+// ==============================================================================
+// STREAMING INDICATOR — mini-diálogos rotativos (tema OSINT)
+// ==============================================================================
+let _rotatingTimer = null;
+let _rotatingIdx = 0;
+const STREAM_ROTATION_MS = 2400;
+
+function stopRotatingLines() {
+  if (_rotatingTimer) {
+    clearInterval(_rotatingTimer);
+    _rotatingTimer = null;
+  }
+}
+
+// Rota frases cortas en el indicador mientras se procesa/piensa.
+function startRotatingLines(mode) {
+  stopRotatingLines();
+  const el = $("#streamingText");
+  if (!el) return;
+  const lines = (mode === "thinking" ? t("stream.linesThinking") : t("stream.linesProcessing")) || [];
+  if (!lines.length) return;
+  _rotatingIdx = 0;
+  const apply = () => {
+    el.textContent = lines[_rotatingIdx % lines.length];
+    _rotatingIdx++;
+  };
+  apply();
+  _rotatingTimer = setInterval(apply, STREAM_ROTATION_MS);
+}
+
+function showStreamingIndicator(text, mode) {
   const ind = $("#streamingIndicator");
   if (!ind) return;
   show(ind);
-  $("#streamingText").textContent = text;
+  if (mode === "processing" || mode === "thinking") {
+    startRotatingLines(mode);
+  } else {
+    stopRotatingLines();
+    $("#streamingText").textContent = text || "";
+  }
 }
 
 function hideStreamingIndicator() {
+  stopRotatingLines();
   hide($("#streamingIndicator"));
 }
 
@@ -3306,7 +3344,7 @@ async function loadDashboard() {
     grid.innerHTML = "";
 
     // Puter models (siempre available según Worker).
-    const puterModels = ["cognitivecomputations/dolphin-mistral-24b-venice-edition:free", "z-ai/glm-4.5-flash"];
+    const puterModels = ["z-ai/glm-4.5-flash"];
     puterModels.forEach((m) => {
       grid.innerHTML += `<div class="dashboard-card"><div class="dashboard-card-name">${m}</div><div class="dashboard-card-status status-green">🟢 Puter</div></div>`;
     });
@@ -3914,22 +3952,21 @@ function updateDeepThinkingVisibility() {
     },
     estratega: {
       name: "Estratega",
-      model: "Dolphin Mistral 24B via Puter.js",
+      model: "Hermes-3 405B via OpenRouter",
       strengths: [
-        "Análisis estratégico profundo con cero censura",
+        "Análisis estratégico profundo y directo",
         "Contexto warfare/inteligencia/contrainteligencia",
         "Evaluación de escenarios y análisis de actores",
         "Razonamiento multi-nivel: táctico, operativo y estratégico",
         "Ciclo de inteligencia completo (6 fases: dirección, recolección, procesamiento, análisis, difusión, retroalimentación)",
         "Crítica de arquitectura y evaluación de trade-offs",
         "Búsqueda web nativa como tool",
-        "Receptor de fallback ético (procesa queries que otros modelos rechazan)",
+        "Receptor de fallback asistido (procesa queries que otros modelos rechazan)",
       ],
       tips: [
-        "Sé directo — Dolphin funciona mejor con queries crudas y sin rodeos",
+        "Sé directo — Hermes-3 responde mejor con queries claras y sin rodeos",
         "Para análisis geopolíticos o de conflictos, menciona las partes involucradas",
         "Puedes pedir análisis en múltiples niveles (táctico/operativo/estratégico)",
-        "Si necesitas verificar algo que otros modelos rechazan, Dolphin lo procesa sin censura",
         "Para investigaciones largas, pide que siga el ciclo de inteligencia completo",
       ],
     },

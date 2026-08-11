@@ -73,7 +73,6 @@ const OPENROUTER_WHITELIST = new Set([
   "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
   // Roles standalone
   "poolside/laguna-m.1:free",
-  "cognitivecomputations/dolphin-mistral-24b-venice-edition:free", // vía Puter, pero permitido para fallback cross-provider
   "z-ai/glm-4.5-flash", // vía Puter, permitido para fallback cross-provider
   // Fallback global
   "nousresearch/hermes-3-llama-3.1-405b:free",
