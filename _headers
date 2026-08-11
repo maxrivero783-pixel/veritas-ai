@@ -1,5 +1,5 @@
 # ==============================================================================
-# Véritas v2.2 — _headers para Cloudflare Pages
+# Véritas v2.4 — _headers para Cloudflare Pages
 # ==============================================================================
 # Aplica headers HTTP a las respuestas servidas por Pages. Coherente con el
 # CSP del <meta> en index.html (no debe ser más restrictivo o bloqueará

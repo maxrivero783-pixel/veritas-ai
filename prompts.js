@@ -1,5 +1,5 @@
 // ==============================================================================
-// Véritas v2.2 — /prompts.js
+// Véritas v2.4 — /prompts.js
 // ==============================================================================
 // Exporta SYSTEM_PROMPTS con las 7 variantes para los roles:
 //   ultra_orchestrator → Orquestador del Agente  (nvidia/nemotron-3-ultra-550b-a55b:free)

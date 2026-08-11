@@ -1,5 +1,5 @@
 // ==============================================================================
-// Véritas v2.3 — /app.js
+// Véritas v2.4 — /app.js
 // ==============================================================================
 // Cerebro del frontend. Orquesta TODO:
 //   - Inicialización: i18n, fallback chains, tool registry, sandbox templates.
@@ -110,7 +110,7 @@ function setUserEmail() {
 // INICIALIZACIÓN
 // ==============================================================================
 async function init() {
-  console.log("[Véritas] Inicializando v2.2...");
+  console.log("[Véritas] Inicializando v2.4.0...");
 
   // Idioma inicial.
   const initialLang = state.settings.ui_lang || detectInitialLang();

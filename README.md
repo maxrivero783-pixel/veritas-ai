@@ -7,7 +7,7 @@
 
 <h1>VERITAS</h1>
 <p><strong>Multi-Role OSINT AI Orchestrator</strong></p>
-<p>Orquestador de modelos de IA multi-proveedor con 34 tools OSINT integradas,<br/>pipeline de 5 roles y sandbox con live preview.</p>
+<p>Orquestador de modelos de IA multi-proveedor con 43 tools OSINT integradas,<br/>pipeline de 5 roles y sandbox con live preview.</p>
 
 <p>
   <a href="#características">Features</a> &bull;
@@ -25,7 +25,7 @@
 ## Características
 
 - **5 roles de IA** (Agente, Estratega, Razonamiento, Coder, Fast) con modelos dedicados y cadenas de fallback
-- **34 tools OSINT** — web search, scraping, crawling, NER, DNS, Shodan, ZoomEye, IntelX, GDELT, transcripción, parseo de docs, GitHub, Dropbox, email
+- **43 tools OSINT** — web search, scraping, crawling, NER, DNS, Shodan, ZoomEye, IntelX, GDELT, transcripción, parseo de docs, GitHub, Dropbox, email
 - **API Key Rotator** — rotación automática entre múltiples keys por servicio con cooldown y telemetría
 - **Sandbox Live Preview** — ejecución de código HTML/CSS/JS con preview estilo GLM-5.2
 - **Cross-chat Memory** — memorias persistentes en D1 compartidas entre sesiones
@@ -55,7 +55,7 @@
 │  └──────────────┬──────────────────────────────┘    │
 │  ┌──────────────▼──────────────────────────────┐    │
 │  │           toolRegistry.server.js             │    │
-│  │     34 tools · Schema validation · Roles      │    │
+│  │     43 tools · Schema validation · Roles      │    │
 │  └──────────────┬──────────────────────────────┘    │
 │  ┌──────────────▼──────────────────────────────┐    │
 │  │          lib/tools/*.js (handlers)            │    │
@@ -262,8 +262,8 @@ Configura en Cloudflare Dashboard > Workers > Settings > Variables:
 
 | Variable | Descripción |
 |----------|-------------|
-| `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | GitHub |
-| `DROPBOX_CLIENT_ID` / `DROPBOX_CLIENT_SECRET` | Dropbox |
+| `GITHUB_OAUTH_CLIENT_ID` / `GITHUB_OAUTH_CLIENT_SECRET` | GitHub |
+| `DROPBOX_OAUTH_APP_KEY` / `DROPBOX_OAUTH_APP_SECRET` | Dropbox |
 
 **Email:**
 
@@ -274,6 +274,12 @@ Configura en Cloudflare Dashboard > Workers > Settings > Variables:
 | `BREVO_SENDER_NAME` | Nombre del remitente |
 
 Soporta rotación: agrega `_2`, `_3`, etc. para múltiples keys por servicio.
+
+> **Compatibilidad Brevo (mismo esquema que los otros workers OSINT):** el adaptador
+> acepta `BREVO_API_KEY_1`, o en su defecto `BREVO_API_KEY` / `EMAIL_API_KEY` como
+> fallback; el remitente puede venir de `BREVO_SENDER_EMAIL`/`BREVO_SENDER_NAME` o
+> `FROM_EMAIL`/`FROM_NAME`. Todos los correos de `send_email` se firman con:
+> **- Remitido por Véritas, la IA especializada en OSINT -**
 
 ### 4. Deploy
 
@@ -323,13 +329,13 @@ veritas-ai/
 │   │   ├── browser_use.js, browser_use_cloud.js, steel.js, steel_auth.js
 │   │   ├── apify.js, scrapingbee.js, gfw.js, brevo.js
 │   │   └── oauth/ (github.js, dropbox.js)
-│   └── tools/                 # 35 handlers
+│   └── tools/                 # 43 handlers
 │       ├── web_search.js, scrape_url.js, firecrawl_scrape.js
 │       ├── shodan_search.js, zoomeye_search.js, intelx_search.js
 │       ├── gdelt_search.js, dns_lookup.js, ner_extract.js
 │       ├── send_email.js, analyze_media.js
 │       └── ... (34+ handlers)
-├── prompts/                   # 80+ system prompts
+├── prompts/                   # 78 system prompts
 │   └── veritas_agent_system_prompt.md
 └── tools/
     ├── veritas_agent_system_prompt.md

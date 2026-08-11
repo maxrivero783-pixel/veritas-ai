@@ -1,5 +1,5 @@
 // ==============================================================================
-// Véritas v2.3 — /functions/api/[[route]].js
+// Véritas v2.4 — /functions/api/[[route]].js
 // ==============================================================================
 // Router principal del Worker. Cloudflare Pages detecta este archivo como
 // Worker automáticamente (Pages Functions con catch-all route /api/*).
