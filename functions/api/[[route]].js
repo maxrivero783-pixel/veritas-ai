@@ -270,7 +270,11 @@ function slugify(name) {
 // Helper: rutas públicas (bypass de auth — usadas por callbacks OAuth).
 // ------------------------------------------------------------------------------
 function isPublicPath(path) {
-  return /^\/api\/oauth\/[^/]+\/(start|callback)$/.test(path);
+  // OAuth: flujo de autorización (start/callback) es público.
+  if (/^\/api\/oauth\/[^/]+\/(start|callback)$/.test(path)) return true;
+  // Auth: registro, login y logout NO requieren sesión previa.
+  if (/^\/api\/auth\/(register|login|logout|me)$/.test(path)) return true;
+  return false;
 }
 
 // ------------------------------------------------------------------------------
