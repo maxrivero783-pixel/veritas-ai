@@ -235,6 +235,42 @@ async function llmCacheGet(env, key) {
     return { text: row.response_text, json: row.response_json ? JSON.parse(row.response_json) : null };
   } catch { return null; }
 }
+// ------------------------------------------------------------------------------
+// Caché de resultados de tools de solo lectura (D1, TTL 15 min por defecto).
+// ------------------------------------------------------------------------------
+const TOOL_CACHE_TTL_MS = 15 * 60 * 1000;
+const TOOL_CACHE_ALLOWLIST = new Set([
+  "web_search", "scrape_url", "gdelt_search", "dns_lookup", "ner_extract",
+  "wikipedia_search", "wikidata_search", "semantic_scholar_search", "openalex_search",
+  "crossref_search", "nasa_search", "nvd_cve_search", "cisa_kev_search", "crtsh_lookup",
+  "rdap_lookup", "geonames_search", "nominatim_search", "open_meteo_weather",
+  "hackernews_search", "pypi_package_info", "npm_package_info", "sec_edgar_search",
+  "shodan_search", "zoomeye_search", "intelx_search", "gfw_search", "jina_reader_search",
+  "jina_github_search", "rover_scrape", "github_list_repos", "github_read_file",
+  "dropbox_list_folder", "dropbox_read_file", "dropbox_search", "search_repository",
+  "read_project_file", "firecrawl_scrape",
+]);
+
+async function toolCacheGet(env, key) {
+  if (!env.DB) return null;
+  try {
+    const row = await env.DB.prepare(
+      "SELECT result_json FROM tool_cache WHERE cache_key = ? AND created_at > ?"
+    ).bind(key, Date.now() - TOOL_CACHE_TTL_MS).first();
+    if (!row) return null;
+    try { return JSON.parse(row.result_json); } catch { return null; }
+  } catch { return null; }
+}
+async function toolCacheSet(env, key, userEmail, toolName, result) {
+  if (!env.DB) return;
+  try {
+    await env.DB.prepare(
+      "INSERT INTO tool_cache (cache_key, user_email, tool_name, result_json, status, created_at) VALUES (?, ?, ?, ?, ?, ?) " +
+      "ON CONFLICT(cache_key) DO UPDATE SET result_json = excluded.result_json, created_at = excluded.created_at"
+    ).bind(key, userEmail, toolName, JSON.stringify(result), 200, Date.now()).run();
+  } catch { /* best-effort */ }
+}
+
 async function llmCacheSet(env, key, text, responseJson, model) {
   if (!env.DB) return;
   try {
@@ -461,6 +497,7 @@ export async function onRequest(context) {
 
     // 6.4 — keys management (admin)
     if (path === "/api/keys/status" && method === "GET") return await handleKeysStatus(request, env, userEmail);
+    if (path === "/api/usage" && method === "GET") return await handleUsage(request, env, userEmail);
     if (path === "/api/keys/health" && method === "POST") return await handleKeysHealth(request, env, userEmail);
     if (path === "/api/keys/cooldown/reset" && method === "POST") return await handleKeysCooldownReset(request, env, userEmail);
     if (path === "/api/keys/services" && method === "GET") return await handleKeysServices(env, userEmail);
@@ -1642,6 +1679,12 @@ async function handleChatOpenRouter(request, env, userEmail) {
   if (useCache && cacheKey && upstreamData) {
     await llmCacheSet(env, cacheKey, upstreamData.choices && upstreamData.choices[0] && upstreamData.choices[0].message && upstreamData.choices[0].message.content || "", upstreamData, model);
   }
+  if (upstreamData && upstreamData.usage) {
+    await logOpenRouterCall(env, userEmail, model, keyIndexUsed, upstreamResp.status, startTs, {
+      tokens_in: upstreamData.usage.prompt_tokens, tokens_out: upstreamData.usage.completion_tokens,
+      cached_tokens: (upstreamData.usage.prompt_tokens_details && upstreamData.usage.prompt_tokens_details.cached_tokens) || 0,
+    });
+  }
   if (upstreamData) return json(upstreamData, 200, { "X-Véritas-Key-Index": String(keyIndexUsed), ...(degraded ? { "X-Véritas-Degraded": "1" } : {}) });
   return new Response(upstreamResp.body, { status: 200, headers: respHeaders });
 }
@@ -1692,12 +1735,13 @@ function truncateToolResults(messages, limitBytes) {
   });
 }
 
-async function logOpenRouterCall(env, userEmail, model, keyIndex, status, startTs) {
+async function logOpenRouterCall(env, userEmail, model, keyIndex, status, startTs, tokens) {
   try {
+    const t = tokens || {};
     await env.DB.prepare(
-      `INSERT INTO openrouter_calls (user_email, model, key_index, status, latency_ms, ts)
-       VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`
-    ).bind(userEmail, model, keyIndex, status, Date.now() - startTs).run();
+      `INSERT INTO openrouter_calls (user_email, model, key_index, status, latency_ms, tokens_in, tokens_out, cached_tokens, ts)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`
+    ).bind(userEmail, model, keyIndex, status, Date.now() - startTs, t.tokens_in || null, t.tokens_out || null, t.cached_tokens || null).run();
   } catch (e) { /* best-effort */ }
 }
 
@@ -1749,6 +1793,60 @@ async function handleKeysStatus(request, env, userEmail) {
   }
   const status = await getPoolStatus(env, service);
   return json(status);
+}
+
+// ------------------------------------------------------------------------------
+// /api/usage — Dashboard de uso de modelos y tools (admin, últimos N días).
+// ------------------------------------------------------------------------------
+async function handleUsage(request, env, userEmail) {
+  if (!isAdmin(userEmail, env)) return errorResponse("admin_required", 403);
+  if (!env.DB) return errorResponse("no_db", 503, { message: "D1 no está configurado." });
+  const url = new URL(request.url);
+  const days = Math.min(30, Math.max(1, parseInt(url.searchParams.get("days") || "7", 10)));
+  const since = new Date(Date.now() - days * 24 * 3600 * 1000).toISOString();
+  try {
+    // Por día: llamadas de modelo, tools y tokens
+    const daily = await env.DB.prepare(
+      `SELECT substr(ts, 1, 10) AS day,
+              COUNT(*) AS model_calls,
+              COALESCE(SUM(tokens_in), 0) AS tokens_in,
+              COALESCE(SUM(tokens_out), 0) AS tokens_out,
+              COALESCE(SUM(cached_tokens), 0) AS cached_tokens
+       FROM openrouter_calls WHERE ts >= ? GROUP BY day ORDER BY day`
+    ).bind(since).all();
+
+    const toolDaily = await env.DB.prepare(
+      `SELECT substr(ts, 1, 10) AS day, COUNT(*) AS tool_calls
+       FROM tool_calls WHERE ts >= ? GROUP BY day ORDER BY day`
+    ).bind(since).all();
+
+    // Por modelo
+    const byModel = await env.DB.prepare(
+      `SELECT model, COUNT(*) AS calls, COALESCE(SUM(tokens_in), 0) AS tokens_in,
+              COALESCE(SUM(tokens_out), 0) AS tokens_out,
+              COALESCE(SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END), 0) AS errors
+       FROM openrouter_calls WHERE ts >= ? GROUP BY model ORDER BY calls DESC`
+    ).bind(since).all();
+
+    // Por tool
+    const byTool = await env.DB.prepare(
+      `SELECT tool_name, COUNT(*) AS calls,
+              COALESCE(SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END), 0) AS errors,
+              COALESCE(AVG(latency_ms), 0) AS avg_latency_ms
+       FROM tool_calls WHERE ts >= ? GROUP BY tool_name ORDER BY calls DESC`
+    ).bind(since).all();
+
+    return json({
+      days,
+      since,
+      daily: daily.results || [],
+      tool_daily: toolDaily.results || [],
+      by_model: byModel.results || [],
+      by_tool: byTool.results || [],
+    });
+  } catch (e) {
+    return errorResponse("usage_failed", 500, { message: e.message });
+  }
 }
 
 async function handleKeysHealth(request, env, userEmail) {
@@ -1813,6 +1911,17 @@ async function handleToolInvoke(request, env, userEmail) {
     }
   }
 
+  // Caché de tools de solo lectura (TTL 15 min). Desactivar con no_cache:true.
+  const useToolCache = body.no_cache !== true && TOOL_CACHE_ALLOWLIST.has(toolName);
+  let toolCacheKey = null;
+  if (useToolCache) {
+    toolCacheKey = await sha256Hex(toolName + "|" + JSON.stringify(validation.args || {}));
+    const hit = await toolCacheGet(env, toolCacheKey);
+    if (hit) {
+      return json({ ...hit, from_cache: true, cached_at: new Date().toISOString() });
+    }
+  }
+
   // Ejecutar handler.
   const startTs = Date.now();
   try {
@@ -1831,6 +1940,15 @@ async function handleToolInvoke(request, env, userEmail) {
 
     // Persistir en tool_calls (auditoría).
     persistToolCall(env, userEmail, body.chat_id, toolName, validation.args, result, latency).catch(() => {});
+
+    // Caché del resultado si la tool es de solo lectura y salió bien.
+    if (useToolCache && toolCacheKey && result && result.status === "ok") {
+      await toolCacheSet(env, toolCacheKey, userEmail, toolName, {
+        status: result.status,
+        output: result.output,
+        ...(result.extra || {}),
+      });
+    }
 
     return json({
       status: result.status || "ok",

@@ -1895,7 +1895,8 @@ async function callUncensoredStrategistFallback(originalQuery, prefixText) {
 // TOOL CALLER LOOP (máx 5 iteraciones)
 // ==============================================================================
 async function runChatWithTools(userContent) {
-  const maxIter = state.settings.tokens.maxToolIterations || 5;
+  // v2.6: máx 3 tools encadenadas por request (protege CPU 10ms y duración 30s del free tier).
+  const maxIter = Math.min(state.settings.tokens.maxToolIterations || 3, 3);
   let iteration = 0;
   let assistantText = "";
   setEntityState("processing");
@@ -3889,7 +3890,61 @@ async function loadDashboard() {
     // Si admin, cargar keys panel.
     // No sabemos si somos admin desde el frontend; lo intentamos y ocultamos si 403.
     loadKeysDashboard();
+    loadUsageDashboard();
   } catch (e) { /* best-effort */ }
+}
+
+// v2.6 — Dashboard de uso de modelos y tools (admin). /api/usage
+async function loadUsageDashboard() {
+  const panel = $("#usageDashboard");
+  if (!panel) return;
+  panel.innerHTML = '<p class="usage-loading">Cargando uso…</p>';
+  try {
+    const resp = await fetch("/api/usage?days=7");
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      panel.innerHTML = `<p class="usage-error">${escapeHTML((err && err.error) || "Sin permisos de admin")}</p>`;
+      return;
+    }
+    const data = await resp.json();
+    let html = "";
+
+    // Barras por día (modelos + tools)
+    const days = data.daily || [];
+    const maxCalls = Math.max(1, ...days.map((d) => Number(d.model_calls) || 0));
+    html += '<h4>Llamadas de modelo por día</h4><div class="usage-bars">';
+    for (const d of days) {
+      const h = Math.round((Number(d.model_calls) / maxCalls) * 60);
+      html += `<div class="usage-bar-col" title="${escapeHTML(d.day)}: ${d.model_calls} llamadas">
+                 <div class="usage-bar" style="height:${h}px"></div>
+                 <span class="usage-bar-label">${escapeHTML(String(d.day).slice(5))}</span>
+               </div>`;
+    }
+    html += "</div>";
+
+    // Totales
+    const totalIn = days.reduce((a, d) => a + (Number(d.tokens_in) || 0), 0);
+    const totalOut = days.reduce((a, d) => a + (Number(d.tokens_out) || 0), 0);
+    html += `<p class="usage-totals">Tokens (7d): <strong>${totalIn.toLocaleString()}</strong> in · <strong>${totalOut.toLocaleString()}</strong> out · <strong>${data.daily.length}</strong> días con actividad</p>`;
+
+    // Por modelo
+    html += '<h4>Uso por modelo</h4><table class="usage-table"><tr><th>Modelo</th><th>Llamadas</th><th>Tokens in</th><th>Tokens out</th><th>Errores</th></tr>';
+    for (const m of (data.by_model || []).slice(0, 12)) {
+      html += `<tr><td>${escapeHTML(m.model)}</td><td>${m.calls}</td><td>${Number(m.tokens_in).toLocaleString()}</td><td>${Number(m.tokens_out).toLocaleString()}</td><td class="${m.errors ? "usage-err" : ""}">${m.errors}</td></tr>`;
+    }
+    html += "</table>";
+
+    // Por tool
+    html += '<h4>Uso por tool</h4><table class="usage-table"><tr><th>Tool</th><th>Llamadas</th><th>Errores</th><th>Lat. media</th></tr>';
+    for (const t of (data.by_tool || []).slice(0, 15)) {
+      html += `<tr><td>${escapeHTML(t.tool_name)}</td><td>${t.calls}</td><td class="${t.errors ? "usage-err" : ""}">${t.errors}</td><td>${Math.round(Number(t.avg_latency_ms))}ms</td></tr>`;
+    }
+    html += "</table>";
+
+    panel.innerHTML = html;
+  } catch (e) {
+    panel.innerHTML = `<p class="usage-error">Error: ${escapeHTML(e.message)}</p>`;
+  }
 }
 
 async function loadKeysDashboard() {
