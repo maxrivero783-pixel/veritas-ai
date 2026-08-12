@@ -10,7 +10,7 @@ Véritas no es solo un chat. Es un **centro de mando**: combina modelos IA, memo
 
 - 🧠 **Orquestación multi-modelo**: 3 roles visibles — Agente, Estratega y Fast — con toggles internos Pensador y Code-first.
 - 🧩 **77 skills built-in** en `prompts/`: verificación, OSINT, análisis, código, escritura, media, negocios, diseño, documentos y educación.
-- 🛠️ **43 tools registradas** con dispatcher único, validación de argumentos y permisos por rol.
+- 🛠️ **63 tools registradas** con dispatcher único, validación de argumentos y permisos por rol.
 - 🔁 **Rotación de API keys** con cooldown, health checks y estado persistido en D1.
 - 🔎 **Investigación y scraping multi-proveedor**: Jina, Tavily, Serper, Firecrawl, ScrapingBee, Spider Cloud, Rover, Browserless, Steel, Browser-use, GDELT y más.
 - 🛰️ **OSINT defensivo**: DNS, Shodan, ZoomEye, Intelligence X, GFW, Apify Social/Places, NER y análisis coordinado.

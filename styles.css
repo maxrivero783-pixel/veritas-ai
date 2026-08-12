@@ -658,6 +658,21 @@ body.is-offline .status-text::before { content: "Sin conexión"; }
 }
 .message.user .message-content-wrapper { align-items: flex-end; }
 
+
+/* v2.5-debug H4: contenedores base que faltaban */
+.chat-model-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: 8px;
+}
+.message-author {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary, #e2e8f0);
+  margin-right: 8px;
+}
+
 .message-header {
   font-size: 11px;
   color: var(--text-muted);
@@ -2561,3 +2576,31 @@ body.is-offline .send-btn { background: var(--text-muted); }
   background: rgba(245, 158, 11, .45); color: inherit; border-radius: 3px; padding: 0 1px;
 }
 mark.search-current { background: rgba(80, 200, 120, .6); }
+
+/* v2.5-debug H5: panel de estado de keys (antes sin estilos) */
+.dashboard-keys {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+.dashboard-keys .key-card {
+  background: var(--bg-elev, #111827);
+  border: 1px solid #2a3a5c;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 12px;
+}
+.dashboard-keys .key-card .key-name {
+  font-weight: 600;
+  color: var(--text-primary, #e2e8f0);
+  margin-bottom: 4px;
+  word-break: break-all;
+}
+.dashboard-keys .key-card .key-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-secondary, #94a3b8);
+}
