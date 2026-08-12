@@ -357,6 +357,17 @@ CREATE INDEX IF NOT EXISTS idx_userskills_id ON user_skills(user_email, id);
 CREATE TABLE IF NOT EXISTS notification_events (id INTEGER PRIMARY KEY AUTOINCREMENT, user_email TEXT NOT NULL, event_type TEXT NOT NULL, dedupe_key TEXT, status TEXT NOT NULL, provider TEXT DEFAULT 'brevo', recipient TEXT, subject TEXT, error TEXT, ts DATETIME DEFAULT CURRENT_TIMESTAMP);
 CREATE INDEX IF NOT EXISTS idx_notification_events_user ON notification_events(user_email, ts DESC);
 CREATE INDEX IF NOT EXISTS idx_notification_events_dedupe ON notification_events(user_email, dedupe_key, ts DESC);
+-- Caché de resultados de tools de solo lectura (TTL por created_at)
+CREATE TABLE IF NOT EXISTS tool_cache (
+  cache_key TEXT PRIMARY KEY,                         -- sha256(tool_name + args_json)
+  user_email TEXT NOT NULL,
+  tool_name TEXT NOT NULL,
+  result_json TEXT NOT NULL,
+  status INTEGER DEFAULT 200,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_tool_cache_created ON tool_cache(created_at);
+
 CREATE TABLE IF NOT EXISTS llm_cache (
   cache_key TEXT PRIMARY KEY,                         -- sha256(modelo + mensajes)
   response_text TEXT NOT NULL,

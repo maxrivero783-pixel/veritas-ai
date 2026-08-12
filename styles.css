@@ -2604,3 +2604,18 @@ mark.search-current { background: rgba(80, 200, 120, .6); }
   font-size: 11px;
   color: var(--text-secondary, #94a3b8);
 }
+
+/* v2.6 — Dashboard de uso */
+.usage-dashboard { margin-top: 10px; }
+.usage-loading, .usage-error { color: var(--text-secondary, #94a3b8); font-size: 13px; }
+.usage-error { color: var(--accent-red, #f87171); }
+.usage-bars { display: flex; gap: 6px; align-items: flex-end; min-height: 80px; padding: 8px 0; overflow-x: auto; }
+.usage-bar-col { display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 42px; }
+.usage-bar { width: 22px; border-radius: 4px 4px 0 0; background: linear-gradient(180deg, var(--accent-eme, #50C878), rgba(80,200,120,.25)); transition: height .3s; }
+.usage-bar-label { font-size: 10px; color: var(--text-muted, #64748b); }
+.usage-totals { font-size: 12px; color: var(--text-secondary, #94a3b8); margin: 8px 0; }
+.usage-table { width: 100%; border-collapse: collapse; font-size: 12px; margin: 6px 0 14px; }
+.usage-table th, .usage-table td { padding: 5px 8px; text-align: left; border-bottom: 1px solid rgba(42,58,92,.4); }
+.usage-table th { color: var(--accent-eme, #50C878); font-weight: 600; }
+.usage-table td { color: var(--text-secondary, #94a3b8); font-family: ui-monospace, monospace; }
+.usage-err { color: var(--accent-red, #f87171); font-weight: 600; }
