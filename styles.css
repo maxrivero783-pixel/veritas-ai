@@ -2471,3 +2471,93 @@ body.is-offline .send-btn { background: var(--text-muted); }
   width: 16px;
   height: 16px;
 }
+
+/* ==============================================================================
+   v2.5 — Auth, modal, onboarding, búsqueda en conversación, tema, export
+   ============================================================================== */
+
+/* --- Auth --- */
+#authView {
+  position: fixed; inset: 0; z-index: 3000;
+  display: flex; align-items: center; justify-content: center;
+  background: linear-gradient(135deg, var(--bg-base, #0a0f1c), #101b33);
+}
+#authView[hidden] { display: none; }
+.auth-card {
+  background: var(--bg-elev, #111827); border: 1px solid #1f2937; border-radius: 16px;
+  padding: 34px 30px; width: min(380px, 92vw); text-align: center;
+  box-shadow: 0 20px 60px rgba(0,0,0,.45);
+}
+.auth-title { font-family: var(--font-display); font-size: 28px; color: var(--accent-eme, #50C878); margin: 6px 0 2px; }
+.auth-motto { font-size: 13px; color: var(--text-secondary, #94a3b8); font-style: italic; margin-bottom: 14px; }
+.auth-subtitle { font-size: 12px; color: var(--text-muted, #64748b); margin-bottom: 16px; }
+#authForm input {
+  width: 100%; box-sizing: border-box; margin: 8px 0; padding: 11px 12px;
+  border-radius: 10px; border: 1px solid #2a3a5c; background: #0b1220; color: var(--text-primary, #e2e8f0);
+  font-size: 14px;
+}
+#authForm input:focus { outline: none; border-color: var(--accent-eme, #50C878); }
+.auth-error { color: var(--accent-red, #f87171); font-size: 12px; margin: 6px 0; }
+.auth-actions { display: flex; gap: 10px; margin-top: 14px; }
+.auth-btn {
+  flex: 1; padding: 10px 14px; border-radius: 10px; border: 1px solid #2a3a5c;
+  background: #141d33; color: var(--text-primary, #e2e8f0); font-size: 14px; font-weight: 600; cursor: pointer;
+}
+.auth-btn:hover { border-color: var(--accent-eme, #50C878); }
+.auth-btn.primary { background: var(--accent-eme, #50C878); color: #04120a; border-color: transparent; }
+.auth-btn.danger { background: var(--accent-red, #f87171); color: #2a0a0a; border-color: transparent; }
+
+/* --- Modal --- */
+#modalRoot[hidden] { display: none; }
+.modal-overlay {
+  position: fixed; inset: 0; z-index: 2500; background: rgba(4,8,16,.72);
+  display: flex; align-items: center; justify-content: center; backdrop-filter: blur(3px);
+}
+.modal-box {
+  background: var(--bg-elev, #111827); border: 1px solid #2a3a5c; border-radius: 14px;
+  padding: 24px 22px; width: min(420px, 92vw); box-shadow: 0 20px 60px rgba(0,0,0,.5);
+}
+.modal-box h3 { color: var(--accent-eme, #50C878); margin: 0 0 10px; font-size: 17px; }
+.modal-box p { color: var(--text-secondary, #94a3b8); font-size: 14px; line-height: 1.5; margin: 0 0 18px; white-space: pre-wrap; }
+.modal-actions { display: flex; gap: 10px; justify-content: flex-end; }
+.modal-actions .auth-btn { flex: 0 0 auto; min-width: 110px; }
+
+/* --- Onboarding --- */
+#onboardingOverlay[hidden] { display: none; }
+#onboardingOverlay {
+  position: fixed; inset: 0; z-index: 2600; background: rgba(4,8,16,.82);
+  display: flex; align-items: center; justify-content: center; backdrop-filter: blur(4px);
+}
+.onboarding-box {
+  background: var(--bg-elev, #111827); border: 1px solid #2a3a5c; border-radius: 18px;
+  padding: 30px; width: min(520px, 92vw); text-align: center;
+}
+.onboarding-slide { display: none; }
+.onboarding-slide.active { display: block; animation: fadeIn .25s ease; }
+.onboarding-icon { font-size: 44px; margin-bottom: 10px; }
+.onboarding-slide h3 { color: var(--accent-eme, #50C878); margin: 0 0 10px; font-size: 19px; }
+.onboarding-slide p { color: var(--text-secondary, #94a3b8); font-size: 14px; line-height: 1.6; margin: 0; }
+.onboarding-nav { display: flex; align-items: center; gap: 8px; margin-top: 22px; }
+.onboarding-dots { display: flex; gap: 6px; flex: 1; justify-content: center; }
+.onboarding-dots .dot { width: 8px; height: 8px; border-radius: 50%; background: #2a3a5c; transition: background .2s; }
+.onboarding-dots .dot.active { background: var(--accent-eme, #50C878); }
+
+/* --- Header del chat: búsqueda, export, tema --- */
+.chat-header-tools { display: flex; align-items: center; gap: 8px; margin-left: 12px; }
+.chat-inline-search {
+  width: 220px; padding: 6px 10px; border-radius: 8px; border: 1px solid #2a3a5c;
+  background: #0b1220; color: var(--text-primary, #e2e8f0); font-size: 12px;
+}
+.chat-inline-search:focus { outline: none; border-color: var(--accent-eme, #50C878); }
+.search-count { font-size: 11px; color: var(--text-muted, #64748b); white-space: nowrap; }
+.btn-icon {
+  background: transparent; border: 1px solid #2a3a5c; border-radius: 8px; color: var(--text-secondary, #94a3b8);
+  font-size: 15px; width: 32px; height: 32px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+}
+.btn-icon:hover { border-color: var(--accent-eme, #50C878); color: var(--accent-eme, #50C878); }
+
+/* Resaltado de búsqueda en mensajes */
+.message-body mark, .message mark {
+  background: rgba(245, 158, 11, .45); color: inherit; border-radius: 3px; padding: 0 1px;
+}
+mark.search-current { background: rgba(80, 200, 120, .6); }

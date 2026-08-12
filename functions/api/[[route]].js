@@ -81,9 +81,46 @@ const OPENROUTER_WHITELIST = new Set([
 ]);
 
 // ------------------------------------------------------------------------------
-// Helper: extraer user_email del header Cloudflare Access o dev fallback.
+// Contexto por request (para CORS y helpers sin pasar request por todas partes).
 // ------------------------------------------------------------------------------
-function getUserEmail(request, env) {
+let _ctxRequest = null;
+let _ctxEnv = null;
+
+function setCtx(req, env) { _ctxRequest = req; _ctxEnv = env; }
+
+// Devuelve el Origin permitido ("DENY" si viene de otro sitio, null si no hay Origin).
+function allowedOrigin() {
+  const req = _ctxRequest;
+  if (!req) return null;
+  const origin = req.headers.get("Origin");
+  if (!origin) return null; // mismo-origen (fetch interno) → sin ACAO, sin bloqueo
+  try {
+    const originHost = new URL(origin).host;
+    const selfHost = new URL(req.url).host;
+    const appOrigin = (_ctxEnv && _ctxEnv.APP_ORIGIN) || "";
+    if (originHost === selfHost) return origin;
+    if (appOrigin && origin === appOrigin) return origin;
+    return "DENY";
+  } catch { return "DENY"; }
+}
+
+// ------------------------------------------------------------------------------
+// Helper: extraer user_email. Fuentes en orden:
+//   1) Sesión de login (Authorization: Bearer <token> o header x-veritas-token)
+//   2) Header Cloudflare Access (cf-access-user-email) — compatibilidad
+//   3) DEV_USER_EMAIL (dev local)
+// ------------------------------------------------------------------------------
+async function getUserEmail(request, env) {
+  const auth = request.headers.get("Authorization") || "";
+  const token = auth.startsWith("Bearer ") ? auth.slice(7).trim() : (request.headers.get("x-veritas-token") || "");
+  if (token && env.DB) {
+    try {
+      const row = await env.DB.prepare(
+        "SELECT s.user_email FROM sessions s WHERE s.token = ? AND s.expires_at > ?"
+      ).bind(token, Date.now()).first();
+      if (row && row.user_email) return String(row.user_email).toLowerCase();
+    } catch { /* sesión inválida o D1 no disponible */ }
+  }
   const fromHeader = request.headers.get("cf-access-user-email");
   if (fromHeader && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(fromHeader)) return fromHeader.toLowerCase();
   if (env.DEV_USER_EMAIL) return env.DEV_USER_EMAIL.toLowerCase();
@@ -91,24 +128,121 @@ function getUserEmail(request, env) {
 }
 
 // ------------------------------------------------------------------------------
-// Helper: respuestas JSON estándar.
+// Helper: respuestas JSON estándar (CORS restringido al propio origen).
 // ------------------------------------------------------------------------------
 function json(data, status = 200, extraHeaders = {}) {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: {
-      "Content-Type": "application/json; charset=utf-8",
-      "Cache-Control": "no-store",
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Headers": "Content-Type, cf-access-user-email, x-veritas-role",
-      "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
-      ...extraHeaders,
-    },
-  });
+  const ao = allowedOrigin();
+  if (ao === "DENY") {
+    return new Response(JSON.stringify({ error: "forbidden_origin" }), {
+      status: 403,
+      headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" },
+    });
+  }
+  const headers = {
+    "Content-Type": "application/json; charset=utf-8",
+    "Cache-Control": "no-store",
+    ...(ao ? { "Access-Control-Allow-Origin": ao, "Vary": "Origin" } : {}),
+    "Access-Control-Allow-Headers": "Content-Type, Authorization, x-veritas-token, cf-access-user-email, x-veritas-role",
+    "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+    ...extraHeaders,
+  };
+  return new Response(JSON.stringify(data), { status, headers });
 }
 
 function errorResponse(error, status, extra = {}) {
   return json({ error, ...extra }, status);
+}
+
+// ------------------------------------------------------------------------------
+// Auth por email+contraseña (PBKDF2-SHA256 vía Web Crypto) + sesiones en D1.
+// ------------------------------------------------------------------------------
+function bufToHex(buf) {
+  return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+async function hashPassword(password, saltHex) {
+  const enc = new TextEncoder();
+  const keyMaterial = await crypto.subtle.importKey("raw", enc.encode(password), "PBKDF2", false, ["deriveBits"]);
+  const salt = saltHex ? hexToBuf(saltHex) : crypto.getRandomValues(new Uint8Array(16));
+  const bits = await crypto.subtle.deriveBits(
+    { name: "PBKDF2", salt, iterations: 100000, hash: "SHA-256" },
+    keyMaterial,
+    256
+  );
+  return { hash: bufToHex(bits), salt: bufToHex(salt) };
+}
+function hexToBuf(hex) {
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(hex.substr(i * 2, 2), 16);
+  return bytes;
+}
+function newToken() {
+  const b = crypto.getRandomValues(new Uint8Array(32));
+  return bufToHex(b);
+}
+async function createSession(env, email) {
+  const token = newToken();
+  const expires = Date.now() + 7 * 24 * 3600 * 1000; // 7 días
+  await env.DB.prepare("INSERT INTO sessions (token, user_email, expires_at) VALUES (?, ?, ?)")
+    .bind(token, email, expires).run();
+  return { token, expires_at: expires };
+}
+async function destroySession(env, request) {
+  const auth = request.headers.get("Authorization") || "";
+  const token = auth.startsWith("Bearer ") ? auth.slice(7).trim() : (request.headers.get("x-veritas-token") || "");
+  if (token && env.DB) {
+    await env.DB.prepare("DELETE FROM sessions WHERE token = ?").bind(token).run();
+  }
+}
+
+// ------------------------------------------------------------------------------
+// Rate limiting silencioso por usuario (D1). Devuelve { limited, retryAfterSec }.
+// ------------------------------------------------------------------------------
+async function rateLimit(env, userEmail, scope, limit, windowSec) {
+  if (!env.DB || !userEmail) return { limited: false };
+  const win = Math.floor(Date.now() / 1000 / windowSec);
+  const key = `rl:${scope}:${userEmail}:${win}`;
+  try {
+    await env.DB.prepare(
+      "INSERT INTO rate_limits (scope_key, count, window_start) VALUES (?, 1, ?) " +
+      "ON CONFLICT(scope_key) DO UPDATE SET count = count + 1"
+    ).bind(key, win * windowSec).run();
+    const row = await env.DB.prepare("SELECT count FROM rate_limits WHERE scope_key = ?").bind(key).first();
+    const count = row ? Number(row.count) : 1;
+    if (count > limit) {
+      return { limited: true, retryAfterSec: Math.max(1, (win + 1) * windowSec - Math.floor(Date.now() / 1000)) };
+    }
+    return { limited: false };
+  } catch {
+    return { limited: false }; // fail-open silencioso
+  }
+}
+
+// ------------------------------------------------------------------------------
+// Caché de respuestas LLM (D1, TTL 24h). Opt-in con cache:true en el body.
+// ------------------------------------------------------------------------------
+async function sha256Hex(str) {
+  const data = new TextEncoder().encode(str);
+  const digest = await crypto.subtle.digest("SHA-256", data);
+  return bufToHex(digest);
+}
+async function llmCacheGet(env, key) {
+  if (!env.DB) return null;
+  try {
+    const row = await env.DB.prepare(
+      "SELECT response_text, response_json FROM llm_cache WHERE cache_key = ? AND created_at > ?"
+    ).bind(key, Date.now() - 24 * 3600 * 1000).first();
+    if (!row) return null;
+    return { text: row.response_text, json: row.response_json ? JSON.parse(row.response_json) : null };
+  } catch { return null; }
+}
+async function llmCacheSet(env, key, text, responseJson, model) {
+  if (!env.DB) return;
+  try {
+    await env.DB.prepare(
+      "INSERT INTO llm_cache (cache_key, response_text, response_json, model, created_at) VALUES (?, ?, ?, ?, ?) " +
+      "ON CONFLICT(cache_key) DO UPDATE SET response_text = excluded.response_text, response_json = excluded.response_json, model = excluded.model, created_at = excluded.created_at"
+    ).bind(key, text || "", responseJson ? JSON.stringify(responseJson) : null, model || "", Date.now()).run();
+  } catch { /* best-effort */ }
 }
 
 // ------------------------------------------------------------------------------
@@ -143,33 +277,125 @@ function isPublicPath(path) {
 // CORS preflight.
 // ------------------------------------------------------------------------------
 function handleCORS() {
-  return new Response(null, {
-    status: 204,
-    headers: {
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Headers": "Content-Type, cf-access-user-email, x-veritas-role",
-      "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
-      "Access-Control-Max-Age": "86400",
-    },
+  const ao = allowedOrigin();
+  if (ao === "DENY") return new Response(null, { status: 403 });
+  const headers = {
+    "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization, x-veritas-token, cf-access-user-email, x-veritas-role",
+    "Access-Control-Max-Age": "86400",
+    ...(ao ? { "Access-Control-Allow-Origin": ao, "Vary": "Origin" } : {}),
+  };
+  return new Response(null, { status: 204, headers });
+},
   });
 }
 
 // ==============================================================================
 // MAIN ENTRY POINT
 // ==============================================================================
+
+// ------------------------------------------------------------------------------
+// Auth: registro y login con email+contraseña.
+// Registro: habilitado por defecto; desactívalo con env.ALLOW_REGISTRATION === "false".
+// ------------------------------------------------------------------------------
+async function handleAuthRegister(request, env) {
+  if (env.ALLOW_REGISTRATION === "false") return errorResponse("registration_disabled", 403, { message: "El registro está deshabilitado." });
+  if (!env.DB) return errorResponse("no_db", 503, { message: "D1 no está configurado." });
+  const body = await request.json().catch(() => ({}));
+  const email = String(body.email || "").trim().toLowerCase();
+  const password = String(body.password || "");
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return errorResponse("invalid_email", 400, { message: "Email inválido." });
+  if (password.length < 8) return errorResponse("weak_password", 400, { message: "La contraseña debe tener al menos 8 caracteres." });
+  const existing = await env.DB.prepare("SELECT email FROM users WHERE email = ?").bind(email).first().catch(() => null);
+  if (existing) return errorResponse("email_taken", 409, { message: "Ese email ya está registrado." });
+  const { hash, salt } = await hashPassword(password, null);
+  try {
+    await env.DB.prepare("INSERT INTO users (email, password_hash, password_salt) VALUES (?, ?, ?)")
+      .bind(email, hash, salt).run();
+  } catch (e) {
+    return errorResponse("register_failed", 500, { message: e.message });
+  }
+  const session = await createSession(env, email);
+  return json({ ok: true, user: email, token: session.token, expires_at: session.expires_at }, 201);
+}
+
+async function handleAuthLogin(request, env) {
+  if (!env.DB) return errorResponse("no_db", 503, { message: "D1 no está configurado." });
+  const body = await request.json().catch(() => ({}));
+  const email = String(body.email || "").trim().toLowerCase();
+  const password = String(body.password || "");
+  const user = await env.DB.prepare("SELECT email, password_hash, password_salt FROM users WHERE email = ?")
+    .bind(email).first().catch(() => null);
+  if (!user || !user.password_hash || !user.password_salt) {
+    return errorResponse("invalid_credentials", 401, { message: "Email o contraseña incorrectos." });
+  }
+  const { hash } = await hashPassword(password, user.password_salt);
+  if (hash !== user.password_hash) {
+    return errorResponse("invalid_credentials", 401, { message: "Email o contraseña incorrectos." });
+  }
+  const session = await createSession(env, email);
+  return json({ ok: true, user: email, token: session.token, expires_at: session.expires_at });
+}
+
+// ------------------------------------------------------------------------------
+// Exportar datos del usuario (chats + mensajes + memorias) en JSON.
+// ------------------------------------------------------------------------------
+async function handleExportData(request, env) {
+  if (!env.DB) return errorResponse("no_db", 503, { message: "D1 no está configurado." });
+  const userEmail = await getUserEmail(request, env);
+  if (!userEmail) return errorResponse("unauthorized", 401);
+  try {
+    const chats = await env.DB.prepare(
+      "SELECT id, title, category, model, created_at, updated_at FROM chats WHERE user_email = ? ORDER BY updated_at DESC"
+    ).bind(userEmail).all();
+    const messages = await env.DB.prepare(
+      "SELECT chat_id, role, model, provider, content, thinking_content, tools_used, tokens_in, tokens_out, created_at FROM messages WHERE author_email = ? ORDER BY created_at ASC"
+    ).bind(userEmail).all();
+    const memories = await env.DB.prepare(
+      "SELECT id, content, tags, importance, created_at FROM user_memories WHERE user_email = ? ORDER BY created_at DESC"
+    ).bind(userEmail).all();
+    const payload = {
+      exported_at: new Date().toISOString(),
+      app: "Véritas AI",
+      version: "2.4",
+      user: userEmail,
+      chats: (chats.results || []).map((c) => ({ ...c, messages: (messages.results || []).filter((m) => m.chat_id === c.id) })),
+      memories: memories.results || [],
+    };
+    return json(payload, 200, { "Content-Disposition": 'attachment; filename="veritas-export.json"' });
+  } catch (e) {
+    return errorResponse("export_failed", 500, { message: e.message });
+  }
+}
+
 export async function onRequest(context) {
   const { request, env, params } = context;
+  setCtx(request, env);
   const url = new URL(request.url);
   const path = url.pathname;
   const method = request.method.toUpperCase();
 
   if (method === "OPTIONS") return handleCORS();
 
-  // Auth (excepto paths públicos de OAuth).
-  const userEmail = getUserEmail(request, env);
+  // Auth pública: registro y login NO requieren sesión.
+  if (path === "/api/auth/register" && method === "POST") return await handleAuthRegister(request, env);
+  if (path === "/api/auth/login" && method === "POST") return await handleAuthLogin(request, env);
+  if (path === "/api/auth/logout" && method === "POST") {
+    await destroySession(env, request);
+    return json({ ok: true });
+  }
+  if (path === "/api/auth/me" && method === "GET") {
+    const me = await getUserEmail(request, env);
+    if (!me) return errorResponse("unauthorized", 401, { message: "No hay sesión activa." });
+    return json({ user: me });
+  }
+  if (path === "/api/export" && method === "GET") return await handleExportData(request, env);
+
+  // Auth (sesión de login, o header Cloudflare Access, o dev fallback).
+  const userEmail = await getUserEmail(request, env);
   if (!isPublicPath(path) && !userEmail) {
     return errorResponse("unauthorized", 401, {
-      message: "Missing cf-access-user-email header. Configure Cloudflare Access or set DEV_USER_EMAIL.",
+      message: "No autenticado. Inicia sesión con email y contraseña (o configura Cloudflare Access / DEV_USER_EMAIL).",
     });
   }
 
@@ -344,6 +570,9 @@ export async function onRequest(context) {
 // 6.1 — SEARCH (proxy a Jina → Tavily → Serper con fallback encadenado)
 // ==============================================================================
 async function handleSearch(request, env, userEmail) {
+  // Rate limiting silencioso (20 req/min).
+  const rl = await rateLimit(env, userEmail, "search", 20, 60);
+  if (rl.limited) return errorResponse("rate_limited", 429, { message: "Límite temporal de búsquedas alcanzado.", retry_after_sec: rl.retryAfterSec });
   const { query, max_results = 5 } = await request.json().catch(() => ({}));
   if (!query) return errorResponse("missing_query", 400);
 
@@ -456,6 +685,9 @@ function normalizeSerperSearch(data) {
 // 6.1 — SCRAPE (Jina r.jina.ai → ScrapingBee)
 // ==============================================================================
 async function handleScrape(request, env, userEmail) {
+  // Rate limiting silencioso (15 req/min).
+  const rl = await rateLimit(env, userEmail, "scrape", 15, 60);
+  if (rl.limited) return errorResponse("rate_limited", 429, { message: "Límite temporal de scraping alcanzado.", retry_after_sec: rl.retryAfterSec });
   const { url: targetUrl, render_js = false } = await request.json().catch(() => ({}));
   if (!targetUrl) return errorResponse("missing_url", 400);
 
@@ -1262,6 +1494,21 @@ async function handleChatOpenRouter(request, env, userEmail) {
     return errorResponse("missing_messages", 400);
   }
 
+  // Rate limiting silencioso por usuario (30 req/min).
+  const rl = await rateLimit(env, userEmail, "chat", 30, 60);
+  if (rl.limited) {
+    return errorResponse("rate_limited", 429, { message: "Límite temporal de peticiones alcanzado. Intenta en unos segundos.", retry_after_sec: rl.retryAfterSec });
+  }
+
+  // Caché opt-in (cache:true, solo no-stream y no compartido): 24h.
+  const useCache = clientBody.cache === true && !is_shared && !stream;
+  let cacheKey = null;
+  if (useCache) {
+    cacheKey = await sha256Hex(model + "|" + JSON.stringify(messages));
+    const hit = await llmCacheGet(env, cacheKey);
+    if (hit) return json({ ...(hit.json || { cached_text: hit.text }), cached: true, model, from_cache: true });
+  }
+
   // --- Construir body upstream ---
   const upstreamBody = { ...clientBody };
   delete upstreamBody.chat_id;
@@ -1382,11 +1629,16 @@ async function handleChatOpenRouter(request, env, userEmail) {
     return new Response(upstreamResp.body.pipeThrough(writable), { status: 200, headers });
   }
 
-  // Non-streaming: devolver JSON tal cual + header con key_index.
+  // Non-streaming: devolver JSON tal cual + header con key_index (+ caché).
   const respHeaders = new Headers();
   respHeaders.set("Content-Type", "application/json");
   respHeaders.set("X-Véritas-Key-Index", String(keyIndexUsed));
   if (degraded) respHeaders.set("X-Véritas-Degraded", "1");
+  const upstreamData = await upstreamResp.json().catch(() => null);
+  if (useCache && cacheKey && upstreamData) {
+    await llmCacheSet(env, cacheKey, upstreamData.choices && upstreamData.choices[0] && upstreamData.choices[0].message && upstreamData.choices[0].message.content || "", upstreamData, model);
+  }
+  if (upstreamData) return json(upstreamData, 200, { "X-Véritas-Key-Index": String(keyIndexUsed), ...(degraded ? { "X-Véritas-Degraded": "1" } : {}) });
   return new Response(upstreamResp.body, { status: 200, headers: respHeaders });
 }
 
@@ -1521,6 +1773,9 @@ async function handleKeysServices(env, userEmail) {
 // 6.5 — TOOL INVOKE (dispatcher único)
 // ==============================================================================
 async function handleToolInvoke(request, env, userEmail) {
+  // Rate limiting silencioso (60 req/min — las tools se invocan en ráfaga).
+  const rl = await rateLimit(env, userEmail, "tool", 60, 60);
+  if (rl.limited) return errorResponse("rate_limited", 429, { message: "Límite temporal de invocación alcanzado.", retry_after_sec: rl.retryAfterSec });
   const body = await request.json().catch(() => ({}));
   const { tool: toolName, args } = body;
   const role = request.headers.get("x-veritas-role") || body.role || null;
@@ -2308,11 +2563,29 @@ async function handleOfflineBundle(env, userEmail) {
 // Inyecta el system prompt correspondiente (super_executor o ultra_orchestrator).
 // Retorna streaming SSE igual que /api/chat/openrouter.
 async function handleAgentOrchestrate(request, env, userEmail) {
+  // Rate limiting silencioso (30 req/min).
+  const rl = await rateLimit(env, userEmail, "chat", 30, 60);
+  if (rl.limited) return errorResponse("rate_limited", 429, { message: "Límite temporal de peticiones alcanzado.", retry_after_sec: rl.retryAfterSec });
   const body = await request.json().catch(() => ({}));
   const { chat_id, messages, model, escalate, stream = true, skills_block, memory_block } = body;
 
   if (!Array.isArray(messages) || messages.length === 0) {
     return errorResponse("missing_messages", 400);
+  }
+
+  // Rate limiting silencioso por usuario (30 req/min).
+  const rl = await rateLimit(env, userEmail, "chat", 30, 60);
+  if (rl.limited) {
+    return errorResponse("rate_limited", 429, { message: "Límite temporal de peticiones alcanzado. Intenta en unos segundos.", retry_after_sec: rl.retryAfterSec });
+  }
+
+  // Caché opt-in (cache:true, solo no-stream y no compartido): 24h.
+  const useCache = clientBody.cache === true && !is_shared && !stream;
+  let cacheKey = null;
+  if (useCache) {
+    cacheKey = await sha256Hex(model + "|" + JSON.stringify(messages));
+    const hit = await llmCacheGet(env, cacheKey);
+    if (hit) return json({ ...(hit.json || { cached_text: hit.text }), cached: true, model, from_cache: true });
   }
 
   // Decidir modelo y system prompt según modelo solicitado o nivel de escalamiento.

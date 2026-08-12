@@ -35,7 +35,42 @@ export async function scheduled(event, env, ctx) {
     memories_purged: 0,
     oauth_pending_purged: 0,
     turn_locks_purged: 0,
+    backup: null,
   };
+
+  // --------------------------------------------------------------------------
+  // 0. Backup diario de D1 → R2 (una vez al día, 03:00 UTC). Retención 30 días.
+  // --------------------------------------------------------------------------
+  try {
+    const h = new Date().getUTCHours();
+    if (h === 3 && env.DB && env.BUCKET) {
+      const tables = ["users", "chats", "messages", "repo_documents", "external_connections", "user_memories", "user_skills", "notification_events", "async_jobs"];
+      const dump = {};
+      for (const t of tables) {
+        try {
+          const res = await env.DB.prepare(`SELECT * FROM ${t}`).all();
+          dump[t] = res.results || [];
+        } catch { dump[t] = []; }
+      }
+      const dateStr = new Date().toISOString().slice(0, 10);
+      const key = `backups/veritas-${dateStr}.json`;
+      await env.BUCKET.put(key, JSON.stringify({ backup_at: new Date().toISOString(), tables: dump }), {
+        httpMetadata: { contentType: "application/json" },
+      });
+      // Retención: borrar backups de hace más de 30 días.
+      const cutoff = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString().slice(0, 10);
+      const listed = await env.BUCKET.list({ prefix: "backups/" });
+      for (const obj of listed.objects || []) {
+        const day = obj.key.replace("backups/veritas-", "").replace(".json", "");
+        if (day < cutoff) await env.BUCKET.delete(obj.key);
+      }
+      results.backup = { key, tables: Object.keys(dump).length };
+    } else {
+      results.backup = "skip";
+    }
+  } catch (e) {
+    results.backup = "error: " + (e && e.message ? e.message : String(e));
+  }
 
   // --------------------------------------------------------------------------
   // 1. Purgar mensajes de chats inactivos (>30 días).
