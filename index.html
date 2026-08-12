@@ -78,8 +78,8 @@
       <!-- Submenús de chat por categoría -->
       <nav class="chat-nav" aria-label="Chat categories">
         <button class="nav-tab active" data-category="agent" data-i18n="nav.agent">Agente</button>
-        <button class="nav-tab" data-category="coder" data-i18n="nav.coder">Coder</button>
-        <button class="nav-tab" data-category="general" data-i18n="nav.general">General</button>
+        <button class="nav-tab" data-category="estratega" data-i18n="nav.estratega">Estratega</button>
+        <button class="nav-tab" data-category="fast" data-i18n="nav.fast">Fast</button>
       </nav>
 
       <!-- P1-4: Buscador de chats (solo por título) -->
@@ -179,7 +179,8 @@
           <button class="toggle-btn" id="searchToggle" aria-pressed="false" title="Búsqueda Web" data-i18n="title.search">🔍</button>
           <button class="toggle-btn" id="scrapeToggle" aria-pressed="false" title="Scraping" data-i18n="title.scrape">🌐</button>
           <button class="toggle-btn" id="thinkingToggle" aria-pressed="false" title="Pensamiento" data-i18n="title.thinking">💭</button>
-          <button class="toggle-btn" id="deepThinkingBtn" aria-pressed="false" title="Pensamiento Profundo (solo Agente)" hidden>💡</button>
+          <button class="toggle-btn" id="deepThinkingBtn" aria-pressed="false" title="Pensador (razonamiento profundo)" hidden>🧠</button>
+          <button class="toggle-btn" id="codeFirstToggle" aria-pressed="false" title="Code-first: priorizar programación" data-i18n="title.codeFirst" hidden>💻</button>
         </div>
 
         <div class="input-wrapper">
@@ -252,6 +253,13 @@
             <button data-template="d3-chart">D3 Force Graph</button>
             <button data-template="tailwind-page">Tailwind Page</button>
             <button data-template="plotly-3d">Plotly 3D</button>
+            <button data-template="osint-report">Informe OSINT</button>
+            <button data-template="timeline-investigation">Timeline Investigación</button>
+            <button data-template="entity-graph">Grafo Entidades</button>
+            <button data-template="csv-dashboard">CSV Dashboard</button>
+            <button data-template="interactive-quiz">Quiz Interactivo</button>
+            <button data-template="markdown-doc-viewer">Markdown Viewer</button>
+            <button data-template="kanban-local">Kanban Local</button>
           </div>
         </div>
         <div class="dropdown">
@@ -277,6 +285,10 @@
             <button data-lib="mathjs">math.js</button>
           </div>
         </div>
+        <button class="sandbox-btn" id="sbSnapshot" title="Guardar snapshot">💾 Snapshot</button>
+        <button class="sandbox-btn" id="sbRestore" title="Restaurar snapshot">↩ Restore</button>
+        <button class="sandbox-btn" id="sbDiff" title="Ver diff contra último snapshot">Δ Diff</button>
+        <button class="sandbox-btn" id="sbRunTests" title="Ejecutar tests del artefacto">▶ Tests</button>
         <button class="sandbox-btn" id="sbExportZip" data-i18n="sandbox.exportZip" title="Export ZIP">📦 Export ZIP</button>
         <button class="sandbox-btn" id="sbDownload" data-i18n="sandbox.download" title="Descargar archivo">⬇ Descargar</button>
         <button class="sandbox-btn" id="sbCopy" data-i18n="sandbox.copy" title="Copiar">⧉ Copiar</button>
@@ -305,6 +317,16 @@
             <span data-i18n="sandbox.preview">Live Preview</span>
             <button class="icon-btn" id="sbRefresh" aria-label="Refresh preview" data-i18n="aria.refresh">↻</button>
           </div>
+          <div class="sandbox-error-overlay" id="sandboxErrorOverlay" hidden>
+            <div class="sandbox-error-card">
+              <strong>⚠ Error en Preview</strong>
+              <pre id="sandboxErrorText"></pre>
+              <div class="sandbox-error-actions">
+                <button class="sandbox-btn" id="sbFixWithCoder" type="button">Reparar con Coder</button>
+                <button class="sandbox-btn" id="sbDismissError" type="button">Ocultar</button>
+              </div>
+            </div>
+          </div>
           <iframe
             id="sandboxPreview"
             class="sandbox-preview"
@@ -320,10 +342,14 @@
         <div class="panel-tabs">
           <button class="panel-tab active" data-panel="console" data-i18n="sandbox.console">Console</button>
           <button class="panel-tab" data-panel="network" data-i18n="sandbox.network">Network</button>
+          <button class="panel-tab" data-panel="tests">Tests</button>
+          <button class="panel-tab" data-panel="diff">Diff</button>
           <button class="panel-tab" id="sbClosePanel" aria-label="Close panel" data-i18n="aria.closePanel">✕</button>
         </div>
         <div class="panel-content" id="panelConsole" role="log"></div>
         <div class="panel-content" id="panelNetwork" hidden></div>
+        <div class="panel-content" id="panelTests" hidden></div>
+        <div class="panel-content" id="panelDiff" hidden></div>
       </div>
     </aside>
   </div>
@@ -359,7 +385,7 @@
         <!-- Perfil -->
         <section class="settings-section active" id="settings-profile">
           <h3 data-i18n="settings.profile">Perfil</h3>
-          <p class="hint" data-i18n="settings.profile.hint">Véritas NO aprende detalles automáticamente de los chats. Solo los que pongas aquí se usan para personalizar respuestas.</p>
+          <p class="hint" data-i18n="settings.profile.hint">Véritas no modifica tu perfil desde el chat: solo usa lo que declares aquí. Las memorias cross-chat viven aparte, con deduplicación y expiración.</p>
           <label for="profileName" data-i18n="settings.profile.name">Nombre</label>
           <input type="text" id="profileName" />
           <label for="profileBio" data-i18n="settings.profile.bio">Sobre ti</label>
@@ -377,6 +403,7 @@
         <!-- Personalización -->
         <section class="settings-section" id="settings-personalization" hidden>
           <h3 data-i18n="settings.personalization">Personalización</h3>
+          <p class="hint">Controla la experiencia visual: tema, modo lectura y la entidad viva que actúa como telemetría emocional/operativa de Véritas.</p>
           <label class="toggle-row">
             <span data-i18n="settings.theme">Tema</span>
             <select id="themeSelect">
@@ -428,6 +455,7 @@
         <!-- Conexiones externas -->
         <section class="settings-section" id="settings-connections" hidden>
           <h3 data-i18n="settings.connections">Conexiones externas</h3>
+          <p class="hint">GitHub y Dropbox usan OAuth cifrado en el Worker. Las tools solo acceden a cuentas conectadas por el usuario y auditan llamadas externas.</p>
           <div class="connection-cards">
             <div class="connection-card" data-provider="github">
               <div class="conn-header">
@@ -455,6 +483,12 @@
         <!-- Optimización de tokens -->
         <section class="settings-section" id="settings-tokens" hidden>
           <h3 data-i18n="settings.tokens">Optimización de tokens</h3>
+          <p class="hint">Ajustes pensados para free tier: ventana deslizante, truncado defensivo de tool results, sticky routing por chat y caché de prompt cuando OpenRouter lo soporte.</p>
+          <div class="settings-info-grid">
+            <div class="settings-info-card"><strong>Agente</strong><span>OpenRouter free pool: Nemotron 3, Gemma 4, GPT-OSS, North Mini Code y Laguna S/XS.</span></div>
+            <div class="settings-info-card"><strong>Estratega/Fast</strong><span>Puter GLM: 4.7 Flash → 4.6V Flash → 4.5 Flash.</span></div>
+            <div class="settings-info-card"><strong>Tools largas</strong><span>Modo async/pending por defecto para proteger el límite de Cloudflare.</span></div>
+          </div>
           <label class="toggle-row">
             <span data-i18n="settings.tokens.compress">Compresión de contexto (sliding window)</span>
             <input type="checkbox" id="optCompress" checked />
@@ -492,6 +526,7 @@
         <!-- Sesión compartida -->
         <section class="settings-section" id="settings-shared" hidden>
           <h3 data-i18n="settings.shared">Sesión compartida</h3>
+          <p class="hint">Colaboración ligera para free tier: propietario + editor, turnos con TTL, presencia por heartbeat y mensajes sincronizados por polling.</p>
           <label class="toggle-row">
             <span data-i18n="settings.shared.enable">Activar función en chats elegibles</span>
             <input type="checkbox" id="sharedEnable" checked />
@@ -509,6 +544,7 @@
         <!-- Notificaciones push -->
         <section class="settings-section" id="settings-notifications" hidden>
           <h3 data-i18n="settings.notifications">Notificaciones push</h3>
+          <p class="hint">Eventos locales del navegador: respuesta terminada, turno compartido, mensajes de sesión y tools en background/pending.</p>
           <p class="hint" id="notifPermissionStatus"></p>
           <label class="toggle-row">
             <span data-i18n="settings.notifications.master">Activar notificaciones push</span>
@@ -535,6 +571,7 @@
         <!-- Modo offline -->
         <section class="settings-section" id="settings-offline" hidden>
           <h3 data-i18n="settings.offline">Modo offline</h3>
+          <p class="hint">Cache local IndexedDB/Dexie para lectura y recuperación. En offline se evita ejecutar modelos/tools y la entidad cambia a modo gris.</p>
           <label class="toggle-row">
             <span data-i18n="settings.offline.enable">Activar cache local</span>
             <input type="checkbox" id="offlineEnable" checked />
@@ -548,6 +585,7 @@
         <!-- Chats -->
         <section class="settings-section" id="settings-chats" hidden>
           <h3 data-i18n="settings.chats">Chats</h3>
+          <p class="hint">Tres roles visibles: Agente, Estratega y Fast. En Agente puedes activar Pensador o Code-first con toggles.</p>
           <label class="toggle-row">
             <span data-i18n="settings.chats.autoTitle">Auto-sugerir título tras primer intercambio</span>
             <input type="checkbox" id="chatsAutoTitle" checked />
@@ -560,7 +598,7 @@
           <div class="skills-header-row">
             <div>
               <h3 data-i18n="settings.skills">Skills</h3>
-              <p class="hint" data-i18n="settings.skills.hint">Habilita skills para que el modelo aplique automáticamente sus directivas cuando el contenido sea relevante. El acceso varía según el rol activo.</p>
+              <p class="hint" data-i18n="settings.skills.hint">Habilita skills para inyectar directivas especializadas. Hay 77 built-in, referencias bajo demanda y custom skills persistidas en D1.</p>
             </div>
             <button class="btn btn-primary" id="newSkillBtn">+ Nueva Skill</button>
           </div>
@@ -592,7 +630,7 @@
         <!-- Repositorio de Documentos -->
         <section class="settings-section" id="settings-repo" hidden>
           <h3 data-i18n="settings.repo">Repositorio de Documentos</h3>
-          <p class="hint" data-i18n="settings.repo.hint">Gestiona tus documentos de referencia. Desde el chat del Agente puedes adjuntarlos como contexto.</p>
+          <p class="hint" data-i18n="settings.repo.hint">Gestiona documentos de referencia en R2. Free tier guard: aviso cerca de 8GB y bloqueo preventivo cerca de 9.5GB para proteger el límite de 10GB.</p>
           <div class="repo-upload-zone" id="repoUploadZone" tabindex="0">
             <p data-i18n="repo.dropHere">Arrastra archivos aquí o click para subir</p>
             <input type="file" id="repoFileInput" hidden multiple
@@ -611,14 +649,20 @@
           </div>
           <div class="repo-usage-bar">
             <div class="repo-usage-fill" id="repoUsageFill"></div>
-            <span class="repo-usage-text" id="repoUsageText">0 MB / 100 MB</span>
+            <span class="repo-usage-text" id="repoUsageText">0 GB / 10 GB</span>
           </div>
           <ul class="repo-list" id="repoList"></ul>
         </section>
 
         <!-- Dashboard de modelos y APIs -->
         <section class="settings-section" id="settings-dashboard" hidden>
-          <h3 data-i18n="settings.dashboard">Dashboard de modelos y APIs</h3>
+          <h3 data-i18n="settings.dashboard">Dashboard de modelos, APIs y resiliencia</h3>
+          <p class="hint">Vista rápida de proveedores: Puter GLM no consume claves del Worker; OpenRouter usa rotador, cooldown y fallback por rol; tools largas devuelven pending por defecto.</p>
+          <div class="settings-info-grid">
+            <div class="settings-info-card"><strong>Cloudflare Free</strong><span>100K requests/día, 10ms CPU, 50 subrequests/request. Véritas prioriza browser-first y async jobs.</span></div>
+            <div class="settings-info-card"><strong>OpenRouter Free</strong><span>20 RPM y límite diario por key. Usa rotador y pool de modelos para resiliencia.</span></div>
+            <div class="settings-info-card"><strong>R2</strong><span>10GB storage free. Guard rail activo para multimedia y repositorio.</span></div>
+          </div>
           <div class="dashboard-grid" id="dashboardModels"></div>
           <h4 data-i18n="settings.dashboard.keys" hidden>API Key Rotator</h4>
           <div class="dashboard-keys" id="dashboardKeys" hidden></div>
@@ -628,8 +672,13 @@
         <section class="settings-section" id="settings-about" hidden>
           <h3 data-i18n="settings.about">Acerca de</h3>
           <img src="https://ik.imagekit.io/csdp6gbr6/17815803429593.png" alt="Véritas logo" class="about-logo" />
-          <p>Véritas v2.4.0</p>
-          <p data-i18n="settings.about.desc">Interfaz de orquestación multi-proveedor de modelos de IA con estilo de ópera espacial.</p>
+          <p><strong>Véritas v2.4</strong> — Intelligence OS para IA multi-modelo.</p>
+          <p data-i18n="settings.about.desc">Centro de mando IA con Agente, Estratega, Fast, Prompt Arquitecto, sandbox telemétrico, 77 skills, 43 tools y diseño free-tier-first.</p>
+          <div class="settings-info-grid">
+            <div class="settings-info-card"><strong>Entidad viva</strong><span>Canvas con estados idle, listening, thinking, searching, tooling, coding, error y offline.</span></div>
+            <div class="settings-info-card"><strong>Sandbox Pro</strong><span>Snapshots, diff, tests browser-side, console/network capture y reparación con Coder.</span></div>
+            <div class="settings-info-card"><strong>Free-tier-first</strong><span>Async/pending para jobs largos y guard rails de R2.</span></div>
+          </div>
           <p><a href="https://github.com/" target="_blank" rel="noopener">Repositorio en GitHub</a></p>
         </section>
       </div>
@@ -701,15 +750,15 @@
   </template>
 
   <!-- ============================================================ -->
-  <!-- PROMPT CRAFT: Botón flotante arrastrable + panel chat (GLM) -->
+  <!-- PROMPT ARQUITECTO: Botón flotante arrastrable + panel chat (GLM) -->
   <!-- ============================================================ -->
-  <div id="promptCraftFab" class="prompt-craft-fab" title="Prompt Craft — Genera prompts optimizados">
+  <div id="promptCraftFab" class="prompt-craft-fab" title="Prompt Arquitecto — Genera prompts optimizados">
     <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
   </div>
 
   <div id="promptCraftPanel" class="prompt-craft-panel" hidden>
     <div class="prompt-craft-header">
-      <span class="prompt-craft-title">Prompt Craft</span>
+      <span class="prompt-craft-title">Prompt Arquitecto</span>
       <button class="prompt-craft-close" id="promptCraftClose" title="Cerrar">✕</button>
     </div>
     <div class="prompt-craft-body">

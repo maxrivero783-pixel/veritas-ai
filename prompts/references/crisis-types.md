@@ -1,32 +1,11 @@
-# Referencia: Tipos de Crisis
+# Tipos de crisis comunicacional
 
-## Crisis reputacional
-- Escándalo público
-- Boicot de consumidores
-- Rumores o desinformación viral
+- **Operacional:** caída de servicio, accidente, falla logística.
+- **Reputacional:** acusación pública, boicot, controversia cultural.
+- **Legal/regulatoria:** investigación, sanción, demanda, incumplimiento.
+- **Seguridad/datos:** filtración, intrusión, exposición de información.
+- **Producto:** defecto, retiro, riesgo para usuarios.
+- **Liderazgo:** conducta de directivos, conflicto interno, salida crítica.
 
-## Crisis operativa
-- Falla de producto/servicio
-- Accidente laboral
-- Brecha de seguridad
-
-## Crisis financiera
-- Quiebra o riesgo de quiebra
-- Fraude detectado
-- Pérdida significativa de inversores
-
-## Crisis legal/regulatoria
-- Demanda o investigación
-- Violación de regulación
-- Sanciones gubernamentales
-
-## Crisis de relaciones públicas
-- Comentarios controversiales de líderes
-- Campañas negativas de competencia
-- Movimientos de protesta
-
-## Niveles de severidad
-1. **Baja**: impacto limitado, manejable con comunicación estándar
-2. **Media**: atención de medios, requiere respuesta coordinada
-3. **Alta**: amenaza a la operación, requiere equipo de crisis
-4. **Crítica**: existencia de la organización en riesgo
+## Severidad
+Evalúa impacto humano, escala pública, velocidad de propagación, responsabilidad percibida, evidencia disponible y capacidad de remediación.

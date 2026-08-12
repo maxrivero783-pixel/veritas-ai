@@ -1,22 +1,21 @@
-# Referencia: Indicadores de Comportamiento Coordinado
+# Indicadores defensivos de comportamiento coordinado
+
+Ningún indicador prueba por sí solo automatización o coordinación. Evalúa patrones combinados y alternativas inocentes.
 
 ## Indicadores temporales
-- Posts en ventanas < 60 segundos entre cuentas diferentes
-- Respuestas en cadena con timing perfecto
-- Actividad 24/7 sin pausas naturales
+- Publicaciones simultáneas en ventanas inusualmente estrechas.
+- Secuencias repetidas de reacción/amplificación.
+- Actividad 24/7 o con ritmos no humanos, si hay volumen suficiente.
 
 ## Indicadores de contenido
-- Texto idéntico o con variaciones mínimas
-- Mismos hashtags en mismo orden
-- Mismos enlaces compartidos simultáneamente
+- Texto idéntico o casi idéntico entre cuentas.
+- Hashtags, enlaces o errores tipográficos repetidos.
+- Cambios coordinados de narrativa o avatar.
 
 ## Indicadores de red
-- Patrones circulares de retweet/like
-- Cuentas nuevas que interactúan solo entre sí
-- Seguidores/seguidos en proporciones anómalas
+- Cuentas que se amplifican entre sí de forma cerrada.
+- Creación masiva de cuentas en fechas cercanas.
+- Conectores centrales que distribuyen mensajes a clusters.
 
-## Indicadores de perfil
-- Nombres con patrones secuanciales (user001, user002)
-- Sin foto de perfil o fotos genéricas
-- Bio vacía o genérica
-- Fecha de creación reciente y agrupada
+## Cautelas
+Campañas legítimas, fandoms, sindicatos, comunidades y breaking news pueden generar sincronía orgánica. Incluye explicaciones alternativas.

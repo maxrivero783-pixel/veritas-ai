@@ -1,22 +1,24 @@
-# Referencia: Técnicas de Manipulación
+# Técnicas comunes de manipulación informativa
 
-## Técnicas de framing
-- **Framing positivo/negativo**: misma información presentada de forma diferente
-- **Anclaje**: presentar un dato como referencia para influir percepciones
-- **Ordenamiento**: colocar la información más favorable primero/último
+Usa esta referencia como catálogo, no como lista cerrada. Detecta técnicas solo cuando haya evidencia observable.
 
-## Técnicas de persuasión
-- **Bandwagon**: "todos lo hacen"
-- **Appeal to authority**: citar fuentes sin verificar
-- **Appeal to emotion**: manipular sentimientos en vez de argumentos
-- **False dichotomy**: presentar solo dos opciones cuando hay más
-- **Straw man**: tergiversar el argumento contrario
-- **Whataboutism**: desviar la atención con otro tema
-- **Gaslighting**: negar la realidad percibida por el otro
-- **Red herring**: introducir información irrelevante
+## Framing y selección
+- **Encuadre selectivo:** resalta algunos hechos y oculta otros para guiar interpretación.
+- **Omisión crítica:** excluye contexto necesario para evaluar una afirmación.
+- **Cherry picking:** usa ejemplos aislados como si fueran representativos.
+- **Falsa equivalencia:** presenta posiciones con evidencia desigual como equivalentes.
 
-## Técnicas de desinformación
-- **Cherry picking**: seleccionar solo datos favorables
-- **Fabrication**: inventar datos o fuentes
-- **Contextomy**: citar fuera de contexto
-- **Astroturfing**: simular apoyo popular artificial
+## Lenguaje emocional
+- **Apelación al miedo:** sobredimensiona amenazas para forzar adhesión.
+- **Indignación inducida:** usa insultos o imágenes extremas para bloquear análisis.
+- **Eufemismo/disfemismo:** suaviza o endurece una realidad según conveniencia.
+- **Señalización tribal:** activa identidad de grupo más que razonamiento.
+
+## Falacias frecuentes
+- Ad hominem, hombre de paja, pendiente resbaladiza, falso dilema, generalización apresurada, post hoc, apelación a autoridad, apelación a popularidad.
+
+## Manipulación visual/multimedia
+- Recortes fuera de contexto, imágenes antiguas recicladas, escala engañosa en gráficos, deepfakes o edición selectiva, subtítulos que reinterpretan la escena.
+
+## Evaluación
+Para cada técnica detectada, cita evidencia, explica el efecto probable y ofrece una lectura alternativa más neutral.

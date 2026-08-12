@@ -1,355 +1,498 @@
-<div align="center">
+# VÉRITAS v2.4 — Intelligence OS para IA multi-modelo
 
-<img src="https://img.shields.io/badge/version-2.4-0ea5e9?style=for-the-badge" alt="v2.4"/>
-<img src="https://img.shields.io/badge/Cloudflare-Pages_+_Workers-f48220?style=for-the-badge&logo=cloudflare" alt="Cloudflare"/>
-<img src="https://img.shields.io/badge/D1_+_R2-Storage-8b5cf6?style=for-the-badge" alt="D1+R2"/>
-<img src="https://img.shields.io/badge/license-MIT-22c55e?style=for-the-badge" alt="MIT"/>
+> **Una interfaz auto-alojada para investigar, verificar, crear, programar y operar con IA usando Cloudflare, múltiples modelos, skills dinámicas y 43 herramientas integradas.**
 
-<h1>VERITAS</h1>
-<p><strong>Multi-Role OSINT AI Orchestrator</strong></p>
-<p>Orquestador de modelos de IA multi-proveedor con 43 tools OSINT integradas,<br/>pipeline de 5 roles y sandbox con live preview.</p>
-
-<p>
-  <a href="#características">Features</a> &bull;
-  <a href="#arquitectura">Architecture</a> &bull;
-  <a href="#tools">Tools</a> &bull;
-  <a href="#roles">Roles</a> &bull;
-  <a href="#stack">Stack</a> &bull;
-  <a href="#setup">Setup</a>
-</p>
-
-</div>
+Véritas no es solo un chat. Es un **centro de mando**: combina modelos IA, memoria, herramientas OSINT, conectores OAuth, sandbox de código, documentos, scraping, navegación, skills especializadas y una UI vanilla ultraligera para convertir preguntas complejas en resultados verificables.
 
 ---
 
-## Características
+## ✨ Lo que hace que Véritas sea WOOOW
 
-- **5 roles de IA** (Agente, Estratega, Razonamiento, Coder, Fast) con modelos dedicados y cadenas de fallback
-- **43 tools OSINT** — web search, scraping, crawling, NER, DNS, Shodan, ZoomEye, IntelX, GDELT, transcripción, parseo de docs, GitHub, Dropbox, email
-- **API Key Rotator** — rotación automática entre múltiples keys por servicio con cooldown y telemetría
-- **Sandbox Live Preview** — ejecución de código HTML/CSS/JS con preview estilo GLM-5.2
-- **Cross-chat Memory** — memorias persistentes en D1 compartidas entre sesiones
-- **Percepción Multimodal** — análisis de imágenes, audio, video y documentos
-- **Protocolo XML embebido** — function calling para modelos que no lo soportan nativamente
-- **OAuth** — integración con GitHub y Dropbox
-- **Brevo Email** — reenvío de informes y archivos por email
-- **i18n** — interfaz en español/inglés
-- **Zero cost AI** — modelos gratuitos vía Puter.js + OpenRouter (Nemotron, Gemini, Claude, GPT, Llama, Qwen, DeepSeek)
-
----
-
-## Arquitectura
-
-```
-┌─────────────────────────────────────────────────────┐
-│                    index.html                        │
-│              (SPA + Sandbox Preview)                  │
-└────────────────────┬────────────────────────────────┘
-                     │
-┌────────────────────▼────────────────────────────────┐
-│              functions/api/[[route]].js              │
-│           (Cloudflare Worker — entrypoint)            │
-│  ┌─────────────────────────────────────────────┐    │
-│  │           agentOrchestrator.js               │    │
-│  │    Role routing · Fallback chains · LLM call  │    │
-│  └──────────────┬──────────────────────────────┘    │
-│  ┌──────────────▼──────────────────────────────┐    │
-│  │           toolRegistry.server.js             │    │
-│  │     43 tools · Schema validation · Roles      │    │
-│  └──────────────┬──────────────────────────────┘    │
-│  ┌──────────────▼──────────────────────────────┐    │
-│  │          lib/tools/*.js (handlers)            │    │
-│  │   run(args, ctx) → call lib/services/*.js      │    │
-│  └──────────────┬──────────────────────────────┘    │
-│  ┌──────────────▼──────────────────────────────┐    │
-│  │         lib/services/*.js (adapters)          │    │
-│  │      callService() → HTTP → External APIs     │    │
-│  └─────────────────────────────────────────────┘    │
-│  ┌──────────────────┐ ┌──────────────────────┐      │
-│  │  keyRotator.js   │ │   oauth.js            │      │
-│  │  14+ services     │ │  GitHub + Dropbox      │      │
-│  └──────────────────┘ └──────────────────────┘      │
-└─────────────────────────────────────────────────────┘
-         │              │              │
-    ┌────▼───┐    ┌────▼───┐    ┌─────▼────┐
-    │  D1    │    │   R2   │    │ External  │
-    │ (SQL)  │    │ (Files)│    │  APIs     │
-    └────────┘    └────────┘    └───────────┘
-```
+- 🧠 **Orquestación multi-modelo**: 3 roles visibles — Agente, Estratega y Fast — con toggles internos Pensador y Code-first.
+- 🧩 **77 skills built-in** en `prompts/`: verificación, OSINT, análisis, código, escritura, media, negocios, diseño, documentos y educación.
+- 🛠️ **43 tools registradas** con dispatcher único, validación de argumentos y permisos por rol.
+- 🔁 **Rotación de API keys** con cooldown, health checks y estado persistido en D1.
+- 🔎 **Investigación y scraping multi-proveedor**: Jina, Tavily, Serper, Firecrawl, ScrapingBee, Spider Cloud, Rover, Browserless, Steel, Browser-use, GDELT y más.
+- 🛰️ **OSINT defensivo**: DNS, Shodan, ZoomEye, Intelligence X, GFW, Apify Social/Places, NER y análisis coordinado.
+- 🧾 **Document intelligence**: LlamaParse, AssemblyAI, análisis multimodal y repositorio documental en R2.
+- 🔐 **OAuth real**: GitHub y Dropbox con tokens cifrados, refresh, auditoría y rate-limit handling.
+- 💻 **Sandbox web pro**: previews HTML, 14 plantillas, snapshots, diff, test runner browser-side, error overlay, consola/network capture, export y push a GitHub.
+- 🧠 **Memoria cross-chat**: memorias categorizadas con importancia, expiración y deduplicación.
+- 👥 **Sesión compartida**: owner + editor, presencia, turnos, heartbeat y polling.
+- 🌍 **i18n trilingüe**: Español, English, Français.
+- 📴 **Modo offline** con IndexedDB y bundle de chats.
+- 🧼 **Cron de limpieza** para purgar datos caducados.
+- 🧬 **Entidad viva como telemetría**: canvas emocional/operativo para listening, thinking, searching, tooling, coding, error y offline.
+- 🪄 **Prompt Arquitecto**: botón flotante arrastrable para convertir intenciones breves en prompts optimizados por rol.
+- ⚡ **Sin build step**: frontend vanilla ES modules + Cloudflare Pages Functions.
 
 ---
 
-## Tools (34)
+## 🧰 Funcionalidades completas
 
-### Búsqueda y Scraping
-| Tool | Descripción | Servicio |
-|------|-------------|----------|
-| `web_search` | Búsqueda web multi-proveedor (Jina / Tavily / Serper) | jina, tavily, serper |
-| `scrape_url` | Scraping de URL individual (Jina / ScrapingBee) | jina, scrapingbee |
-| `firecrawl_scrape` | Extracción estructurada a Markdown | firecrawl |
-| `firecrawl_crawl` | Crawl recursivo multi-página | firecrawl |
-| `rover_scrape` | Scraping instantáneo (rtrvr.ai) | rover |
-| `spider_cloud_search` | Crawler ultrarrápido + bypass anti-bot | spider_cloud |
-| `browserless_execute` | Ejecución en Chromium remoto | browserless |
-| `browser_use_browse` | Navegación autónoma NL | browser_use |
-| `browser_use_cloud` | Navegador autónomo NL (auto-provisioning) | browser_use_cloud |
-| `jina_reader_search` | Lectura URL + búsqueda combinada | jina_reader |
-| `gfw_search` | Búsqueda web alternativa GFW | gfw |
+### Chat multi-rol
 
-### OSINT e Infraestructura
-| Tool | Descripción | Servicio |
-|------|-------------|----------|
-| `shodan_search` | Búsqueda de dispositivos/puertos/CVEs | shodan |
-| `zoomeye_search` | Mapeo de superficie de ataque | zoomeye |
-| `intelx_search` | Datos filtrados, dark web, leaks | intelx |
-| `gdelt_search` | Eventos globales, tendencias, GKG | gdelt |
-| `dns_lookup` | Resolución DNS + DNSSEC | dns |
-| `ner_extract` | Entidades nombradas (URLs, IPs, emails, crypto) | local |
+- Selector de rol/categoría: **Agente**, **Estratega** y **Fast**. En Agente existen toggles para **Pensador** y **Code-first**.
+- Streaming de respuestas con cancelación mediante `AbortController`.
+- Parser de razonamiento interno y parser XML de tools (`<tool_call>` / `<tool_result>`).
+- Loop de tools con límite defensivo y persistencia de cada llamada.
+- Fallback manual o automático entre modelos según rol.
+- Fallback experimental a Estratega permisivo cuando un modelo primario no puede completar una tarea.
+- Contadores de tokens, tokens cacheados, truncado configurable y resumen de contexto.
+- Auto-título de chats y renombrado manual.
+- Búsqueda/filtrado de chats por categoría.
 
-### Documentos y Media
-| Tool | Descripción | Servicio |
-|------|-------------|----------|
-| `llamaparse_parse` | Parseo PDF/DOCX a Markdown con OCR | llamaparse |
-| `assemblyai_transcribe` | Transcripción audio + diarización + sentimiento | assemblyai |
-| `analyze_media` | Análisis multimodal (imagen, audio, video) | nemotron |
+### Prompt Arquitecto
 
-### Social y Geolocalización
-| Tool | Descripción | Servicio |
-|------|-------------|----------|
-| `apify_google_places` | Listings de negocios en Google Maps | apify |
-| `apify_social` | Perfiles/posts en redes sociales | apify |
-| `jina_github_search` | Búsqueda de código y repos | jina_github |
+- Botón flotante pequeño, arrastrable y siempre accesible.
+- Panel compacto para generar prompts optimizados por rol.
+- Usa `z-ai/glm-4.7-flash` vía Puter para convertir una intención breve en un prompt listo para copiar.
+- Permite seleccionar rol objetivo, generar, copiar, limpiar y volver a iterar.
+- Pensado para sacar máximo provecho de Agente, Estratega, Fast y los modos internos Pensador/Code-first.
 
-### Navegador Persistente
-| Tool | Descripción | Servicio |
-|------|-------------|----------|
-| `steel_session` | Sesiones de navegador Steel.dev | steel |
-| `steel_auth_session` | Sesiones autenticadas con proxy/fingerprint | steel_auth |
+### Skills
 
-### Almacenamiento y Archivos
-| Tool | Descripción | Servicio |
-|------|-------------|----------|
-| `read_project_file` | Lee archivo del proyecto en R2 | R2 |
-| `write_project_file` | Escribe archivo al proyecto en R2 | R2 |
-| `search_repository` | Busca en el repositorio de documentos | D1 |
-| `load_template` | Carga plantilla en Sandbox | local |
-| `preview_html` | Renderiza HTML en Live Preview | local |
-| `fetch_via_proxy` | Llamada HTTP vía proxy del Worker | worker |
+- 77 skills built-in servidas desde `prompts/*.md`.
+- Activación manual o automática según rol.
+- Custom skills persistidas por usuario en D1.
+- Editor UI para crear, editar, activar/desactivar y borrar skills personalizadas.
+- `create_skill` como tool para que el agente pueda crear skills si el usuario lo pide explícitamente.
+- Referencias auxiliares en `prompts/references/` cargadas bajo demanda.
+- Smoke tests en `prompts/evals.json`.
 
-### GitHub
-| Tool | Descripción | OAuth |
-|------|-------------|-------|
-| `github_list_repos` | Lista repos del usuario | GitHub |
-| `github_read_file` | Lee archivo de repo | GitHub |
-| `github_write_file` | Crea/actualiza archivo + commit | GitHub |
-| `github_write_files` | Multi-archivo en un commit (Trees API) | GitHub |
-| `github_create_branch` | Crea rama | GitHub |
-| `github_create_pr` | Crea Pull Request | GitHub |
+### Investigación, OSINT y verificación
 
-### Dropbox
-| Tool | Descripción | OAuth |
-|------|-------------|-------|
-| `dropbox_list_folder` | Lista carpeta | Dropbox |
-| `dropbox_read_file` | Lee archivo | Dropbox |
-| `dropbox_write_file` | Escribe archivo | Dropbox |
-| `dropbox_search` | Busca archivos | Dropbox |
-| `dropbox_upload_large` | Upload chunked >5MB | Dropbox |
+- Búsqueda web multi-proveedor.
+- Scraping puntual, crawling, lectura web limpia, capturas y navegación headless.
+- GDELT para eventos/noticias globales.
+- DNS, Shodan, ZoomEye, Intelligence X y GFW.
+- Apify para Google Places y redes sociales públicas.
+- NER para estructurar personas, organizaciones, lugares, eventos y relaciones.
+- Skills especializadas para verificación de afirmaciones, confiabilidad de fuentes, análisis de medios, comportamiento coordinado, grafos de entidades, cronologías y riesgo geopolítico.
 
-### Comunicaciones
-| Tool | Descripción | Servicio |
-|------|-------------|----------|
-| `send_email` | Envío de emails con HTML/adjuntos vía Brevo | brevo |
+### Sandbox y desarrollo
 
----
+- Sandbox multiarchivo para artefactos HTML/CSS/JS static-first.
+- Live preview con `preview_html` e instrumentación de consola, errores, promises y fetch.
+- Overlay de errores con acción **Reparar con Coder**.
+- La entidad canvas cambia de modo cuando el sandbox busca, ejecuta tools, programa, falla o queda offline.
+- Snapshots locales, restauración y diff contra el último snapshot.
+- Mini test runner browser-side mediante `window.__veritasTests`.
+- 14 plantillas cargables con `load_template`: mapas, 3D, dashboards, grafos, informe OSINT, timeline, CSV dashboard, quiz, Markdown viewer y Kanban.
+- Proxy seguro para recursos externos y APIs sin CORS.
+- Soporte para generación de dashboards, quizzes HTML, visualizaciones, prototipos UI y artefactos web.
+- Integración con GitHub OAuth para leer, escribir, crear ramas y abrir PRs.
+- Herramientas para leer/escribir archivos de proyecto en R2.
 
-## Roles
+### Documentos, media y archivos
 
-| Rol | Modelo primario | Función | Tools |
-|-----|-----------------|---------|-------|
-| **Agente** | Nemotron Super 120B | Orquestación general, OSINT | Todas |
-| **Estratega** | Claude 3.5 Sonnet | Planificación, análisis profundo | Todas |
-| **Razonamiento** | Qwen 3 Coder 32B | Razonamiento lógico, verificación | Todas |
-| **Coder** | Claude 3.5 Sonnet | Código, docs, artefactos, web | Subset |
-| **Fast** | Gemini 2.5 Flash | Respuestas rápidas, búsqueda | Tavily, Exa, GDELT, Jina |
+- Upload/list/download/delete de storage.
+- Repositorio documental numerado con búsqueda, descarga, borrado y adjuntos al chat.
+- LlamaParse para PDF/DOCX complejos.
+- AssemblyAI para transcripción de audio.
+- Percepción multimodal para imagen, PDF, audio y video.
+- Generación guiada de DOCX/PDF/PPTX/XLSX mediante skills documentales y sandbox.
+- Dropbox OAuth para listar, buscar, leer, escribir y subir archivos grandes.
 
-<details>
-<summary>Cadena de fallbacks por rol</summary>
+### Memoria y contexto
 
-Cada rol tiene una cadena de modelos de respaldo. Si el modelo primario falla (rate limit, timeout, error), el orquestador intenta automáticamente el siguiente en la cadena.
+- Memorias cross-chat por usuario.
+- Categorías: personal, tech, preference, fact, etc.
+- Importancia, expiración, deduplicación y exclusión del chat actual para evitar feedback loops.
+- Inyección de memorias relevantes al system prompt.
+- Sliding window, resúmenes y truncado de tool results.
 
-```
-Agente:      Super 120B → Ultra 550B → Claude 3.5 → Qwen 3 → Gemini 2.5 → DeepSeek
-Estratega:   Claude 3.5 → Super 120B → Qwen 3 → Gemini 2.5 → GPT 4.1
-Razonamiento: Qwen 3 → Claude 3.5 → DeepSeek → Super 120B
-Coder:       Claude 3.5 → Qwen 3 Coder → Gemini 2.5 → GPT 4.1
-Fast:        Gemini 2.5 Flash → Claude 3.5 Haiku → Qwen 3 → Super 120B
-```
+### Colaboración
 
-</details>
+- Sesiones compartidas owner + editor.
+- Share tokens de un solo uso.
+- Control de turnos con TTL.
+- Heartbeat y presencia.
+- Polling de mensajes compartidos.
+- Indicadores de autoría y eventos de sesión.
 
----
+### Offline, notificaciones y UX
 
-## Stack
+- Cache offline con IndexedDB/Dexie.
+- Bundle de chats offline y cola de mensajes pendientes.
+- Banner de conexión y re-sincronización.
+- Notificaciones push del navegador para respuestas, turnos y eventos compartidos.
+- i18n en Español, English y Français.
+- Tema cybernetic con canvas animado, estados `idle`, `active` y `processing`.
+- Respeto a `prefers-reduced-motion`.
 
-| Componente | Tecnología |
-|------------|------------|
-| **Frontend** | HTML, CSS, JavaScript vanilla (SPA) |
-| **Backend** | Cloudflare Workers (serverless) |
-| **Hosting** | Cloudflare Pages |
-| **Base de datos** | Cloudflare D1 (SQLite) |
-| **Almacenamiento** | Cloudflare R2 (objetos) |
-| **IA Models** | Puter.js + OpenRouter (20+ modelos gratuitos) |
-| **Email** | Brevo (SMTP API) |
-| **Auth** | OAuth 2.0 (GitHub, Dropbox) |
+### Administración y observabilidad
 
-**Dependencias: cero.** Sin build step, sin npm install, sin framework.
+- Dashboard de estado.
+- Endpoints admin para estado de key pools, health checks y reset de cooldown.
+- Auditoría de llamadas a tools y APIs externas.
+- Guard rail local de R2: aviso al superar ~8GB y bloqueo preventivo cerca de ~9.5GB para proteger el free tier de 10GB.
+- Tools largas en modo async/pending por defecto para evitar timeouts en Cloudflare Free Tier; usar `wait_for_completion=true` solo cuando se acepte el riesgo.
+- Cron de purga para chats, memorias, OAuth pending y locks expirados.
+- Perfil de usuario persistido en D1.
 
----
+## 🧭 Arquitectura rápida
 
-## Setup
-
-### 1. Clonar
-
-```bash
-git clone https://github.com/maxrivero783-pixel/veritas-ai.git
-cd veritas-ai
+```txt
+Usuario
+  ↓
+index.html + app.js + lib/*.js
+  ↓
+Cloudflare Pages Functions: functions/api/[[route]].js
+  ↓
+D1 ─ chats, mensajes, memorias, skills, OAuth, auditoría, key health
+R2 ─ storage, documentos, archivos del proyecto
+  ↓
+Tools / Services / OAuth adapters
+  ↓
+Modelos IA + APIs externas autorizadas
 ```
 
-### 2. Base de datos
+### Estructura principal
 
-```bash
-npx wrangler d1 create veritas-db
-```
-
-Copia el `database_id` resultante en `wrangler.toml`.
-
-```bash
-npx wrangler d1 execute veritas-db --file=./schema.sql
-```
-
-### 3. Variables de entorno
-
-Configura en Cloudflare Dashboard > Workers > Settings > Variables:
-
-**IA Providers (mínimo 1):**
-
-| Variable | Descripción |
-|----------|-------------|
-| `PUTER_JWT` | JWT de Puter.js (obligatorio) |
-| `OPENROUTER_API_KEY_1` | Key de OpenRouter |
-
-**Tool Services (las que necesites):**
-
-| Variable | Tool |
-|----------|------|
-| `JINA_API_KEY_1` | web_search, scrape_url |
-| `TAVILY_API_KEY_1` | web_search |
-| `SERPER_API_KEY_1` | web_search |
-| `FIRECRAWL_API_KEY_1` | firecrawl_scrape/crawl |
-| `SHODAN_API_KEY_1` | shodan_search |
-| `ZOOMMEYE_API_KEY_1` | zoomeye_search |
-| `INTELX_API_KEY_1` | intelx_search |
-| `ASSEMBLYAI_API_KEY_1` | assemblyai_transcribe |
-| `LLAMAPARSE_API_KEY_1` | llamaparse_parse |
-| `BREVO_API_KEY_1` | send_email |
-| `SCRAPINGBEE_API_KEY_1` | scrape_url |
-| `ROVER_API_KEY_1` | rover_scrape |
-| `SPIDER_CLOUD_API_KEY_1` | spider_cloud_search |
-| `BROWSERLESS_API_KEY_1` | browserless_execute |
-| `APIFY_API_KEY_1` | apify_google_places, apify_social |
-
-**OAuth (opcional):**
-
-| Variable | Descripción |
-|----------|-------------|
-| `GITHUB_OAUTH_CLIENT_ID` / `GITHUB_OAUTH_CLIENT_SECRET` | GitHub |
-| `DROPBOX_OAUTH_APP_KEY` / `DROPBOX_OAUTH_APP_SECRET` | Dropbox |
-
-**Email:**
-
-| Variable | Descripción |
-|----------|-------------|
-| `BREVO_API_KEY_1` | API key de Brevo |
-| `BREVO_SENDER_EMAIL` | Email remitente verificado en Brevo |
-| `BREVO_SENDER_NAME` | Nombre del remitente |
-
-Soporta rotación: agrega `_2`, `_3`, etc. para múltiples keys por servicio.
-
-> **Compatibilidad Brevo (mismo esquema que los otros workers OSINT):** el adaptador
-> acepta `BREVO_API_KEY_1`, o en su defecto `BREVO_API_KEY` / `EMAIL_API_KEY` como
-> fallback; el remitente puede venir de `BREVO_SENDER_EMAIL`/`BREVO_SENDER_NAME` o
-> `FROM_EMAIL`/`FROM_NAME`. Todos los correos de `send_email` se firman con:
-> **- Remitido por Véritas, la IA especializada en OSINT -**
-
-### 4. Deploy
-
-```bash
-npx wrangler pages deploy . --project-name=veritas-ai
-```
-
-O conecta el repo a Cloudflare Pages para deploy automático.
-
----
-
-## Estructura del Proyecto
-
-```
-veritas-ai/
-├── index.html              # SPA principal
-├── styles.css              # Estilos
-├── app.js                  # Lógica del frontend
-├── prompts.js              # Cargador de prompts de rol
-├── schema.sql              # Schema D1
-├── wrangler.toml           # Configuración Cloudflare
-├── _headers                # Headers de seguridad
-├── _redirects              # Reglas de redirección
+```txt
+.
+├── app.js                       # Frontend principal
+├── prompts.js                   # System prompts activos por rol/modelo
+├── index.html                   # UI
+├── styles.css                   # Tema visual
+├── schema.sql                   # Esquema D1
+├── wrangler.toml                # Configuración Cloudflare
 ├── functions/
-│   ├── api/[[route]].js    # Worker principal
-│   └── purge/scheduled.js  # Worker programado
+│   ├── api/[[route]].js         # Router Worker/API principal
+│   └── purge/scheduled.js       # Cron de limpieza
 ├── lib/
-│   ├── agentOrchestrator.js   # Orquestador multi-rol
-│   ├── toolRegistry.server.js # Registro de tools (fuente de verdad)
-│   ├── toolRegistry.js        # Mirror frontend
-│   ├── keyRotator.js          # Rotador de API keys
-│   ├── fallbackChains.js      # Cadenas de fallback por rol
-│   ├── contextManager.js      # Gestión de contexto
-│   ├── oauth.js               # OAuth GitHub/Dropbox
-│   ├── i18n.js                # Internacionalización
-│   ├── rateLimit.js           # Rate limiting
-│   ├── offlineCache.js        # Cache offline
-│   ├── notifications.js       # Notificaciones
-│   ├── sandboxTemplates.js    # Plantillas del Sandbox
-│   ├── sharedSession.js       # Sesión compartida
-│   ├── skillsRegistry.js      # Registro de skills
-│   ├── services/              # 25 adaptadores HTTP
-│   │   ├── jina.js, tavily.js, serper.js, firecrawl.js
-│   │   ├── shodan.js, zoomeye.js, intelx.js, gdelt.js
-│   │   ├── assemblyai.js, llamaparse.js, ner.js, dns.js
-│   │   ├── rover.js, spider_cloud.js, browserless.js
-│   │   ├── browser_use.js, browser_use_cloud.js, steel.js, steel_auth.js
-│   │   ├── apify.js, scrapingbee.js, gfw.js, brevo.js
-│   │   └── oauth/ (github.js, dropbox.js)
-│   └── tools/                 # 43 handlers
-│       ├── web_search.js, scrape_url.js, firecrawl_scrape.js
-│       ├── shodan_search.js, zoomeye_search.js, intelx_search.js
-│       ├── gdelt_search.js, dns_lookup.js, ner_extract.js
-│       ├── send_email.js, analyze_media.js
-│       └── ... (51+ handlers)
-├── prompts/                   # 78 system prompts
+│   ├── agentOrchestrator.js
+│   ├── contextManager.js
+│   ├── fallbackChains.js
+│   ├── i18n.js
+│   ├── keyRotator.js
+│   ├── oauth.js
+│   ├── skillsRegistry.js
+│   ├── toolRegistry.js
+│   ├── toolRegistry.server.js
+│   ├── services/                # 24 adaptadores HTTP + OAuth
+│   └── tools/                   # 43 handlers ejecutables
+├── prompts/
+│   ├── *.md                     # 77 prompts de skills
+│   ├── references/*.md          # Referencias de apoyo
+│   ├── evals.json               # Smoke tests de skills
 │   └── veritas_agent_system_prompt.md
 └── tools/
     ├── veritas_agent_system_prompt.md
-    └── veritas_worker.py
+    └── veritas_worker.py        # Bridge Python de catálogo actual
 ```
+
+---
+
+## 🤖 Modelos establecidos
+
+Los modelos se centralizan en `prompts.js` y `lib/fallbackChains.js`.
+
+| Rol | Modelo primario | Provider |
+|---|---|---|
+| Agente | `nvidia/nemotron-3-super-120b-a12b:free` + `google/gemma-4-31b-it:free` + `openai/gpt-oss-20b:free` | OpenRouter |
+| Agente Ultra | `nvidia/nemotron-3-ultra-550b-a55b:free` | OpenRouter |
+| Percepción visual | `nvidia/nemotron-nano-12b-v2-vl:free` | OpenRouter |
+| Percepción audio/video | `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free` | OpenRouter |
+| Estratega | `z-ai/glm-4.7-flash` → `z-ai/glm-4.6v-flash` → `z-ai/glm-4.5-flash` | Puter |
+| Code-first dentro de Agente | `cohere/north-mini-code:free` → `poolside/laguna-s-2.1:free` → `poolside/laguna-xs-2.1:free` | OpenRouter |
+| Fast / Prompt Arquitecto | `z-ai/glm-4.7-flash` → `z-ai/glm-4.6v-flash` → `z-ai/glm-4.5-flash` | Puter |
+
+> Nota: Véritas ya no asume proveedores “uncensored free” como dependencia estable. El rol Estratega usa GLM con un system prompt permisivo, directo y contextualizado; los modelos externos free rotan demasiado rápido para prometer ausencia de censura.
+
+Fallbacks adicionales permitidos:
+
+- `nvidia/nemotron-3-nano-30b-a3b:free`
+- `google/gemma-4-31b-it:free`
+- `openai/gpt-oss-20b:free`
+- `inclusionai/ling-3.0-flash:free` si vuelve a estar disponible en catálogo free
+
+---
+
+## 🛠️ Tools disponibles: 63
+
+### Núcleo / proyecto
+
+| Tool | Propósito |
+|---|---|
+| `search_repository` | Buscar documentos en el repositorio del usuario |
+| `read_project_file` | Leer archivos del proyecto en R2 |
+| `write_project_file` | Escribir archivos del proyecto en R2 |
+| `create_skill` | Crear una skill personalizada en D1 |
+| `preview_html` | Previsualizar HTML generado |
+| `load_template` | Cargar plantillas sandbox |
+| `fetch_via_proxy` | Proxy seguro para recursos externos |
+
+### Búsqueda, scraping y navegación
+
+| Tool | Propósito |
+|---|---|
+| `web_search` | Búsqueda web con Jina → Tavily → Serper |
+| `scrape_url` | Lectura puntual de URL |
+| `firecrawl_scrape` | Scraping estructurado |
+| `firecrawl_crawl` | Crawling recursivo |
+| `jina_reader_search` | Lectura/búsqueda con Jina Reader |
+| `jina_github_search` | Búsqueda GitHub vía Jina |
+| `gdelt_search` | Eventos/noticias globales |
+| `rover_scrape` | Scraping/agente cloud Rover |
+| `spider_cloud_search` | Search/crawl/screenshot/unblocker |
+| `browserless_execute` | Chromium remoto |
+| `browser_use_browse` | Navegación autónoma Browser-use |
+| `browser_use_cloud` | Navegación autónoma Browser Use Cloud |
+| `steel_session` | Sesiones persistentes Steel |
+| `steel_auth_session` | Sesiones Steel Auth |
+
+### OSINT e infraestructura
+
+| Tool | Propósito |
+|---|---|
+| `dns_lookup` | DNS lookup |
+| `shodan_search` | Shodan search |
+| `zoomeye_search` | ZoomEye search |
+| `intelx_search` | Intelligence X search |
+| `apify_google_places` | Google Places/Maps vía Apify |
+| `apify_social` | Redes sociales públicas vía Apify |
+| `gfw_search` | Global Fishing Watch / marítimo |
+| `ner_extract` | Extracción de entidades |
+
+### Documentos, audio y media
+
+| Tool | Propósito |
+|---|---|
+| `analyze_media` | Imagen/PDF/audio/video |
+| `llamaparse_parse` | PDF/DOCX complejo a Markdown |
+| `assemblyai_transcribe` | Transcripción/análisis de audio |
+
+### OAuth: GitHub y Dropbox
+
+| Provider | Tools |
+|---|---|
+| GitHub | `github_list_repos`, `github_read_file`, `github_write_file`, `github_write_files`, `github_create_branch`, `github_create_pr` |
+| Dropbox | `dropbox_list_folder`, `dropbox_read_file`, `dropbox_write_file`, `dropbox_search`, `dropbox_upload_large` |
+
+---
+
+## 🧠 Skills
+
+Las skills viven en `prompts/` y son cargadas por `lib/skillsRegistry.js`.
+
+- **77 skills built-in**.
+- **7 referencias** en `prompts/references/`.
+- **Custom skills** persistidas en D1 (`user_skills`).
+- Carga lazy por `fetch('/prompts/<skill>.md')`.
+- Inyección al system prompt mediante `<veritas_skills>`.
+
+Categorías:
+
+```txt
+verification, osint, analysis, coding, writing, research, data, media,
+productivity, education, business, communication, design, document,
+security, meta
+```
+
+---
+
+## 🔐 Seguridad y privacidad
+
+- Tokens OAuth cifrados con AES-GCM 256.
+- Auditoría de llamadas externas en D1.
+- SSRF guard en proxy de artefactos.
+- Rate-limit handling en OAuth y rotador de keys.
+- Validación de tool args en servidor.
+- Control de roles por tool.
+- Separación de OAuth usuario vs API keys de servicio.
+- No hay secrets commiteados: se cargan por `wrangler secret put`.
+
+---
+
+## 🚀 Instalación local
+
+### 1. Requisitos
+
+- Node.js 18+
+- Cuenta Cloudflare
+- Wrangler CLI
+- Git
+
+```bash
+npm install -g wrangler
+```
+
+### 2. Crear recursos Cloudflare
+
+```bash
+wrangler d1 create veritas-db
+wrangler r2 bucket create veritas-storage
+```
+
+Actualiza `wrangler.toml`:
+
+```toml
+database_id = "<ID_REAL_DE_D1>"
+GITHUB_OAUTH_CLIENT_ID = "<CLIENT_ID>"
+DROPBOX_OAUTH_APP_KEY = "<APP_KEY>"
+```
+
+### 3. Crear esquema D1
+
+```bash
+wrangler d1 execute veritas-db --file schema.sql
+```
+
+### 4. Variables locales
+
+Crea `.dev.vars` para desarrollo local:
+
+```dotenv
+DEV_USER_EMAIL=dev@veritas.local
+ADMIN_EMAILS=dev@veritas.local
+OPENROUTER_API_KEY_1=sk-or-v1-...
+OAUTH_ENCRYPTION_KEY=<32 bytes hex>
+GITHUB_OAUTH_CLIENT_SECRET=...
+DROPBOX_OAUTH_APP_SECRET=...
+```
+
+### 5. Ejecutar
+
+```bash
+wrangler pages dev .
+```
+
+---
+
+## 🔑 Secrets soportados
+
+Todos los pools usan sufijo `_1`, `_2`, `_N`.
+
+```txt
+OPENROUTER_API_KEY_N
+JINA_API_KEY_N
+TAVILY_API_KEY_N
+SERPER_API_KEY_N
+SCRAPINGBEE_API_KEY_N
+FIRECRAWL_API_KEY_N
+BROWSER_USE_API_KEY_N
+BROWSER_USE_CLOUD_API_KEY o BROWSER_USE_CLOUD_API_KEY_1
+STEEL_API_KEY_N
+STEEL_AUTH_API_KEY_N
+ROVER_API_KEY_N
+SPIDER_CLOUD_API_KEY_N
+BROWSERLESS_API_KEY_N
+APIFY_API_TOKEN_N
+LLAMA_CLOUD_API_KEY_N
+ASSEMBLYAI_API_KEY_N
+SHODAN_API_KEY_N
+ZOOMEYE_API_KEY_N
+INTELX_API_KEY_N
+JINA_READER_API_KEY_N
+JINA_GITHUB_API_KEY_N
+GFW_API_KEY_N
+```
+
+OAuth / sistema:
+
+```txt
+GITHUB_OAUTH_CLIENT_SECRET
+DROPBOX_OAUTH_APP_SECRET
+OAUTH_ENCRYPTION_KEY
+DEV_USER_EMAIL
+ADMIN_EMAILS
+```
+
+Ejemplo:
+
+```bash
+wrangler secret put OPENROUTER_API_KEY_1
+wrangler secret put OAUTH_ENCRYPTION_KEY
+```
+
+---
+
+## 🧪 Verificación de integridad
+
+Comandos útiles:
+
+```bash
+# Sintaxis de módulos JS
+for f in $(find . -name '*.js' -not -path './.git/*'); do
+  cp "$f" /tmp/check.mjs && node --check /tmp/check.mjs || exit 1
+done
+
+# Validar JSON de evals
+python3 -m json.tool prompts/evals.json >/dev/null
+
+# Validar worker Python bridge
+python3 -m py_compile tools/veritas_worker.py
+```
+
+Validaciones que este repo debe cumplir:
+
+- `lib/toolRegistry.js` y `lib/toolRegistry.server.js` sincronizados.
+- Todo handler declarado debe existir y exportar `run`.
+- Todo service adapter debe exportar `callService`.
+- Todo prompt declarado por `skillsRegistry` debe existir en `prompts/`.
+- Ninguna skill debe depender de tools o modelos fuera de Véritas.
+
+---
+
+## 🧱 Filosofía del proyecto
+
+Véritas apunta a ser un **sistema operativo personal para IA verificable**:
+
+1. **Investigar** con fuentes y trazabilidad.
+2. **Razonar** con modelos especializados.
+3. **Crear** documentos, código, dashboards, campañas, diseños y artefactos.
+4. **Actuar** mediante tools controladas y OAuth autorizado.
+5. **Recordar** preferencias y contexto sin perder privacidad.
+6. **Colaborar** en sesiones compartidas.
+7. **Escalar** de respuestas rápidas a investigación profunda sin cambiar de herramienta.
+
+---
+
+## 🗺️ Roadmap sugerido
+
+- [x] Entidad canvas como telemetría emocional/operativa.
+- [x] Guard rail local para R2 free tier.
+- [x] Modo async/pending para tools largas.
+- [ ] Panel visual de salud de tools y cuotas por servicio.
+- [ ] Generador visual de workflows multi-tool.
+- [ ] Modo “investigación reproducible” con bitácora exportable.
+- [ ] Evaluador automático de skills usando `prompts/evals.json`.
+- [ ] Marketplace local de skills importables/exportables.
+- [ ] Observabilidad avanzada con Cloudflare Logs.
+- [ ] Export de investigaciones a PDF/DOCX/PPTX desde el sandbox.
 
 ---
 
 ## Licencia
 
-MIT — Free to use, modify, and distribute.
+Ver `LICENSE`.
 
 ---
 
-<div align="center">
-<p><strong>Véritas AI</strong> — OSINT intelligence, orchestrated.</p>
-</div>
+**Véritas v2.4** — IA con herramientas, memoria, criterio y trazabilidad.  
+**Menos humo. Más evidencia. Más poder.**
+
+
+---
+
+## 📧 Email (Brevo) — compatible con el resto de workers OSINT
+
+La tool `email_report` envía informes/respuestas/documentos al **correo del usuario autenticado**
+(opt-in: requiere `consent=true`). Configura en el dashboard (Settings → Variables):
+
+| Variable | Descripción |
+|----------|-------------|
+| `BREVO_API_KEY_1` (o `EMAIL_API_KEY` / `BREVO_API_KEY`) | API key de Brevo — acepta el mismo esquema que OSINT-Scoop/Science |
+| `BREVO_SENDER_EMAIL` (o `FROM_EMAIL`) | Remitente verificado en Brevo |
+| `BREVO_SENDER_NAME` (o `FROM_NAME`) | Nombre del remitente (default: Véritas) |
+
+Todos los correos se firman con: **- Remitido por Véritas, la IA especializada en OSINT -**
+
+> **Nota de fusión v2.4:** este proyecto integra la selección de modelos y las
+> herramientas públicas del artefacto de rescate (`V-ritas-main.zip`) con los
+> fixes de consistencia de la sesión: versión 2.4.0 unificada, sin placeholders,
+> OAuth documentado (GITHUB_OAUTH_CLIENT_ID / DROPBOX_OAUTH_APP_KEY), adiós a
+> Dolphin (Estratega = GLM-4.7 Flash), mini-diálogos rotativos OSINT y lema
+> "Información es ventaja. La ventaja es tuya."

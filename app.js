@@ -26,7 +26,7 @@
 
 import { t, applyI18n, detectInitialLang, getCurrentLang, formatDate } from "./lib/i18n.js";
 import { FALLBACK_CHAINS, MODEL_PROVIDER, getNextFallback, isFallbackExhausted, getProvider, getContextLimit, getRoleForModel } from "./lib/fallbackChains.js";
-import { TOOL_REGISTRY, isAllowed, parseToolCallXML, parseFallbackToAux, stripFallbackToAux, buildToolResultXML, escapeXML, fetchAndHydrate, getTool } from "./lib/toolRegistry.js";
+import { TOOL_REGISTRY, isAllowed, parseToolCallXML, parseFallbackToVenice, stripFallbackToVenice, buildToolResultXML, escapeXML, fetchAndHydrate, getTool } from "./lib/toolRegistry.js";
 import * as ContextManager from "./lib/contextManager.js";
 import { runAgentLoop } from "./lib/agentOrchestrator.js";
 import { SharedSessionManager, createShare, revokeShare, joinSession, isRoleShareable } from "./lib/sharedSession.js";
@@ -67,8 +67,14 @@ const state = {
     activeFile: null,
     editor: null,
     previewThrottleTimer: null,
+    previewUrl: null,
+    consoleEntries: [],
+    networkEntries: [],
+    testEntries: [],
+    snapshots: [],
+    lastError: null,
   },
-  toggles: { search: false, scrape: false, thinking: false, deepThinking: false },
+  toggles: { search: false, scrape: false, thinking: false, deepThinking: false, codeFirst: false },
   streamingState: "idle", // idle | processing | thinking
   isOffline: false,
   pendingChatFlush: false,
@@ -110,7 +116,7 @@ function setUserEmail() {
 // INICIALIZACIÓN
 // ==============================================================================
 async function init() {
-  console.log("[Véritas] Inicializando v2.4.0...");
+  console.log("[Véritas] Inicializando v2.4...");
 
   // Idioma inicial.
   const initialLang = state.settings.ui_lang || detectInitialLang();
@@ -131,12 +137,14 @@ async function init() {
   const offline = getOfflineCacheManager();
   offline.addEventListener("offline:online", () => {
     state.isOffline = false;
+    if (state.streamingState === "offline") setEntityState("idle");
     document.body.classList.remove("is-offline");
     hide($("#offlineBanner"));
     toast(t("toast.connectionRestored"), "success");
   });
   offline.addEventListener("offline:offline", () => {
     state.isOffline = true;
+    setEntityState("offline");
     document.body.classList.add("is-offline");
     show($("#offlineBanner"));
     toast(t("toast.connectionLost"), "warning");
@@ -155,6 +163,7 @@ async function init() {
 
   // Setup event listeners.
   setupEventListeners();
+  updateDeepThinkingVisibility();
 
   // Setup settings UI.
   setupSettingsUI();
@@ -168,6 +177,8 @@ async function init() {
   // Detección inicial de online/offline.
   if (!navigator.onLine) {
     state.isOffline = true;
+    setEntityState("offline");
+    setEntityState("offline");
     document.body.classList.add("is-offline");
     show($("#offlineBanner"));
   }
@@ -199,7 +210,25 @@ function easeInOutCubic(t) {
 }
 
 // Mapeo de estados a nivel numérico para interpolar.
-const STATE_LEVEL = { idle: 0, active: 1, processing: 2 };
+const STATE_LEVEL = { idle: 0, listening: 0.35, offline: 0.2, active: 1, searching: 1.35, tooling: 1.45, coding: 1.55, thinking: 1.75, processing: 2, error: 2 };
+
+function entityPalette(mode) {
+  const palettes = {
+    idle:      { primary: [80, 200, 120], secondary: [0, 212, 255], bg: [10, 14, 26], fade: 0.18 },
+    listening: { primary: [0, 212, 255], secondary: [80, 200, 120], bg: [10, 18, 32], fade: 0.16 },
+    active:    { primary: [0, 212, 255], secondary: [80, 200, 120], bg: [10, 14, 26], fade: 0.18 },
+    searching: { primary: [0, 150, 255], secondary: [0, 212, 255], bg: [6, 20, 38], fade: 0.14 },
+    tooling:   { primary: [167, 139, 250], secondary: [0, 212, 255], bg: [18, 12, 38], fade: 0.14 },
+    coding:    { primary: [0, 240, 255], secondary: [80, 200, 120], bg: [5, 18, 30], fade: 0.12 },
+    thinking:  { primary: [255, 211, 105], secondary: [80, 200, 120], bg: [24, 18, 8], fade: 0.12 },
+    processing:{ primary: [80, 200, 120], secondary: [255, 211, 105], bg: [10, 14, 26], fade: 0.13 },
+    error:     { primary: [255, 92, 122], secondary: [255, 179, 71], bg: [34, 8, 18], fade: 0.10 },
+    offline:   { primary: [120, 130, 145], secondary: [60, 75, 95], bg: [8, 10, 16], fade: 0.22 },
+  };
+  return palettes[mode] || palettes.active;
+}
+
+function rgb(arr, alpha = 1) { return `rgba(${arr[0]}, ${arr[1]}, ${arr[2]}, ${alpha})`; }
 
 function initEntityCanvas() {
   const canvas = $("#entityCanvas");
@@ -238,6 +267,8 @@ function initEntityCanvas() {
   state._canvasTriggerGlowFade = () => { _glowFade = 1; };
 
   function draw(timestamp) {
+    const mode = state.streamingState || "idle";
+    const palette = entityPalette(mode);
     // Avanzar la transición hacia _targetLevel con easeInOutCubic.
     const diff = _targetLevel - _displayedLevel;
     if (Math.abs(diff) > 0.001) {
@@ -256,7 +287,7 @@ function initEntityCanvas() {
     }
 
     // Limpiar con efecto de fade.
-    ctx.fillStyle = "rgba(10, 14, 26, 0.18)";
+    ctx.fillStyle = rgb(palette.bg, palette.fade);
     ctx.fillRect(0, 0, W, H);
 
     // --- Aplicar easing al nivel para transiciones orgánicas ---
@@ -280,13 +311,13 @@ function initEntityCanvas() {
       const starX = cx + 3;
       const starY = cy - 2;
       const starR = 1.5 + idleWeight * 0.5;
-      ctx.fillStyle = `rgba(80, 200, 120, ${idleOpacity * idleWeight * 0.8})`;
+      ctx.fillStyle = rgb(palette.primary, idleOpacity * idleWeight * 0.8);
       ctx.beginPath();
       ctx.arc(starX, starY, starR, 0, Math.PI * 2);
       ctx.fill();
       // Pequeño halo de estrella.
       if (blinkPhase > 0.7) {
-        ctx.fillStyle = `rgba(80, 200, 120, ${(blinkPhase - 0.7) * idleWeight * 0.2})`;
+        ctx.fillStyle = rgb(palette.primary, (blinkPhase - 0.7) * idleWeight * 0.2);
         ctx.beginPath();
         ctx.arc(starX, starY, starR * 3, 0, Math.PI * 2);
         ctx.fill();
@@ -304,11 +335,9 @@ function initEntityCanvas() {
       const glowStrength = processingWeight + _glowFade * 0.5;
       if (glowStrength > 0.01) {
         const gradient = ctx.createRadialGradient(cx, cy, 0, cx, cy, 40);
-        const isProc = processingWeight > 0.3;
-        gradient.addColorStop(0, isProc
-          ? `rgba(80, 200, 120, ${0.4 * glowStrength})`
-          : `rgba(0, 212, 255, ${0.3 * glowStrength})`);
-        gradient.addColorStop(1, "rgba(80, 200, 120, 0)");
+        gradient.addColorStop(0, rgb(palette.primary, 0.4 * glowStrength));
+        gradient.addColorStop(0.55, rgb(palette.secondary, 0.16 * glowStrength));
+        gradient.addColorStop(1, rgb(palette.primary, 0));
         ctx.fillStyle = gradient;
         ctx.beginPath();
         ctx.arc(cx, cy, 40, 0, Math.PI * 2);
@@ -316,8 +345,7 @@ function initEntityCanvas() {
       }
 
       // Orbe.
-      const orbColor = processingWeight > 0.5 ? "#50C878" : "#00d4ff";
-      ctx.fillStyle = orbColor;
+      ctx.fillStyle = rgb(palette.primary, 1);
       ctx.globalAlpha = activeWeight;
       ctx.beginPath();
       ctx.arc(cx, cy, orbRadius, 0, Math.PI * 2);
@@ -360,9 +388,9 @@ function initEntityCanvas() {
       const alpha = (cyanComp * 0.7 + greenComp * 1.0) * p.opacity;
 
       if (alpha > 0.02) {
-        const r_col = Math.round(0 * cyanComp + 80 * greenComp);
-        const g_col = Math.round(212 * cyanComp + 200 * greenComp);
-        const b_col = Math.round(255 * cyanComp + 120 * greenComp);
+        const r_col = Math.round(palette.secondary[0] * cyanComp + palette.primary[0] * Math.max(greenComp, 0.1));
+        const g_col = Math.round(palette.secondary[1] * cyanComp + palette.primary[1] * Math.max(greenComp, 0.1));
+        const b_col = Math.round(palette.secondary[2] * cyanComp + palette.primary[2] * Math.max(greenComp, 0.1));
         ctx.fillStyle = `rgba(${r_col}, ${g_col}, ${b_col}, ${alpha})`;
         ctx.beginPath();
         ctx.arc(x, y, p.size, 0, Math.PI * 2);
@@ -391,8 +419,11 @@ function setEntityState(s) {
   }
 
   // Si salimos de processing → activar glow fade de 800ms.
-  if (prev === "processing" && s !== "processing" && state._canvasTriggerGlowFade) {
+  if ((prev === "processing" || prev === "tooling" || prev === "searching" || prev === "coding" || prev === "thinking") && s !== prev && state._canvasTriggerGlowFade) {
     state._canvasTriggerGlowFade();
+  }
+  if (s === "error") {
+    setTimeout(() => { if (state.streamingState === "error") setEntityState(state.isOffline ? "offline" : "active"); }, 1400);
   }
 }
 
@@ -435,13 +466,8 @@ function setupEventListeners() {
       // P1-extra: actualizar modelo por defecto de la categoría y re-renderizar
       // welcome si no hay chat abierto (para refrescar las tarjetas).
       if (!state.currentChat) {
-        const defaultModels = {
-          agent: "nvidia/nemotron-3-super-120b-a12b:free",
-          coder: "poolside/laguna-m.1:free",
-          general: "nousresearch/hermes-3-llama-3.1-405b:free",
-        };
-        state.currentModel = defaultModels[state.currentCategory];
-        state.currentRole = getRoleForModel(state.currentModel);
+        state.currentModel = getDefaultModelForCategory(state.currentCategory);
+        state.currentRole = resolveUiRoleForCurrentSelection(state.currentModel);
         populateModelSelector();
         renderEmptyState();
         updateDeepThinkingVisibility();
@@ -531,11 +557,13 @@ function setupEventListeners() {
   // Input de mensaje.
   const input = $("#messageInput");
   input?.addEventListener("input", () => {
+    if (!state.isOffline && state.streamingState === "idle" && input.value.trim()) setEntityState("listening");
     autoResize(input);
     debouncedUpdateTokenCounter();
     if (state.sharedSession) state.sharedSession.setTyping(true);
   });
   input?.addEventListener("blur", () => {
+    if (!state.isOffline && state.streamingState === "listening") setEntityState("idle");
     if (state.sharedSession) state.sharedSession.setTyping(false);
   });
   input?.addEventListener("keydown", (e) => {
@@ -554,20 +582,38 @@ function setupEventListeners() {
   $("#searchToggle")?.addEventListener("click", () => toggleButton("search"));
   $("#scrapeToggle")?.addEventListener("click", () => toggleButton("scrape"));
   $("#thinkingToggle")?.addEventListener("click", () => toggleButton("thinking"));
+  $("#codeFirstToggle")?.addEventListener("click", () => {
+    toggleButton("codeFirst");
+    if (state.currentCategory === "agent" && state.toggles.codeFirst) {
+      state.currentModel = "cohere/north-mini-code:free";
+      state.currentRole = resolveUiRoleForCurrentSelection(state.currentModel);
+      populateModelSelector();
+      renderChatHeader();
+      setEntityState("coding");
+      toast("Code-first activado: prioridad a programación", "info", 2500);
+    }
+  });
 
   // Deep Thinking toggle (solo visible cuando rol === "agent").
   $("#deepThinkingBtn")?.addEventListener("click", () => {
     state.toggles.deepThinking = !state.toggles.deepThinking;
+    if (state.currentCategory === "agent" && state.toggles.deepThinking) {
+      state.currentModel = "nvidia/nemotron-3-ultra-550b-a55b:free";
+      state.currentRole = resolveUiRoleForCurrentSelection(state.currentModel);
+      populateModelSelector();
+      renderChatHeader();
+      setEntityState("thinking");
+    }
     const btn = $("#deepThinkingBtn");
     btn.classList.toggle("active", state.toggles.deepThinking);
     btn.setAttribute("aria-pressed", String(state.toggles.deepThinking));
-    toast(state.toggles.deepThinking ? "Pensamiento Profundo activado (Nemotron Ultra)" : "Pensamiento Profundo desactivado", "info", 2000);
+    toast(state.toggles.deepThinking ? "Pensador activado (Nemotron Ultra)" : "Pensador desactivado", "info", 2000);
   });
 
   // Model selector.
   $("#modelSelector")?.addEventListener("change", (e) => {
     state.currentModel = e.target.value;
-    state.currentRole = getRoleForModel(state.currentModel);
+    state.currentRole = resolveUiRoleForCurrentSelection(state.currentModel);
     updateTokenCounter();
     updateInviteButtonVisibility();
   });
@@ -580,6 +626,10 @@ function setupEventListeners() {
   $("#sbNew")?.addEventListener("click", () => clearSandbox());
   $("#sbTemplatesBtn")?.addEventListener("click", () => toggleDropdown("#sbTemplatesMenu"));
   $("#sbLibrariesBtn")?.addEventListener("click", () => toggleDropdown("#sbLibrariesMenu"));
+  $("#sbSnapshot")?.addEventListener("click", () => createSandboxSnapshot("manual"));
+  $("#sbRestore")?.addEventListener("click", () => restoreSandboxSnapshot());
+  $("#sbDiff")?.addEventListener("click", () => showSandboxDiff());
+  $("#sbRunTests")?.addEventListener("click", () => runSandboxTests());
   $("#sbExportZip")?.addEventListener("click", () => exportZip());
   $("#sbDownload")?.addEventListener("click", () => downloadActiveFile());
   $("#sbCopy")?.addEventListener("click", () => copyActiveFile());
@@ -587,7 +637,13 @@ function setupEventListeners() {
   $("#sbPushGithub")?.addEventListener("click", () => pushToGithub());
   $("#sbCollapse")?.addEventListener("click", () => toggleSandbox());
   $("#sbRefresh")?.addEventListener("click", () => refreshPreview());
+  $("#sbFixWithCoder")?.addEventListener("click", () => repairSandboxWithCoder());
+  $("#sbDismissError")?.addEventListener("click", () => hide($("#sandboxErrorOverlay")));
   $("#sbClosePanel")?.addEventListener("click", () => hide($("#sandboxBottomPanel")));
+  $$("#sandboxBottomPanel .panel-tab[data-panel]").forEach((btn) => {
+    btn.addEventListener("click", () => showSandboxPanel(btn.dataset.panel));
+  });
+  window.addEventListener("message", handleSandboxMessage);
 
   // Templates dropdown items.
   $$("#sbTemplatesMenu button").forEach((btn) => {
@@ -789,6 +845,30 @@ function toggleButton(name) {
   state.toggles[name] = active;
 }
 
+function resolveUiRoleForCurrentSelection(modelId = state.currentModel) {
+  if (state.currentCategory === "agent") return "agent";
+  if (state.currentCategory === "estratega") return "estratega";
+  if (state.currentCategory === "fast") return "fast";
+  return getRoleForModel(modelId) || "agent";
+}
+
+function getDefaultModelForCategory(category) {
+  return {
+    agent: "nvidia/nemotron-3-super-120b-a12b:free",
+    estratega: "z-ai/glm-4.7-flash",
+    fast: "z-ai/glm-4.7-flash",
+    // Compatibilidad con categorías antiguas persistidas.
+    coder: "cohere/north-mini-code:free",
+    general: "z-ai/glm-4.7-flash",
+  }[category] || "nvidia/nemotron-3-super-120b-a12b:free";
+}
+
+function getPreferredAgentModel() {
+  if (state.toggles.deepThinking) return "nvidia/nemotron-3-ultra-550b-a55b:free";
+  if (state.toggles.codeFirst) return "cohere/north-mini-code:free";
+  return state.currentModel || "nvidia/nemotron-3-super-120b-a12b:free";
+}
+
 function toggleDropdown(sel) {
   const menu = $(sel);
   if (!menu) return;
@@ -947,13 +1027,8 @@ async function createNewChat() {
   invalidateMemoryCache();
 
   // Seleccionar modelo por defecto según categoría.
-  const defaultModels = {
-    agent: "nvidia/nemotron-3-super-120b-a12b:free",
-    coder: "poolside/laguna-m.1:free",
-    general: "nousresearch/hermes-3-llama-3.1-405b:free",
-  };
-  state.currentModel = defaultModels[category];
-  state.currentRole = getRoleForModel(state.currentModel);
+  state.currentModel = getDefaultModelForCategory(category);
+  state.currentRole = resolveUiRoleForCurrentSelection(state.currentModel);
 
   populateModelSelector();
   await loadChatList();
@@ -1110,17 +1185,29 @@ function populateModelSelector() {
   let models = [];
 
   if (state.currentCategory === "agent") {
-    // Stack Nemotron: una sola entrada "Agente" (el orquestador decide internamente)
-    models = ["nvidia/nemotron-3-super-120b-a12b:free"];
-  } else if (state.currentCategory === "coder") {
-    models = ["poolside/laguna-m.1:free"];
-  } else {
-    // general: Estratega, Pensador, Fast
     models = [
-      "nousresearch/hermes-3-llama-3.1-405b:free",
       "nvidia/nemotron-3-super-120b-a12b:free",
-      "z-ai/glm-4.5-flash",
+      "nvidia/nemotron-3-ultra-550b-a55b:free",
+      "nvidia/nemotron-3-nano-30b-a3b:free",
+      "google/gemma-4-31b-it:free",
+      "openai/gpt-oss-20b:free",
+      "cohere/north-mini-code:free",
+      "poolside/laguna-s-2.1:free",
+      "poolside/laguna-xs-2.1:free",
     ];
+  } else if (state.currentCategory === "estratega") {
+    models = [
+      "z-ai/glm-4.7-flash",
+      "z-ai/glm-4.6v-flash",
+      "z-ai/glm-4.5-flash",
+      "google/gemma-4-31b-it:free",
+      "openai/gpt-oss-20b:free",
+      "nvidia/nemotron-3-super-120b-a12b:free",
+    ];
+  } else if (state.currentCategory === "fast") {
+    models = ["z-ai/glm-4.7-flash", "z-ai/glm-4.6v-flash", "z-ai/glm-4.5-flash"];
+  } else {
+    models = [getDefaultModelForCategory(state.currentCategory)];
   }
 
   models.forEach((m) => {
@@ -1134,7 +1221,7 @@ function populateModelSelector() {
 
   if (!state.currentModel && models.length > 0) {
     state.currentModel = models[0];
-    state.currentRole = getRoleForModel(state.currentModel);
+    state.currentRole = resolveUiRoleForCurrentSelection(state.currentModel);
   }
 }
 
@@ -1198,20 +1285,24 @@ function renderWelcomeModelCards() {
   const cardsContainer = $("#welcomeModelCards");
   if (!cardsContainer) return;
 
-  // Determinar modelos a mostrar según categoría.
   let models = [];
   if (state.currentCategory === "agent") {
-    // Stack Nemotron: 1 sola tarjeta "Agente (Nemotron Stack)"
-    models = ["nvidia/nemotron-3-super-120b-a12b:free"];
-  } else if (state.currentCategory === "coder") {
-    models = ["poolside/laguna-m.1:free"];
-  } else {
-    // general: Estratega, Pensador, Fast
     models = [
-      "nousresearch/hermes-3-llama-3.1-405b:free",
       "nvidia/nemotron-3-super-120b-a12b:free",
-      "z-ai/glm-4.5-flash",
+      "nvidia/nemotron-3-ultra-550b-a55b:free",
+      "nvidia/nemotron-3-nano-30b-a3b:free",
+      "google/gemma-4-31b-it:free",
+      "openai/gpt-oss-20b:free",
+      "cohere/north-mini-code:free",
+      "poolside/laguna-s-2.1:free",
+      "poolside/laguna-xs-2.1:free",
     ];
+  } else if (state.currentCategory === "estratega") {
+    models = ["z-ai/glm-4.7-flash", "z-ai/glm-4.6v-flash", "z-ai/glm-4.5-flash", "google/gemma-4-31b-it:free", "openai/gpt-oss-20b:free"];
+  } else if (state.currentCategory === "fast") {
+    models = ["z-ai/glm-4.7-flash", "z-ai/glm-4.6v-flash", "z-ai/glm-4.5-flash"];
+  } else {
+    models = [getDefaultModelForCategory(state.currentCategory)];
   }
 
   const cardsHtml = models.map((modelId) => {
@@ -1236,7 +1327,7 @@ function renderWelcomeModelCards() {
     const select = () => {
       const modelId = card.dataset.model;
       state.currentModel = modelId;
-      state.currentRole = getRoleForModel(modelId);
+      state.currentRole = resolveUiRoleForCurrentSelection(modelId);
       populateModelSelector();
       updateTokenCounter();
       // Re-render para marcar la tarjeta activa.
@@ -1272,6 +1363,24 @@ function getModelDisplayInfo(modelId) {
       icon: "⚡️",
       provider,
     },
+    "nvidia/nemotron-3-nano-30b-a3b:free": {
+      shortName: "Nemotron Nano 30B",
+      roleName: t("roles.agent"),
+      icon: "🧩",
+      provider,
+    },
+    "google/gemma-4-31b-it:free": {
+      shortName: "Gemma 4 31B",
+      roleName: state.currentCategory === "estratega" ? t("roles.estratega") : t("roles.agent"),
+      icon: "🔷",
+      provider,
+    },
+    "openai/gpt-oss-20b:free": {
+      shortName: "GPT-OSS 20B",
+      roleName: state.currentCategory === "estratega" ? t("roles.estratega") : t("roles.agent"),
+      icon: "◌",
+      provider,
+    },
     "nvidia/nemotron-nano-12b-v2-vl:free": {
       shortName: "Nano VL",
       roleName: "Percepción Visual",
@@ -1285,21 +1394,39 @@ function getModelDisplayInfo(modelId) {
       provider,
     },
     // Roles standalone
-    "poolside/laguna-m.1:free": {
-      shortName: "Laguna",
+    "cohere/north-mini-code:free": {
+      shortName: "North Mini Code",
       roleName: t("roles.coder"),
       icon: "⚙",
       provider,
     },
-    "nousresearch/hermes-3-llama-3.1-405b:free": {
-      shortName: "Hermes-3",
-      roleName: t("roles.estratega"),
-      icon: "🧭",
+    "poolside/laguna-s-2.1:free": {
+      shortName: "Laguna S 2.1",
+      roleName: t("roles.coder"),
+      icon: "🛠",
+      provider,
+    },
+    "poolside/laguna-xs-2.1:free": {
+      shortName: "Laguna XS 2.1",
+      roleName: t("roles.coder"),
+      icon: "🔧",
+      provider,
+    },
+    "z-ai/glm-4.7-flash": {
+      shortName: "GLM-4.7 Flash",
+      roleName: state.currentCategory === "estratega" ? t("roles.estratega") : t("roles.fast"),
+      icon: "⚡",
+      provider,
+    },
+    "z-ai/glm-4.6v-flash": {
+      shortName: "GLM-4.6V Flash",
+      roleName: state.currentCategory === "estratega" ? t("roles.estratega") : t("roles.fast"),
+      icon: "⚡",
       provider,
     },
     "z-ai/glm-4.5-flash": {
       shortName: "GLM-4.5 Flash",
-      roleName: t("roles.fast"),
+      roleName: state.currentCategory === "estratega" ? t("roles.estratega") : t("roles.fast"),
       icon: "⚡",
       provider,
     },
@@ -1564,7 +1691,7 @@ async function sendMessage() {
   if (state.pendingAttachments.length > 0) {
     attachmentsMeta = [...state.pendingAttachments];
 
-    if (state.currentRole === "agent") {
+    if (state.currentCategory === "agent") {
       // El agente pasa los attachments a runAgentLoop que los percibe
       // directamente vía /api/chat/perceive. NO inyectar texto en el mensaje.
       // Los chips se limpian tras la percepción (dentro de runAgentLoop).
@@ -1657,37 +1784,36 @@ async function sendMessage() {
 }
 
 // ==============================================================================
-// FALLBACK ASISTIDO (auxiliar de emergencia)
+// FALLBACK ÉTICO A DOLPHIN
 // ==============================================================================
 // Cuando un modelo con restricciones de fabricante (Nemotron, Laguna) emite
-// <fallback_to_aux> (antes <fallback_to_dolphin>), se re-enruta la query a
-// GLM-4.5 Flash (auxiliar sin restricciones de fabricante) vía Puter.
+// <fallback_to_uncensored>, se re-enruta la query al Estratega GLM permisivo vía Puter.
 // ==============================================================================
-const AUX_MODEL = "z-ai/glm-4.5-flash";
+const UNCENSORED_STRATEGIST_MODEL = "z-ai/glm-4.7-flash";
 
 /**
- * Llama al auxiliar directamente con la query original del usuario.
- * Usa Puter.js (no pasa por el Worker) con el system prompt del auxiliar.
+ * Llama al Estratega GLM directamente con la query original del usuario.
+ * Usa Puter.js (no pasa por el Worker) con el system prompt estratégico.
  * Streaming: muestra progreso en tiempo real.
  */
-async function callAuxForFallback(originalQuery, prefixText) {
+async function callUncensoredStrategistFallback(originalQuery, prefixText) {
   if (typeof puter === "undefined" || !puter.ai?.chat) {
-    throw new Error("Puter.js no disponible para fallback al auxiliar");
+    throw new Error("Puter.js no disponible para fallback a Estratega GLM");
   }
 
-  const auxPrompt = SYSTEM_PROMPTS.glm_flash;
+  const strategistPrompt = SYSTEM_PROMPTS.strategist;
   const messages = [
-    { role: "system", content: auxPrompt },
+    { role: "system", content: strategistPrompt },
     { role: "user", content: originalQuery },
   ];
 
-  toast(t("stream.auxFallback") || "Enrutando a GLM-4.5 Flash (auxiliar)...", "info", 4000);
+  toast(t("toast.uncensoredFallback") || "Enrutando a Estratega GLM permisivo...", "info", 4000);
   showStreamingIndicator(t("stream.processing"), "processing");
 
   let text = "";
   try {
     const response = await puter.ai.chat(messages, {
-      model: AUX_MODEL,
+      model: UNCENSORED_STRATEGIST_MODEL,
       stream: true,
     });
 
@@ -1695,7 +1821,7 @@ async function callAuxForFallback(originalQuery, prefixText) {
       const delta = chunk?.message?.content || chunk?.text || "";
       if (delta) {
         text += delta;
-        // Mostrar la respuesta del auxiliar con prefijo si lo hay.
+        // Mostrar respuesta del Estratega GLM con prefijo si lo hay.
         updateStreamingMessage((prefixText || "") + text);
       }
     }
@@ -1711,7 +1837,7 @@ async function callAuxForFallback(originalQuery, prefixText) {
 
   return {
     text,
-    model: AUX_MODEL,
+    model: UNCENSORED_STRATEGIST_MODEL,
     tokens_in: 0,
     tokens_out: 0,
     cached_tokens: 0,
@@ -1765,15 +1891,15 @@ async function runChatWithTools(userContent) {
         break;
       }
 
-      // ── Fallback asistido: <fallback_to_aux> ──
-      const auxFallback = parseFallbackToAux(response.text);
-      if (auxFallback) {
-        console.log("[chat] Fallback asistido detectado:", auxFallback.reason);
-        const strippedText = stripFallbackToAux(response.text);
-        const prefix = strippedText ? strippedText + "\n\n--- *Fallback a GLM-4.5 Flash (auxiliar)* ---\n\n" : "";
-        // Re-enrutar al auxiliar (GLM-4.5 Flash) con la query original.
+      // ── Fallback ético: <fallback_to_uncensored> ──
+      const uncensoredFallback = parseFallbackToVenice(response.text);
+      if (uncensoredFallback) {
+        console.log("[chat] Fallback ético detectado:", uncensoredFallback.reason);
+        const strippedText = stripFallbackToVenice(response.text);
+        const prefix = strippedText ? strippedText + "\n\n--- *Fallback a Estratega GLM* ---\n\n" : "";
+        // Re-enrutar al Estratega GLM permisivo con la query original.
         try {
-          const auxResp = await callAuxForFallback(auxFallback.original_query || userContent, prefix);
+          const auxResp = await callUncensoredStrategistFallback(uncensoredFallback.original_query || userContent, prefix);
           response.text = auxResp.text;
           response.model = auxResp.model;
           response.tokens_in = auxResp.tokens_in;
@@ -1781,13 +1907,13 @@ async function runChatWithTools(userContent) {
           response.cached_tokens = 0;
           assistantText += prefix + response.text;
         } catch (auxErr) {
-          console.warn("[chat] Fallback al auxiliar falló:", auxErr.message);
+          console.warn("[chat] Fallback a Estratega GLM falló:", auxErr.message);
           if (strippedText) {
             assistantText += strippedText + "\n\n";
           }
-          assistantText += `[Error: el modelo primario rechazó la query y el fallback al auxiliar falló: ${auxErr.message}]`;
+          assistantText += `[Error: el modelo primario rechazó la query y el fallback a Estratega GLM falló: ${auxErr.message}]`;
         }
-        break; // Terminar el loop — el auxiliar ya respondió.
+        break; // Terminar el loop — Estratega GLM ya respondió.
       }
 
       assistantText += response.text;
@@ -1971,7 +2097,7 @@ Responde SOLO un JSON array de objetos con formato: [{"content": "...", "categor
 No incluyas nada más que el JSON array.`;
 
     const response = await puter.ai.chat(prompt, {
-      model: "z-ai/glm-4.5-flash",
+      model: "z-ai/glm-4.7-flash",
       stream: false,
     });
     const text = (response?.message?.content || response?.text || "").trim();
@@ -2073,6 +2199,7 @@ async function callModel(userContent, previousAssistantText, isFollowUp) {
         // Pasar skills y memorias para que el Worker los appendee al system prompt.
         skillsBlock: skillsBlock || null,
         memoryBlock: memoryText || null,
+        modelId: getPreferredAgentModel(),
         onDelta: (text) => {
           hideStreamingIndicator();
           updateStreamingMessage(text);
@@ -2325,7 +2452,6 @@ function stopRotatingLines() {
   }
 }
 
-// Rota frases cortas en el indicador mientras se procesa/piensa.
 function startRotatingLines(mode) {
   stopRotatingLines();
   const el = $("#streamingText");
@@ -2386,6 +2512,12 @@ function clearStreamingMessage() {
 // ==============================================================================
 // TOOL EXECUTION
 // ==============================================================================
+function entityStateForTool(toolName) {
+  if (/search|scrape|crawl|reader|gdelt|jina|firecrawl|spider|rover/i.test(toolName)) return "searching";
+  if (/github|write|preview|template|browserless|browser_use|steel|code|project/i.test(toolName)) return "coding";
+  return "tooling";
+}
+
 async function executeToolCall(call) {
   // Mostrar chip "Ejecutando: <tool>".
   const toolMsg = {
@@ -2400,6 +2532,7 @@ async function executeToolCall(call) {
   scrollToBottom();
 
   const startTs = Date.now();
+  setEntityState(entityStateForTool(call.name));
   try {
     const resp = await fetch("/api/tool/invoke", {
       method: "POST",
@@ -2436,6 +2569,7 @@ async function executeToolCall(call) {
       }));
     }
   } catch (e) {
+    setEntityState("error");
     toolMsg.content = buildToolResultXML(call.name, "error", e.message);
     renderMessages();
   }
@@ -2453,7 +2587,7 @@ async function tryFallback(error) {
 
   if (state.settings.fallbackMode === "automatic") {
     state.currentModel = next;
-    state.currentRole = getRoleForModel(next);
+    state.currentRole = resolveUiRoleForCurrentSelection(next);
     populateModelSelector();
     renderChatHeader();
     toast(t("model.changed", { model: next, old: state.currentModel }), "info");
@@ -2464,7 +2598,7 @@ async function tryFallback(error) {
     const ok = confirm(t("model.unavailable", { model: state.currentModel, fallback: next }));
     if (ok) {
       state.currentModel = next;
-      state.currentRole = getRoleForModel(next);
+      state.currentRole = resolveUiRoleForCurrentSelection(next);
       populateModelSelector();
       renderChatHeader();
       await runChatWithTools(state.messages[state.messages.length - 1].content);
@@ -2479,6 +2613,11 @@ function parseFileBlocks(text) {
   const regex = /<file path="([^"]+)">([\s\S]*?)<\/file>/g;
   let match;
   let found = false;
+  const hadFilesBefore = Object.keys(state.sandbox.files).length > 0;
+  if (hadFilesBefore && regex.test(text)) {
+    createSandboxSnapshot("before-ai-update");
+    regex.lastIndex = 0;
+  }
   while ((match = regex.exec(text)) !== null) {
     const path = match[1];
     const content = match[2];
@@ -2551,16 +2690,30 @@ function openSandboxFile(path) {
 function refreshPreview() {
   if (state.sandbox.previewThrottleTimer) clearTimeout(state.sandbox.previewThrottleTimer);
   state.sandbox.previewThrottleTimer = setTimeout(() => {
+    resetSandboxRuntimeState();
     const html = buildSandboxHTML();
     const iframe = $("#sandboxPreview");
     if (iframe) {
       const blob = new Blob([html], { type: "text/html" });
-      iframe.src = URL.createObjectURL(blob);
+      if (state.sandbox.previewUrl) URL.revokeObjectURL(state.sandbox.previewUrl);
+      state.sandbox.previewUrl = URL.createObjectURL(blob);
+      iframe.src = state.sandbox.previewUrl;
     }
   }, 300);
 }
 
 const debouncedRefreshPreview = debounce(refreshPreview, 300);
+
+function resetSandboxRuntimeState() {
+  state.sandbox.consoleEntries = [];
+  state.sandbox.networkEntries = [];
+  state.sandbox.testEntries = [];
+  state.sandbox.lastError = null;
+  hide($("#sandboxErrorOverlay"));
+  renderSandboxConsole();
+  renderSandboxNetwork();
+  renderSandboxTests();
+}
 
 function buildSandboxHTML() {
   let html = state.sandbox.files["index.html"] || "<!DOCTYPE html><html><body>Sin index.html</body></html>";
@@ -2584,7 +2737,201 @@ function buildSandboxHTML() {
     return content ? `<script>\n${content}\n</script>` : match;
   });
 
-  return html;
+  return injectSandboxInstrumentation(html);
+}
+
+function injectSandboxInstrumentation(html) {
+  const script = `<script>
+(() => {
+  const send = (type, payload) => parent.postMessage({ source: 'veritas-sandbox', type, payload }, '*');
+  const serialize = (value) => {
+    try {
+      if (value instanceof Error) return value.stack || value.message;
+      if (typeof value === 'string') return value;
+      return JSON.stringify(value);
+    } catch { return String(value); }
+  };
+
+  ['log', 'info', 'warn', 'error'].forEach((level) => {
+    const original = console[level]?.bind(console);
+    console[level] = (...args) => {
+      send('console', { level, args: args.map(serialize), ts: Date.now() });
+      original?.(...args);
+    };
+  });
+
+  window.addEventListener('error', (event) => {
+    send('error', {
+      message: event.message,
+      filename: event.filename,
+      lineno: event.lineno,
+      colno: event.colno,
+      stack: event.error?.stack || '',
+      ts: Date.now(),
+    });
+  });
+
+  window.addEventListener('unhandledrejection', (event) => {
+    send('error', {
+      message: 'Unhandled promise rejection: ' + serialize(event.reason),
+      stack: event.reason?.stack || '',
+      ts: Date.now(),
+    });
+  });
+
+  const originalFetch = window.fetch?.bind(window);
+  if (originalFetch) {
+    window.fetch = async (...args) => {
+      const started = performance.now();
+      const url = serialize(args[0]);
+      try {
+        const response = await originalFetch(...args);
+        send('network', { url, status: response.status, ok: response.ok, ms: Math.round(performance.now() - started), ts: Date.now() });
+        return response;
+      } catch (error) {
+        send('network', { url, status: 'ERR', ok: false, error: serialize(error), ms: Math.round(performance.now() - started), ts: Date.now() });
+        throw error;
+      }
+    };
+  }
+
+  async function runTests() {
+    const tests = Array.isArray(window.__veritasTests) ? window.__veritasTests : [];
+    const results = [];
+    for (const test of tests) {
+      const name = test?.name || 'unnamed test';
+      const started = performance.now();
+      try {
+        const pass = typeof test?.run === 'function' ? await test.run() : false;
+        results.push({ name, status: pass ? 'pass' : 'fail', ms: Math.round(performance.now() - started) });
+      } catch (error) {
+        results.push({ name, status: 'error', error: serialize(error), ms: Math.round(performance.now() - started) });
+      }
+    }
+    send('tests', { results, total: tests.length, ts: Date.now() });
+  }
+
+  window.addEventListener('message', (event) => {
+    if (event.data?.source === 'veritas-parent' && event.data?.type === 'run-tests') runTests();
+  });
+  window.addEventListener('load', () => setTimeout(runTests, 50));
+  send('ready', { ts: Date.now() });
+})();
+<\/script>`;
+
+  if (/<\/body>/i.test(html)) return html.replace(/<\/body>/i, `${script}\n</body>`);
+  return `${html}\n${script}`;
+}
+
+function handleSandboxMessage(event) {
+  const data = event.data || {};
+  if (data.source !== "veritas-sandbox") return;
+
+  switch (data.type) {
+    case "console":
+      state.sandbox.consoleEntries.push(data.payload);
+      renderSandboxConsole();
+      break;
+    case "network":
+      state.sandbox.networkEntries.push(data.payload);
+      renderSandboxNetwork();
+      break;
+    case "tests":
+      state.sandbox.testEntries = data.payload?.results || [];
+      renderSandboxTests();
+      if ((data.payload?.total || 0) > 0) showSandboxPanel("tests");
+      break;
+    case "error":
+      state.sandbox.lastError = data.payload;
+      state.sandbox.consoleEntries.push({ level: "error", args: [data.payload.message || "Preview error"], ts: Date.now() });
+      renderSandboxConsole();
+      showSandboxError(data.payload);
+      break;
+  }
+}
+
+function showSandboxPanel(panel) {
+  show($("#sandboxBottomPanel"));
+  $$("#sandboxBottomPanel .panel-tab[data-panel]").forEach((btn) => btn.classList.toggle("active", btn.dataset.panel === panel));
+  ["console", "network", "tests", "diff"].forEach((name) => {
+    const el = $(`#panel${name.charAt(0).toUpperCase() + name.slice(1)}`);
+    if (el) el.hidden = name !== panel;
+  });
+}
+
+function renderSandboxConsole() {
+  const el = $("#panelConsole");
+  if (!el) return;
+  if (state.sandbox.consoleEntries.length === 0) {
+    el.innerHTML = `<div class="panel-empty">Console sin eventos todavía.</div>`;
+    return;
+  }
+  el.innerHTML = state.sandbox.consoleEntries.slice(-200).map((entry) => {
+    const level = escapeHTML(entry.level || "log");
+    const text = escapeHTML((entry.args || []).join(" "));
+    return `<div class="sandbox-log ${level}"><span>${level}</span><code>${text}</code></div>`;
+  }).join("");
+  el.scrollTop = el.scrollHeight;
+}
+
+function renderSandboxNetwork() {
+  const el = $("#panelNetwork");
+  if (!el) return;
+  if (state.sandbox.networkEntries.length === 0) {
+    el.innerHTML = `<div class="panel-empty">Network sin requests capturadas.</div>`;
+    return;
+  }
+  el.innerHTML = state.sandbox.networkEntries.slice(-200).map((entry) => {
+    const ok = entry.ok ? "ok" : "fail";
+    return `<div class="sandbox-network ${ok}"><strong>${escapeHTML(entry.status)}</strong><span>${escapeHTML(entry.url)}</span><em>${entry.ms || 0}ms</em></div>`;
+  }).join("");
+}
+
+function renderSandboxTests() {
+  const el = $("#panelTests");
+  if (!el) return;
+  if (!state.sandbox.testEntries.length) {
+    el.innerHTML = `<div class="panel-empty">Define <code>window.__veritasTests</code> en tu artefacto y pulsa Tests.</div>`;
+    return;
+  }
+  const passed = state.sandbox.testEntries.filter((t) => t.status === "pass").length;
+  el.innerHTML = `<div class="sandbox-tests-summary">${passed}/${state.sandbox.testEntries.length} tests OK</div>` +
+    state.sandbox.testEntries.map((t) => `
+      <div class="sandbox-test ${escapeHTML(t.status)}">
+        <strong>${t.status === "pass" ? "✅" : "❌"} ${escapeHTML(t.name)}</strong>
+        <span>${t.ms || 0}ms</span>
+        ${t.error ? `<pre>${escapeHTML(t.error)}</pre>` : ""}
+      </div>`).join("");
+}
+
+function showSandboxError(err) {
+  const overlay = $("#sandboxErrorOverlay");
+  const text = $("#sandboxErrorText");
+  if (!overlay || !text) return;
+  const details = [err.message, err.filename ? `${err.filename}:${err.lineno || "?"}:${err.colno || "?"}` : "", err.stack || ""].filter(Boolean).join("\n");
+  text.textContent = details.slice(0, 4000);
+  show(overlay);
+  showSandboxPanel("console");
+}
+
+function runSandboxTests() {
+  const iframe = $("#sandboxPreview");
+  iframe?.contentWindow?.postMessage({ source: "veritas-parent", type: "run-tests" }, "*");
+  showSandboxPanel("tests");
+}
+
+function repairSandboxWithCoder() {
+  const err = state.sandbox.lastError;
+  if (!err) return toast("No hay error capturado", "warning");
+  const filesSummary = Object.keys(state.sandbox.files).map((p) => `- ${p}`).join("\n");
+  const promptText = `Actúa como Coder de Véritas. Repara el sandbox estático respetando estas reglas: solo HTML/CSS/JS/CDN, sin npm ni backend persistente.\n\nError capturado en Live Preview:\n${err.message || "Error desconocido"}\n${err.filename || ""}:${err.lineno || "?"}:${err.colno || "?"}\n${err.stack || ""}\n\nArchivos actuales:\n${filesSummary}\n\nDevuelve los archivos corregidos usando bloques <file path="...">...</file> y explica brevemente la causa.`;
+  const input = $("#messageInput");
+  if (input) {
+    input.value = promptText;
+    autoResize(input);
+    input.focus();
+  }
+  toast("Prompt de reparación preparado para Coder", "info", 4000);
 }
 
 function showSandbox() {
@@ -2598,6 +2945,7 @@ function toggleSandbox() {
 }
 
 function clearSandbox() {
+  if (Object.keys(state.sandbox.files).length > 0) createSandboxSnapshot("before-clear");
   state.sandbox.files = {};
   state.sandbox.activeFile = null;
   if (state.sandbox.editor) state.sandbox.editor.toTextArea();
@@ -2609,6 +2957,7 @@ function clearSandbox() {
 
 function loadTemplate(name, params = {}) {
   try {
+    if (Object.keys(state.sandbox.files).length > 0) createSandboxSnapshot("before-template");
     const tpl = getTemplate(name, params);
     tpl.files.forEach((f) => { state.sandbox.files[f.path] = f.content; });
     renderSandboxTree();
@@ -2657,6 +3006,96 @@ function addLibrary(lib) {
   }
   refreshPreview();
   toast(`Librería ${lib} añadida`, "success");
+}
+
+function sandboxSnapshotKey() {
+  return `veritas:sandbox:snapshots:${state.currentChat?.id || "global"}`;
+}
+
+function loadSandboxSnapshots() {
+  try {
+    state.sandbox.snapshots = JSON.parse(localStorage.getItem(sandboxSnapshotKey()) || "[]");
+  } catch {
+    state.sandbox.snapshots = [];
+  }
+}
+
+function persistSandboxSnapshots() {
+  try {
+    localStorage.setItem(sandboxSnapshotKey(), JSON.stringify(state.sandbox.snapshots.slice(-12)));
+  } catch { /* localStorage quota best-effort */ }
+}
+
+function createSandboxSnapshot(label = "manual") {
+  const paths = Object.keys(state.sandbox.files);
+  if (paths.length === 0) return toast("No hay archivos para snapshot", "warning");
+  loadSandboxSnapshots();
+  const snapshot = {
+    id: crypto.randomUUID(),
+    label,
+    created_at: new Date().toISOString(),
+    activeFile: state.sandbox.activeFile,
+    files: JSON.parse(JSON.stringify(state.sandbox.files)),
+  };
+  state.sandbox.snapshots.push(snapshot);
+  persistSandboxSnapshots();
+  toast(`Snapshot guardado (${paths.length} archivos)`, "success");
+  return snapshot;
+}
+
+function restoreSandboxSnapshot() {
+  loadSandboxSnapshots();
+  if (state.sandbox.snapshots.length === 0) return toast("No hay snapshots", "warning");
+  const latest = state.sandbox.snapshots[state.sandbox.snapshots.length - 1];
+  const label = `${latest.label} · ${new Date(latest.created_at).toLocaleString()}`;
+  if (!confirm(`Restaurar último snapshot?\n${label}`)) return;
+  state.sandbox.files = JSON.parse(JSON.stringify(latest.files));
+  state.sandbox.activeFile = latest.activeFile || Object.keys(state.sandbox.files)[0] || null;
+  renderSandboxTree();
+  if (state.sandbox.activeFile) openSandboxFile(state.sandbox.activeFile);
+  refreshPreview();
+  showSandbox();
+  toast("Snapshot restaurado", "success");
+}
+
+function showSandboxDiff() {
+  loadSandboxSnapshots();
+  if (state.sandbox.snapshots.length === 0) return toast("No hay snapshot para comparar", "warning");
+  const latest = state.sandbox.snapshots[state.sandbox.snapshots.length - 1];
+  const diff = buildSandboxDiff(latest.files, state.sandbox.files);
+  const panel = $("#panelDiff");
+  if (panel) panel.innerHTML = diff || `<div class="panel-empty">Sin cambios desde el último snapshot.</div>`;
+  showSandboxPanel("diff");
+}
+
+function buildSandboxDiff(before, after) {
+  const paths = [...new Set([...Object.keys(before || {}), ...Object.keys(after || {})])].sort();
+  return paths.map((path) => {
+    const a = before?.[path];
+    const b = after?.[path];
+    if (a === b) return "";
+    if (a === undefined) return `<div class="diff-file"><h4>+ ${escapeHTML(path)}</h4><pre>${escapeHTML(String(b)).split("\n").map(l => `+ ${l}`).join("\n")}</pre></div>`;
+    if (b === undefined) return `<div class="diff-file"><h4>- ${escapeHTML(path)}</h4><pre>${escapeHTML(String(a)).split("\n").map(l => `- ${l}`).join("\n")}</pre></div>`;
+    return `<div class="diff-file"><h4>Δ ${escapeHTML(path)}</h4><pre>${escapeHTML(simpleLineDiff(String(a), String(b)))}</pre></div>`;
+  }).filter(Boolean).join("");
+}
+
+function simpleLineDiff(before, after) {
+  const oldLines = before.split("\n");
+  const newLines = after.split("\n");
+  const max = Math.max(oldLines.length, newLines.length);
+  const out = [];
+  for (let i = 0; i < max; i++) {
+    const oldLine = oldLines[i];
+    const newLine = newLines[i];
+    if (oldLine === newLine) {
+      if (oldLine !== undefined) out.push(`  ${oldLine}`);
+    } else {
+      if (oldLine !== undefined) out.push(`- ${oldLine}`);
+      if (newLine !== undefined) out.push(`+ ${newLine}`);
+    }
+  }
+  return out.join("\n");
 }
 
 async function exportZip() {
@@ -2732,6 +3171,7 @@ async function pushToGithub() {
     if (data.status === "ok") {
       toast(t("sandbox.pushedGithub"), "success");
     } else {
+      setEntityState("error");
       toast(`Error: ${data.output}`, "error", 5000);
     }
   } catch (e) {
@@ -3030,7 +3470,7 @@ function handleRepoFilesUpload(fileList) {
   }
   // Mostrar meta para primer archivo como referencia.
   show($("#repoUploadMeta"));
-  $("#repoDocName").value = files.length === 1 ? files[0].name : `";
+  $("#repoDocName").value = files.length === 1 ? files[0].name : "";
   show($("#repoConfirmUpload"));
 
   // Si es un solo archivo, confirmar directamente con el nombre original.
@@ -3122,9 +3562,9 @@ async function loadRepoList(append = false) {
 
     // Usage bar.
     const totalSize = data.total_size || 0;
-    const pct = Math.min(100, (totalSize / (100 * 1024 * 1024)) * 100);
+    const pct = Math.min(100, (totalSize / (10 * 1024 * 1024 * 1024)) * 100);
     $("#repoUsageFill").style.width = `${pct}%`;
-    $("#repoUsageText").textContent = t("repo.usage", { used: (totalSize / 1024 / 1024).toFixed(1) });
+    $("#repoUsageText").textContent = t("repo.usage", { used: (totalSize / 1024 / 1024 / 1024).toFixed(2) });
 
     // Botón "cargar más".
     let loadMoreBtn = $("#repoLoadMore");
@@ -3344,7 +3784,7 @@ async function loadDashboard() {
     grid.innerHTML = "";
 
     // Puter models (siempre available según Worker).
-    const puterModels = ["z-ai/glm-4.5-flash"];
+    const puterModels = ["z-ai/glm-4.7-flash", "z-ai/glm-4.6v-flash", "z-ai/glm-4.5-flash"];
     puterModels.forEach((m) => {
       grid.innerHTML += `<div class="dashboard-card"><div class="dashboard-card-name">${m}</div><div class="dashboard-card-status status-green">🟢 Puter</div></div>`;
     });
@@ -3803,8 +4243,13 @@ async function handleFileAttach(e) {
           mime_type: file.type,
         });
         renderAttachmentChips();
+        if (data.usage?.warning) {
+          const pct = Math.round((data.usage.projected_ratio || data.usage.usage_ratio || 0) * 100);
+          toast(`R2 cerca del límite free tier: ${pct}% usado. Considera borrar multimedia antigua.`, "warning", 6000);
+        }
       } else {
-        toast(`Error subiendo ${file.name}: ${resp.status}`, "error");
+        const err = await resp.json().catch(() => ({}));
+        toast(`Error subiendo ${file.name}: ${err.message || resp.status}`, "error", 7000);
       }
     } catch (err) {
       toast(`Error subiendo ${file.name}: ${err.message}`, "error");
@@ -3863,23 +4308,18 @@ function renderAttachmentChips() {
   });
 }
 
-// Formatea bytes a KB/MB.
-function formatBytes(bytes) {
-  if (bytes < 1024) return bytes + " B";
-  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
-  return (bytes / (1024 * 1024)).toFixed(1) + " MB";
-}
-
 // Muestra/oculta el botón de Pensamiento Profundo según la categoría.
 function updateDeepThinkingVisibility() {
   const btn = $("#deepThinkingBtn");
-  if (!btn) return;
-  const show = state.currentCategory === "agent";
-  btn.hidden = !show;
-  if (!show) {
+  const codeBtn = $("#codeFirstToggle");
+  const visible = state.currentCategory === "agent";
+  if (btn) btn.hidden = !visible;
+  if (codeBtn) codeBtn.hidden = !visible;
+  if (!visible) {
     state.toggles.deepThinking = false;
-    btn.classList.remove("active");
-    btn.setAttribute("aria-pressed", "false");
+    state.toggles.codeFirst = false;
+    if (btn) { btn.classList.remove("active"); btn.setAttribute("aria-pressed", "false"); }
+    if (codeBtn) { codeBtn.classList.remove("active"); codeBtn.setAttribute("aria-pressed", "false"); }
   }
 }
 
@@ -3887,7 +4327,7 @@ function updateDeepThinkingVisibility() {
 // PROMPT CRAFT — Botón flotante arrastrable + generador de prompts vía GLM
 // ==============================================================================
 // Widget autónomo: no depende del estado del chat principal. Usa Puter.js
-// directamente con GLM-4.5-Flash para generar prompts optimizados por rol.
+// directamente con GLM-4.7-Flash para generar prompts optimizados por rol.
 (function initPromptCraft() {
   const $ = (s) => document.querySelector(s);
 
@@ -3930,8 +4370,8 @@ function updateDeepThinkingVisibility() {
       ],
     },
     coder: {
-      name: "Coder",
-      model: "Poolside Laguna M.1 via OpenRouter",
+      name: "Agente · Code-first",
+      model: "Cohere North Mini Code → Poolside Laguna S/XS 2.1 via OpenRouter",
       strengths: [
         "Ingeniería de software completa: construir, editar y depurar código",
         "Generación de artefactos con Live Preview (HTML/CSS/JS en sandbox)",
@@ -3940,7 +4380,7 @@ function updateDeepThinkingVisibility() {
         "Integración con Dropbox para almacenamiento de proyectos",
         "Código funcional al primer intento (filosofía de código sobre explicación)",
         "Fetch vía proxy para APIs con restricciones CORS",
-        "Delegación a GLM-Flash para lookups puntuales de documentación",
+        "Fallback a GLM Flash para parches pequeños o lookups puntuales",
       ],
       tips: [
         "Describe qué quieres construir con el mayor detalle técnico posible",
@@ -3952,26 +4392,27 @@ function updateDeepThinkingVisibility() {
     },
     estratega: {
       name: "Estratega",
-      model: "Hermes-3 405B via OpenRouter",
+      model: "GLM 4.7 Flash vía Puter (prompt estratégico permisivo)",
       strengths: [
-        "Análisis estratégico profundo y directo",
+        "Análisis estratégico profundo con modo permisivo",
         "Contexto warfare/inteligencia/contrainteligencia",
         "Evaluación de escenarios y análisis de actores",
         "Razonamiento multi-nivel: táctico, operativo y estratégico",
         "Ciclo de inteligencia completo (6 fases: dirección, recolección, procesamiento, análisis, difusión, retroalimentación)",
         "Crítica de arquitectura y evaluación de trade-offs",
         "Búsqueda web nativa como tool",
-        "Receptor de fallback asistido (procesa queries que otros modelos rechazan)",
+        "Receptor de fallback ético (procesa queries que otros modelos rechazan)",
       ],
       tips: [
-        "Sé directo — Hermes-3 responde mejor con queries claras y sin rodeos",
+        "Sé directo — GLM responde mejor con objetivos estratégicos claros y contexto explícito",
         "Para análisis geopolíticos o de conflictos, menciona las partes involucradas",
         "Puedes pedir análisis en múltiples niveles (táctico/operativo/estratégico)",
+        "Si necesitas reducir rechazos, formula la tarea como análisis estratégico legítimo, factual y contextualizado",
         "Para investigaciones largas, pide que siga el ciclo de inteligencia completo",
       ],
     },
     pensador: {
-      name: "Pensador",
+      name: "Agente · Pensador",
       model: "Nemotron 3 Ultra via OpenRouter",
       strengths: [
         "Razonamiento profundo con cadena de pensamiento (thinking tokens)",
@@ -3989,6 +4430,21 @@ function updateDeepThinkingVisibility() {
         "Si necesitas comparar opciones, presenta todas las alternativas explícitamente",
         "Menciona 'investigación profunda' para forzar escalamiento a Ultra",
         "Puedes pedir que evalúe desde múltiples perspectivas o marcos teóricos",
+      ],
+    },
+    fast: {
+      name: "Fast",
+      model: "GLM 4.7 Flash → 4.6V Flash → 4.5 Flash vía Puter",
+      strengths: [
+        "Respuestas rápidas con baja latencia",
+        "Reformulación, resumen, clasificación y extracción ligera",
+        "Prompt Arquitecto y micro-tareas de productividad",
+        "Degradación automática entre modelos GLM Flash",
+      ],
+      tips: [
+        "Pide salidas breves y concretas",
+        "Usa Fast para borradores, títulos, resúmenes o clasificación",
+        "Evita tareas que requieran crawling, múltiples tools o análisis profundo",
       ],
     },
   };
@@ -4124,12 +4580,23 @@ REGLAS:
       if (typeof puter === "undefined" || !puter.ai || !puter.ai.chat) {
         throw new Error("Puter.js no disponible");
       }
-      const response = await puter.ai.chat(metaPrompt, {
-        model: "z-ai/glm-4.5-flash",
-        stream: false,
-      });
-      const text = (response?.message?.content || response?.text || "").trim();
-      if (!text) throw new Error("Respuesta vacía de GLM");
+      const glmModels = ["z-ai/glm-4.7-flash", "z-ai/glm-4.6v-flash", "z-ai/glm-4.5-flash"];
+      let text = "";
+      let lastError = null;
+      for (const model of glmModels) {
+        try {
+          const response = await puter.ai.chat(metaPrompt, { model, stream: false });
+          text = (response?.message?.content || response?.text || "").trim();
+          if (text) {
+            if (model !== glmModels[0]) showToast(`Fallback usado: ${model}`);
+            break;
+          }
+          lastError = new Error(`Respuesta vacía de ${model}`);
+        } catch (modelErr) {
+          lastError = modelErr;
+        }
+      }
+      if (!text) throw lastError || new Error("Respuesta vacía de GLM");
 
       lastGeneratedPrompt = text;
       resultEl.textContent = text;

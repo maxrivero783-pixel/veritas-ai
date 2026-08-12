@@ -1,15 +1,16 @@
-# Referencia: Patrones de Ineficiencia
+# Patrones frecuentes de ineficiencia
 
-## Proceso
-- **Silos**: equipos que no comparten información
-- **Cuellos de botella**: un paso que bloquea todo el flujo
-- **Rework**: repetir trabajo por falta de calidad
-- **Esperas**: tiempos muertos entre fases
-- **Handoffs**: transferencias manuales entre sistemas
+## Flujo de trabajo
+- Handoffs excesivos, aprobaciones redundantes, esperas invisibles, retrabajo por requisitos ambiguos.
 
-## Código
-- **Acoplamiento alto**: cambios en un módulo rompen otros
-- **Duplicación**: misma lógica en múltiples lugares
-- **Falta de tests**: bugs que se descubren en producción
-- **Deuda técnica**: shortcuts que acumulan costo
-- **Ausencia de monitoreo**: problemas invisibles hasta que fallan
+## Información
+- Duplicación de datos, fuentes de verdad múltiples, documentación desactualizada, decisiones no registradas.
+
+## Herramientas
+- Copiado manual entre sistemas, automatización frágil, falta de observabilidad, dependencias innecesarias.
+
+## Priorización
+- Trabajo urgente pero poco importante, WIP excesivo, ausencia de criterios de éxito, backlog sin poda.
+
+## Intervención
+Mapea el proceso, mide tiempo/coste/error, identifica cuello de botella, aplica una mejora pequeña y mide de nuevo.

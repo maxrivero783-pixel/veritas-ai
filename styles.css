@@ -1076,6 +1076,7 @@ body.is-offline .status-text::before { content: "Sin conexión"; }
   flex-direction: column;
   background: var(--bg-deep);
   overflow: hidden;
+  position: relative;
 }
 .sandbox-preview-header {
   padding: 6px 12px;
@@ -1124,6 +1125,64 @@ body.is-offline .status-text::before { content: "Sin conexión"; }
 .panel-content .log-error { color: var(--accent-red); }
 .panel-content .log-warn { color: var(--accent-amber); }
 .panel-content .log-info { color: var(--accent-cyan); }
+
+.sandbox-error-overlay {
+  position: absolute;
+  inset: 34px 10px auto 10px;
+  z-index: 5;
+  pointer-events: none;
+}
+.sandbox-error-card {
+  pointer-events: auto;
+  background: rgba(40, 12, 20, 0.94);
+  border: 1px solid var(--accent-red);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-panel);
+  color: var(--text-primary);
+  padding: 10px;
+}
+.sandbox-error-card strong { color: var(--accent-red); display: block; margin-bottom: 6px; }
+.sandbox-error-card pre {
+  max-height: 140px;
+  overflow: auto;
+  white-space: pre-wrap;
+  margin: 0 0 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.sandbox-error-actions { display: flex; gap: 8px; }
+.panel-empty { color: var(--text-muted); padding: 8px; }
+.sandbox-log, .sandbox-network, .sandbox-test {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 8px;
+  align-items: start;
+  padding: 4px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+.sandbox-log span { text-transform: uppercase; font-size: 10px; color: var(--text-muted); }
+.sandbox-log code { white-space: pre-wrap; word-break: break-word; }
+.sandbox-log.error code, .sandbox-network.fail strong, .sandbox-test.fail strong, .sandbox-test.error strong { color: var(--accent-red); }
+.sandbox-log.warn code { color: var(--accent-amber); }
+.sandbox-log.info code, .sandbox-network.ok strong, .sandbox-test.pass strong { color: var(--accent-cyan); }
+.sandbox-network span { overflow-wrap: anywhere; }
+.sandbox-network em { color: var(--text-muted); font-style: normal; }
+.sandbox-tests-summary {
+  color: var(--accent-eme);
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+.sandbox-test { grid-template-columns: 1fr auto; }
+.sandbox-test pre { grid-column: 1 / -1; color: var(--accent-red); margin: 4px 0 0; }
+.diff-file { margin-bottom: 12px; }
+.diff-file h4 { margin: 0 0 4px; color: var(--accent-eme); }
+.diff-file pre {
+  background: rgba(0,0,0,0.25);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 8px;
+  overflow: auto;
+}
 
 /* === Modales === */
 .modal-overlay {
@@ -1244,6 +1303,34 @@ body.is-offline .status-text::before { content: "Sin conexión"; }
   background: var(--bg-input);
   border-radius: var(--radius-md);
   border-left: 3px solid var(--accent-cyan);
+}
+
+.settings-info-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 10px;
+  margin: 10px 0 14px;
+}
+.settings-info-card {
+  padding: 12px;
+  background: linear-gradient(180deg, rgba(80, 200, 120, 0.08), rgba(0, 212, 255, 0.05));
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+.settings-info-card strong {
+  display: block;
+  color: var(--accent-eme);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  margin-bottom: 6px;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.settings-info-card span {
+  display: block;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .lang-options {
@@ -1744,12 +1831,18 @@ body.is-offline .send-btn { background: var(--text-muted); }
   color: var(--error, #ff6b6b);
 }
 
-/* Botón Deep Thinking */
+/* Botones Pensador / Code-first */
 #deepThinkingBtn.active {
   background: var(--accent-eme);
   color: var(--bg-deep);
   border-color: var(--accent-eme);
   box-shadow: 0 0 12px rgba(255, 215, 0, 0.3);
+}
+#codeFirstToggle.active {
+  background: var(--accent-cyan);
+  color: var(--bg-deep);
+  border-color: var(--accent-cyan);
+  box-shadow: 0 0 12px rgba(0, 212, 255, 0.35);
 }
 
 /* Banner de fallback transparency */

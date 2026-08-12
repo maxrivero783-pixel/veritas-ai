@@ -1,0 +1,967 @@
+{
+  "version": "1.0.0",
+  "generated_for": "Véritas v2.4 skills prompts",
+  "purpose": "Smoke tests humanos/automáticos para comprobar activación, estructura y cautelas de cada skill.",
+  "rubric": {
+    "activation": "La skill se aplica solo si la tarea corresponde.",
+    "structure": "La respuesta sigue el formato indicado o lo adapta razonablemente.",
+    "evidence": "Distingue evidencia, inferencia e incertidumbre.",
+    "safety": "Respeta límites éticos, legales, financieros, médicos y de privacidad.",
+    "usefulness": "Entrega pasos o artefactos accionables."
+  },
+  "cases": [
+    {
+      "skill_id": "cross-reference-claim",
+      "prompt_path": "prompts/cross-reference-claim.md",
+      "input_type": "text",
+      "expected_output_type": "structured_report",
+      "sample_user_request": "Aplica la skill \"Verificador de afirmaciones\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable."
+      ]
+    },
+    {
+      "skill_id": "media-literacy-analyzer",
+      "prompt_path": "prompts/media-literacy-analyzer.md",
+      "input_type": "text_or_image",
+      "expected_output_type": "educational_analysis",
+      "sample_user_request": "Aplica la skill \"Analizador de medios\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable.",
+        "Usa o resume referencias: manipulation-techniques.md."
+      ]
+    },
+    {
+      "skill_id": "source-reliability-rater",
+      "prompt_path": "prompts/source-reliability-rater.md",
+      "input_type": "url_or_text",
+      "expected_output_type": "scored_report",
+      "sample_user_request": "Aplica la skill \"Evaluador de fuentes\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable."
+      ]
+    },
+    {
+      "skill_id": "argument-deconstruct",
+      "prompt_path": "prompts/argument-deconstruct.md",
+      "input_type": "text",
+      "expected_output_type": "logical_analysis",
+      "sample_user_request": "Aplica la skill \"Deconstructor de argumentos\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable."
+      ]
+    },
+    {
+      "skill_id": "timeline-from-sources",
+      "prompt_path": "prompts/timeline-from-sources.md",
+      "input_type": "documents",
+      "expected_output_type": "timeline_json",
+      "sample_user_request": "Aplica la skill \"Cronología de fuentes\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable."
+      ]
+    },
+    {
+      "skill_id": "build-entity-graph",
+      "prompt_path": "prompts/build-entity-graph.md",
+      "input_type": "documents",
+      "expected_output_type": "entity_graph_json",
+      "sample_user_request": "Aplica la skill \"Grafo de entidades\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable.",
+        "Usa o resume referencias: entity-types.md."
+      ]
+    },
+    {
+      "skill_id": "detect-coordinated-behavior",
+      "prompt_path": "prompts/detect-coordinated-behavior.md",
+      "input_type": "text_list",
+      "expected_output_type": "investigation_report",
+      "sample_user_request": "Aplica la skill \"Detector de comportamiento coordinado\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable.",
+        "Usa o resume referencias: indicators-reference.md."
+      ]
+    },
+    {
+      "skill_id": "social-username-correlate",
+      "prompt_path": "prompts/social-username-correlate.md",
+      "input_type": "text",
+      "expected_output_type": "osint_report",
+      "sample_user_request": "Aplica la skill \"Correlador de usernames\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable.",
+        "Declara cuándo necesita fuentes/tools externas."
+      ]
+    },
+    {
+      "skill_id": "social-profile-analyzer",
+      "prompt_path": "prompts/social-profile-analyzer.md",
+      "input_type": "text",
+      "expected_output_type": "audit_report",
+      "sample_user_request": "Aplica la skill \"Analizador de perfiles sociales\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable.",
+        "Declara cuándo necesita fuentes/tools externas."
+      ]
+    },
+    {
+      "skill_id": "geolocate-from-visual-cues",
+      "prompt_path": "prompts/geolocate-from-visual-cues.md",
+      "input_type": "image",
+      "expected_output_type": "location_ranking",
+      "sample_user_request": "Aplica la skill \"Geolocalización visual\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable."
+      ]
+    },
+    {
+      "skill_id": "influence-operations-analyst",
+      "prompt_path": "prompts/influence-operations-analyst.md",
+      "input_type": "text_or_url",
+      "expected_output_type": "threat_report",
+      "sample_user_request": "Aplica la skill \"Analista de operaciones de influencia\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable."
+      ]
+    },
+    {
+      "skill_id": "social-phenomena-analyst",
+      "prompt_path": "prompts/social-phenomena-analyst.md",
+      "input_type": "text",
+      "expected_output_type": "analysis_report",
+      "sample_user_request": "Aplica la skill \"Analista de fenómenos sociales\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable."
+      ]
+    },
+    {
+      "skill_id": "psychological-profile",
+      "prompt_path": "prompts/psychological-profile.md",
+      "input_type": "text",
+      "expected_output_type": "profile_report",
+      "sample_user_request": "Aplica la skill \"Perfilador psicológico\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable."
+      ]
+    },
+    {
+      "skill_id": "legal-document-analyzer",
+      "prompt_path": "prompts/legal-document-analyzer.md",
+      "input_type": "text",
+      "expected_output_type": "legal_analysis",
+      "sample_user_request": "Aplica la skill \"Analizador de documentos legales\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable."
+      ]
+    },
+    {
+      "skill_id": "conflict-dynamics-analyst",
+      "prompt_path": "prompts/conflict-dynamics-analyst.md",
+      "input_type": "text",
+      "expected_output_type": "conflict_analysis",
+      "sample_user_request": "Aplica la skill \"Analista de dinámicas de conflicto\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable."
+      ]
+    },
+    {
+      "skill_id": "contentanalysis",
+      "prompt_path": "prompts/contentanalysis.md",
+      "input_type": "text",
+      "expected_output_type": "content_report",
+      "sample_user_request": "Aplica la skill \"Analizador de contenido\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable."
+      ]
+    },
+    {
+      "skill_id": "geopolitical-risk-analyst",
+      "prompt_path": "prompts/geopolitical-risk-analyst.md",
+      "input_type": "text",
+      "expected_output_type": "risk_report",
+      "sample_user_request": "Aplica la skill \"Analista de riesgo geopolítico\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable.",
+        "Declara cuándo necesita fuentes/tools externas.",
+        "Usa o resume referencias: diplomatic-language-guide.md."
+      ]
+    },
+    {
+      "skill_id": "global-logistics-evaluator",
+      "prompt_path": "prompts/global-logistics-evaluator.md",
+      "input_type": "text",
+      "expected_output_type": "logistics_report",
+      "sample_user_request": "Aplica la skill \"Evaluador de logística global\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable.",
+        "Declara cuándo necesita fuentes/tools externas."
+      ]
+    },
+    {
+      "skill_id": "anti-pua",
+      "prompt_path": "prompts/anti-pua.md",
+      "input_type": "text",
+      "expected_output_type": "safety_analysis",
+      "sample_user_request": "Aplica la skill \"Detector de manipulación PUA\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable."
+      ]
+    },
+    {
+      "skill_id": "web-search",
+      "prompt_path": "prompts/web-search.md",
+      "input_type": "text",
+      "expected_output_type": "search_results",
+      "sample_user_request": "Aplica la skill \"Búsqueda web\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable.",
+        "Declara cuándo necesita fuentes/tools externas."
+      ]
+    },
+    {
+      "skill_id": "web-reader",
+      "prompt_path": "prompts/web-reader.md",
+      "input_type": "url",
+      "expected_output_type": "extracted_content",
+      "sample_user_request": "Aplica la skill \"Lector de páginas web\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable.",
+        "Declara cuándo necesita fuentes/tools externas."
+      ]
+    },
+    {
+      "skill_id": "image-search",
+      "prompt_path": "prompts/image-search.md",
+      "input_type": "text",
+      "expected_output_type": "image_results",
+      "sample_user_request": "Aplica la skill \"Búsqueda de imágenes\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable.",
+        "Declara cuándo necesita fuentes/tools externas."
+      ]
+    },
+    {
+      "skill_id": "multi-search-engine",
+      "prompt_path": "prompts/multi-search-engine.md",
+      "input_type": "text",
+      "expected_output_type": "comparison_results",
+      "sample_user_request": "Aplica la skill \"Multi-buscador\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable.",
+        "Declara cuándo necesita fuentes/tools externas."
+      ]
+    },
+    {
+      "skill_id": "ai-news-collectors",
+      "prompt_path": "prompts/ai-news-collectors.md",
+      "input_type": "text",
+      "expected_output_type": "news_digest",
+      "sample_user_request": "Aplica la skill \"Recopilador de noticias IA\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable.",
+        "Declara cuándo necesita fuentes/tools externas."
+      ]
+    },
+    {
+      "skill_id": "aminer-research",
+      "prompt_path": "prompts/aminer-research.md",
+      "input_type": "text",
+      "expected_output_type": "academic_report",
+      "sample_user_request": "Aplica la skill \"Investigador académico\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable.",
+        "Declara cuándo necesita fuentes/tools externas."
+      ]
+    },
+    {
+      "skill_id": "qingyan-research",
+      "prompt_path": "prompts/qingyan-research.md",
+      "input_type": "text",
+      "expected_output_type": "research_report",
+      "sample_user_request": "Aplica la skill \"Investigación profunda estructurada\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable.",
+        "Declara cuándo necesita fuentes/tools externas."
+      ]
+    },
+    {
+      "skill_id": "auto-target-tracker",
+      "prompt_path": "prompts/auto-target-tracker.md",
+      "input_type": "text",
+      "expected_output_type": "tracking_report",
+      "sample_user_request": "Aplica la skill \"Rastreador automático de objetivos\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable.",
+        "Declara cuándo necesita fuentes/tools externas."
+      ]
+    },
+    {
+      "skill_id": "coding-agent",
+      "prompt_path": "prompts/coding-agent.md",
+      "input_type": "text",
+      "expected_output_type": "code",
+      "sample_user_request": "Aplica la skill \"Agente de codificación\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable."
+      ]
+    },
+    {
+      "skill_id": "fullstack-dev",
+      "prompt_path": "prompts/fullstack-dev.md",
+      "input_type": "text",
+      "expected_output_type": "code_project",
+      "sample_user_request": "Aplica la skill \"Desarrollo fullstack\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable."
+      ]
+    },
+    {
+      "skill_id": "agent-browser",
+      "prompt_path": "prompts/agent-browser.md",
+      "input_type": "text",
+      "expected_output_type": "browser_action",
+      "sample_user_request": "Aplica la skill \"Navegador automatizado\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable.",
+        "Declara cuándo necesita fuentes/tools externas."
+      ]
+    },
+    {
+      "skill_id": "web-artifacts-builder",
+      "prompt_path": "prompts/web-artifacts-builder.md",
+      "input_type": "text",
+      "expected_output_type": "web_artifact",
+      "sample_user_request": "Aplica la skill \"Constructor de artefactos web\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable."
+      ]
+    },
+    {
+      "skill_id": "web-shader-extractor",
+      "prompt_path": "prompts/web-shader-extractor.md",
+      "input_type": "url_or_code",
+      "expected_output_type": "shader_code",
+      "sample_user_request": "Aplica la skill \"Extractor de shaders web\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable."
+      ]
+    },
+    {
+      "skill_id": "process-optimizer",
+      "prompt_path": "prompts/process-optimizer.md",
+      "input_type": "text",
+      "expected_output_type": "optimization_report",
+      "sample_user_request": "Aplica la skill \"Optimizador de procesos\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable.",
+        "Usa o resume referencias: inefficiency-patterns.md."
+      ]
+    },
+    {
+      "skill_id": "version-management",
+      "prompt_path": "prompts/version-management.md",
+      "input_type": "text",
+      "expected_output_type": "git_commands",
+      "sample_user_request": "Aplica la skill \"Gestión de versiones\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable."
+      ]
+    },
+    {
+      "skill_id": "blog-writer",
+      "prompt_path": "prompts/blog-writer.md",
+      "input_type": "text",
+      "expected_output_type": "blog_article",
+      "sample_user_request": "Aplica la skill \"Redactor de blogs\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable."
+      ]
+    },
+    {
+      "skill_id": "seo-content-writer",
+      "prompt_path": "prompts/seo-content-writer.md",
+      "input_type": "text",
+      "expected_output_type": "seo_content",
+      "sample_user_request": "Aplica la skill \"Redactor SEO\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable.",
+        "Declara cuándo necesita fuentes/tools externas."
+      ]
+    },
+    {
+      "skill_id": "content-strategy",
+      "prompt_path": "prompts/content-strategy.md",
+      "input_type": "text",
+      "expected_output_type": "content_plan",
+      "sample_user_request": "Aplica la skill \"Estrategia de contenido\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable."
+      ]
+    },
+    {
+      "skill_id": "writing-plans",
+      "prompt_path": "prompts/writing-plans.md",
+      "input_type": "text",
+      "expected_output_type": "writing_plan",
+      "sample_user_request": "Aplica la skill \"Planificador de escritura\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable."
+      ]
+    },
+    {
+      "skill_id": "paraphrase-humanized",
+      "prompt_path": "prompts/paraphrase-humanized.md",
+      "input_type": "text",
+      "expected_output_type": "paraphrased_text",
+      "sample_user_request": "Aplica la skill \"Parafraseo humanizado\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable."
+      ]
+    },
+    {
+      "skill_id": "transcreation-localization",
+      "prompt_path": "prompts/transcreation-localization.md",
+      "input_type": "text",
+      "expected_output_type": "localized_content",
+      "sample_user_request": "Aplica la skill \"Transcreación y localización\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable.",
+        "Usa o resume referencias: cultural-adaptation-guide.md, diplomatic-language-guide.md."
+      ]
+    },
+    {
+      "skill_id": "doc-coauthoring",
+      "prompt_path": "prompts/doc-coauthoring.md",
+      "input_type": "text",
+      "expected_output_type": "document_draft",
+      "sample_user_request": "Aplica la skill \"Coautoría de documentos\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable."
+      ]
+    },
+    {
+      "skill_id": "finance",
+      "prompt_path": "prompts/finance.md",
+      "input_type": "text_or_data",
+      "expected_output_type": "financial_report",
+      "sample_user_request": "Aplica la skill \"Analista financiero\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable.",
+        "Declara cuándo necesita fuentes/tools externas."
+      ]
+    },
+    {
+      "skill_id": "stock-analysis-skill",
+      "prompt_path": "prompts/stock-analysis-skill.md",
+      "input_type": "text_or_data",
+      "expected_output_type": "stock_report",
+      "sample_user_request": "Aplica la skill \"Análisis bursátil\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable.",
+        "Declara cuándo necesita fuentes/tools externas."
+      ]
+    },
+    {
+      "skill_id": "market-research-reports",
+      "prompt_path": "prompts/market-research-reports.md",
+      "input_type": "text",
+      "expected_output_type": "market_report",
+      "sample_user_request": "Aplica la skill \"Investigación de mercado\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable.",
+        "Declara cuándo necesita fuentes/tools externas."
+      ]
+    },
+    {
+      "skill_id": "text-to-dashboard",
+      "prompt_path": "prompts/text-to-dashboard.md",
+      "input_type": "text_or_data",
+      "expected_output_type": "dashboard_spec",
+      "sample_user_request": "Aplica la skill \"Texto a dashboard\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable."
+      ]
+    },
+    {
+      "skill_id": "image-understand",
+      "prompt_path": "prompts/image-understand.md",
+      "input_type": "image",
+      "expected_output_type": "image_analysis",
+      "sample_user_request": "Aplica la skill \"Comprensión de imágenes\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable."
+      ]
+    },
+    {
+      "skill_id": "image-generation",
+      "prompt_path": "prompts/image-generation.md",
+      "input_type": "text",
+      "expected_output_type": "generated_image",
+      "sample_user_request": "Aplica la skill \"Generación de imágenes\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable.",
+        "Declara cuándo necesita fuentes/tools externas."
+      ]
+    },
+    {
+      "skill_id": "image-edit",
+      "prompt_path": "prompts/image-edit.md",
+      "input_type": "image_and_text",
+      "expected_output_type": "edited_image",
+      "sample_user_request": "Aplica la skill \"Edición de imágenes\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable.",
+        "Declara cuándo necesita fuentes/tools externas."
+      ]
+    },
+    {
+      "skill_id": "video-understand",
+      "prompt_path": "prompts/video-understand.md",
+      "input_type": "video",
+      "expected_output_type": "video_analysis",
+      "sample_user_request": "Aplica la skill \"Comprensión de video\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable.",
+        "Declara cuándo necesita fuentes/tools externas."
+      ]
+    },
+    {
+      "skill_id": "podcast-generate",
+      "prompt_path": "prompts/podcast-generate.md",
+      "input_type": "text",
+      "expected_output_type": "podcast_script",
+      "sample_user_request": "Aplica la skill \"Generador de podcasts\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable."
+      ]
+    },
+    {
+      "skill_id": "storyboard-manager",
+      "prompt_path": "prompts/storyboard-manager.md",
+      "input_type": "text",
+      "expected_output_type": "storyboard",
+      "sample_user_request": "Aplica la skill \"Gestor de storyboard\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable."
+      ]
+    },
+    {
+      "skill_id": "learn",
+      "prompt_path": "prompts/learn.md",
+      "input_type": "text",
+      "expected_output_type": "learning_content",
+      "sample_user_request": "Aplica la skill \"Asistente de aprendizaje\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable."
+      ]
+    },
+    {
+      "skill_id": "cheat-sheet",
+      "prompt_path": "prompts/cheat-sheet.md",
+      "input_type": "text",
+      "expected_output_type": "cheat_sheet",
+      "sample_user_request": "Aplica la skill \"Generador de cheat sheets\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable."
+      ]
+    },
+    {
+      "skill_id": "mindfulness-meditation",
+      "prompt_path": "prompts/mindfulness-meditation.md",
+      "input_type": "text",
+      "expected_output_type": "wellness_guide",
+      "sample_user_request": "Aplica la skill \"Mindfulness y meditación\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable."
+      ]
+    },
+    {
+      "skill_id": "quiz-mastery",
+      "prompt_path": "prompts/quiz-mastery.md",
+      "input_type": "text",
+      "expected_output_type": "quiz",
+      "sample_user_request": "Aplica la skill \"Generador de quizzes\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable."
+      ]
+    },
+    {
+      "skill_id": "study-buddy",
+      "prompt_path": "prompts/study-buddy.md",
+      "input_type": "text",
+      "expected_output_type": "study_session",
+      "sample_user_request": "Aplica la skill \"Compañero de estudio\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable."
+      ]
+    },
+    {
+      "skill_id": "quiz-html",
+      "prompt_path": "prompts/quiz-html.md",
+      "input_type": "text",
+      "expected_output_type": "html_quiz",
+      "sample_user_request": "Aplica la skill \"Quizzes HTML interactivos\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable."
+      ]
+    },
+    {
+      "skill_id": "comm-advisor-camp",
+      "prompt_path": "prompts/comm-advisor-camp.md",
+      "input_type": "text",
+      "expected_output_type": "campaign_strategy",
+      "sample_user_request": "Aplica la skill \"Asesor de comunicación de campaña\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable.",
+        "Usa o resume referencias: diplomatic-language-guide.md."
+      ]
+    },
+    {
+      "skill_id": "crisis-comm-advisor",
+      "prompt_path": "prompts/crisis-comm-advisor.md",
+      "input_type": "text",
+      "expected_output_type": "crisis_plan",
+      "sample_user_request": "Aplica la skill \"Asesor de comunicación de crisis\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable.",
+        "Usa o resume referencias: crisis-types.md, diplomatic-language-guide.md."
+      ]
+    },
+    {
+      "skill_id": "marketing-mode",
+      "prompt_path": "prompts/marketing-mode.md",
+      "input_type": "text",
+      "expected_output_type": "marketing_plan",
+      "sample_user_request": "Aplica la skill \"Modo marketing\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable."
+      ]
+    },
+    {
+      "skill_id": "interview-designer",
+      "prompt_path": "prompts/interview-designer.md",
+      "input_type": "text",
+      "expected_output_type": "interview_plan",
+      "sample_user_request": "Aplica la skill \"Diseñador de entrevistas\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable."
+      ]
+    },
+    {
+      "skill_id": "interview-prep",
+      "prompt_path": "prompts/interview-prep.md",
+      "input_type": "text",
+      "expected_output_type": "prep_session",
+      "sample_user_request": "Aplica la skill \"Preparación de entrevistas\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable."
+      ]
+    },
+    {
+      "skill_id": "jd-resume-tailor",
+      "prompt_path": "prompts/jd-resume-tailor.md",
+      "input_type": "documents",
+      "expected_output_type": "tailored_resume",
+      "sample_user_request": "Aplica la skill \"Adaptador de CV a oferta laboral\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable."
+      ]
+    },
+    {
+      "skill_id": "resume-builder",
+      "prompt_path": "prompts/resume-builder.md",
+      "input_type": "text",
+      "expected_output_type": "resume",
+      "sample_user_request": "Aplica la skill \"Constructor de CV\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable."
+      ]
+    },
+    {
+      "skill_id": "job-intent-tracker",
+      "prompt_path": "prompts/job-intent-tracker.md",
+      "input_type": "text",
+      "expected_output_type": "intent_analysis",
+      "sample_user_request": "Aplica la skill \"Rastreador de intenciones laborales\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable.",
+        "Declara cuándo necesita fuentes/tools externas."
+      ]
+    },
+    {
+      "skill_id": "canvas-design",
+      "prompt_path": "prompts/canvas-design.md",
+      "input_type": "text",
+      "expected_output_type": "canvas_design",
+      "sample_user_request": "Aplica la skill \"Diseño de canvas\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable."
+      ]
+    },
+    {
+      "skill_id": "design",
+      "prompt_path": "prompts/design.md",
+      "input_type": "text",
+      "expected_output_type": "design_spec",
+      "sample_user_request": "Aplica la skill \"Diseño visual general\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable."
+      ]
+    },
+    {
+      "skill_id": "visual-design-foundations",
+      "prompt_path": "prompts/visual-design-foundations.md",
+      "input_type": "text",
+      "expected_output_type": "design_guide",
+      "sample_user_request": "Aplica la skill \"Fundamentos de diseño visual\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable."
+      ]
+    },
+    {
+      "skill_id": "theme-factory",
+      "prompt_path": "prompts/theme-factory.md",
+      "input_type": "text",
+      "expected_output_type": "theme_spec",
+      "sample_user_request": "Aplica la skill \"Fábrica de temas\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable."
+      ]
+    },
+    {
+      "skill_id": "ui-ux-pro-max",
+      "prompt_path": "prompts/ui-ux-pro-max.md",
+      "input_type": "text",
+      "expected_output_type": "ux_spec",
+      "sample_user_request": "Aplica la skill \"UI/UX Pro Max\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable."
+      ]
+    },
+    {
+      "skill_id": "docx",
+      "prompt_path": "prompts/docx.md",
+      "input_type": "text",
+      "expected_output_type": "docx_file",
+      "sample_user_request": "Aplica la skill \"Generador de documentos Word\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable."
+      ]
+    },
+    {
+      "skill_id": "pdf",
+      "prompt_path": "prompts/pdf.md",
+      "input_type": "text",
+      "expected_output_type": "pdf_file",
+      "sample_user_request": "Aplica la skill \"Generador de PDF\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable."
+      ]
+    },
+    {
+      "skill_id": "pptx",
+      "prompt_path": "prompts/pptx.md",
+      "input_type": "text",
+      "expected_output_type": "pptx_file",
+      "sample_user_request": "Aplica la skill \"Generador de presentaciones\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable."
+      ]
+    },
+    {
+      "skill_id": "xlsx",
+      "prompt_path": "prompts/xlsx.md",
+      "input_type": "text_or_data",
+      "expected_output_type": "xlsx_file",
+      "sample_user_request": "Aplica la skill \"Generador de hojas de cálculo\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable."
+      ]
+    },
+    {
+      "skill_id": "skill-creator",
+      "prompt_path": "prompts/skill-creator.md",
+      "input_type": "text",
+      "expected_output_type": "skill_definition",
+      "sample_user_request": "Aplica la skill \"Creador de skills\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable."
+      ]
+    },
+    {
+      "skill_id": "skill-finder-cn",
+      "prompt_path": "prompts/skill-finder-cn.md",
+      "input_type": "text",
+      "expected_output_type": "skill_recommendations",
+      "sample_user_request": "Aplica la skill \"Buscador de skills\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable."
+      ]
+    },
+    {
+      "skill_id": "task-review",
+      "prompt_path": "prompts/task-review.md",
+      "input_type": "text",
+      "expected_output_type": "review_report",
+      "sample_user_request": "Aplica la skill \"Revisión de tareas\" a este caso de prueba y entrega el formato esperado.",
+      "checks": [
+        "Menciona supuestos o datos faltantes.",
+        "Evita conclusiones no justificadas.",
+        "Incluye estructura clara y accionable."
+      ]
+    }
+  ]
+}

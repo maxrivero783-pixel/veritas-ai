@@ -1,5 +1,5 @@
 // ==============================================================================
-// Véritas v2.4 — /functions/api/[[route]].js
+// Véritas v2.3 — /functions/api/[[route]].js
 // ==============================================================================
 // Router principal del Worker. Cloudflare Pages detecta este archivo como
 // Worker automáticamente (Pages Functions con catch-all route /api/*).
@@ -66,17 +66,18 @@ import { SYSTEM_PROMPTS, ROLE_TO_MODEL, MODEL_TO_ROLE, UI_ROLE_TO_PROMPT_KEY } f
 // Whitelist de modelos OpenRouter permitidos (Sección 3.1 del BUILD).
 // ------------------------------------------------------------------------------
 const OPENROUTER_WHITELIST = new Set([
-  // Stack Nemotron (Agente)
+  // Stack Nemotron 3
   "nvidia/nemotron-3-ultra-550b-a55b:free",
   "nvidia/nemotron-3-super-120b-a12b:free",
+  "nvidia/nemotron-3-nano-30b-a3b:free",
   "nvidia/nemotron-nano-12b-v2-vl:free",
   "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
-  // Roles standalone
-  "poolside/laguna-m.1:free",
-  "z-ai/glm-4.5-flash", // vía Puter, permitido para fallback cross-provider
-  // Fallback global
-  "nousresearch/hermes-3-llama-3.1-405b:free",
-  "qwen/qwen3-next-80b-a3b-instruct:free",
+  // General permissive/free and code-first fallbacks
+  "google/gemma-4-31b-it:free",
+  "openai/gpt-oss-20b:free",
+  "cohere/north-mini-code:free",
+  "poolside/laguna-s-2.1:free",
+  "poolside/laguna-xs-2.1:free",
 ]);
 
 // ------------------------------------------------------------------------------
@@ -504,6 +505,47 @@ async function handleScrape(request, env, userEmail) {
 // ==============================================================================
 // 6.1 — STORAGE (Carpeta Proyecto en R2)
 // ==============================================================================
+const R2_FREE_TIER_BYTES = 10 * 1024 * 1024 * 1024;
+const R2_SOFT_WARN_BYTES = 8 * 1024 * 1024 * 1024;
+const R2_HARD_GUARD_BYTES = Math.floor(9.5 * 1024 * 1024 * 1024);
+
+async function estimateUserR2Usage(env, userEmail) {
+  let projectBytes = 0;
+  try {
+    let cursor = undefined;
+    do {
+      const list = await env.BUCKET.list({ prefix: `projects/${userEmail}/`, limit: 1000, cursor });
+      projectBytes += (list.objects || []).reduce((sum, o) => sum + (o.size || 0), 0);
+      cursor = list.truncated ? list.cursor : undefined;
+    } while (cursor);
+  } catch { /* best effort */ }
+
+  let repoBytes = 0;
+  try {
+    const row = await env.DB.prepare(
+      `SELECT COALESCE(SUM(file_size), 0) AS total_size FROM repo_documents WHERE user_email = ?`
+    ).bind(userEmail).first();
+    repoBytes = row?.total_size || 0;
+  } catch { /* best effort */ }
+
+  const totalBytes = projectBytes + repoBytes;
+  return {
+    project_bytes: projectBytes,
+    repo_bytes: repoBytes,
+    total_bytes: totalBytes,
+    free_tier_bytes: R2_FREE_TIER_BYTES,
+    usage_ratio: totalBytes / R2_FREE_TIER_BYTES,
+    warning: totalBytes >= R2_SOFT_WARN_BYTES,
+  };
+}
+
+function r2QuotaError(projectedUsage) {
+  return errorResponse("r2_quota_guard", 413, {
+    message: "El archivo superaría el guard rail local de R2 (~9.5GB). Libera espacio o migra a plan pago antes de subir más multimedia.",
+    usage: projectedUsage,
+  });
+}
+
 async function handleStorageUpload(request, env, userEmail) {
   const formData = await request.formData();
   const file = formData.get("file");
@@ -512,10 +554,14 @@ async function handleStorageUpload(request, env, userEmail) {
   const filename = slugify(file.name);
   const r2Key = `projects/${userEmail}/${filename}`;
   const buf = await file.arrayBuffer();
+  const usage = await estimateUserR2Usage(env, userEmail);
+  const projectedUsage = { ...usage, projected_total_bytes: usage.total_bytes + buf.byteLength, projected_ratio: (usage.total_bytes + buf.byteLength) / R2_FREE_TIER_BYTES };
+  if (projectedUsage.projected_total_bytes > R2_HARD_GUARD_BYTES) return r2QuotaError(projectedUsage);
+
   await env.BUCKET.put(r2Key, buf, {
     customMetadata: { user_email: userEmail, original_name: file.name, mime_type: file.type || "application/octet-stream" },
   });
-  return json({ ok: true, filename, r2_key: r2Key, size: buf.byteLength });
+  return json({ ok: true, filename, r2_key: r2Key, size: buf.byteLength, usage: projectedUsage });
 }
 
 async function handleStorageList(env, userEmail) {
@@ -525,7 +571,7 @@ async function handleStorageList(env, userEmail) {
     size: o.size,
     uploaded: o.uploaded.toISOString(),
   }));
-  return json({ files: items });
+  return json({ files: items, usage: await estimateUserR2Usage(env, userEmail) });
 }
 
 async function handleStorageDownload(path, env, userEmail) {
@@ -561,6 +607,9 @@ async function handleRepoUpload(request, env, userEmail) {
 
   const buf = await file.arrayBuffer();
   if (buf.byteLength > 5 * 1024 * 1024) return errorResponse("file_too_large", 400, { max_bytes: 5_242_880 });
+  const usage = await estimateUserR2Usage(env, userEmail);
+  const projectedUsage = { ...usage, projected_total_bytes: usage.total_bytes + buf.byteLength, projected_ratio: (usage.total_bytes + buf.byteLength) / R2_FREE_TIER_BYTES };
+  if (projectedUsage.projected_total_bytes > R2_HARD_GUARD_BYTES) return r2QuotaError(projectedUsage);
 
   // Insertar en D1 para obtener doc_number autoincremental.
   const ins = await env.DB.prepare(
@@ -575,7 +624,7 @@ async function handleRepoUpload(request, env, userEmail) {
     `UPDATE repo_documents SET r2_key = ? WHERE doc_number = ? AND user_email = ?`
   ).bind(r2Key, docNumber, userEmail).run();
 
-  return json({ ok: true, doc_number: docNumber, doc_name: docName, r2_key: r2Key, size: buf.byteLength });
+  return json({ ok: true, doc_number: docNumber, doc_name: docName, r2_key: r2Key, size: buf.byteLength, usage: projectedUsage });
 }
 
 async function handleRepoGet(request, env, userEmail) {
@@ -1541,12 +1590,6 @@ async function handleToolInvoke(request, env, userEmail) {
  * Inline handler para la tool create_skill.
  * Reutiliza la misma lógica de handleSkillCreate pero dentro del dispatcher de tools.
  */
-function skillSlugify(name) {
-  return String(name || "").toLowerCase()
-    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 64);
-}
-
 async function handleInlineCreateSkill(args, env, userEmail) {
   const { name, description, category, icon, color, needsExternal, promptContent } = args;
   const startTs = Date.now();
@@ -2167,7 +2210,7 @@ async function handleSuggestTitle(chatId, env, userEmail) {
   const assistantMsg = msgs.find((m) => m.role === "assistant");
   if (!userMsg || !assistantMsg) return json({ suggested_title: null });
 
-  // Llamar a GLM-4.5-Flash vía OpenRouter con la pool de claves (es más fiable que Puter desde Worker).
+  // Llamar a Nemotron 3 Nano 30B vía OpenRouter con la pool de claves (es más fiable que Puter desde Worker).
   // Como GLM-Flash en Véritas es Puter, pero Puter no es accesible desde Worker, hacemos
   // best-effort: si la pool de openrouter tiene claves, usar qwen3-next como sugeridor.
   if (discoverKeys(env, "openrouter").length === 0) {
@@ -2184,7 +2227,7 @@ async function handleSuggestTitle(chatId, env, userEmail) {
         "X-Title": "Véritas",
       },
       body: JSON.stringify({
-        model: "qwen/qwen3-next-80b-a3b-instruct:free",
+        model: "nvidia/nemotron-3-nano-30b-a3b:free",
         messages: [{ role: "user", content: prompt }],
         stream: false,
         max_tokens: 50,
@@ -2266,20 +2309,27 @@ async function handleOfflineBundle(env, userEmail) {
 // Retorna streaming SSE igual que /api/chat/openrouter.
 async function handleAgentOrchestrate(request, env, userEmail) {
   const body = await request.json().catch(() => ({}));
-  const { chat_id, messages, escalate, stream = true, skills_block, memory_block } = body;
+  const { chat_id, messages, model, escalate, stream = true, skills_block, memory_block } = body;
 
   if (!Array.isArray(messages) || messages.length === 0) {
     return errorResponse("missing_messages", 400);
   }
 
-  // Decidir modelo y system prompt según el nivel de escalamiento.
+  // Decidir modelo y system prompt según modelo solicitado o nivel de escalamiento.
   let modelId, roleKey, systemPrompt;
-  if (escalate === "ultra") {
+  if (model && OPENROUTER_WHITELIST.has(model)) {
+    modelId = model;
+    roleKey = MODEL_TO_ROLE[modelId] || "super_executor";
+  } else if (escalate === "ultra") {
     modelId = ROLE_TO_MODEL.ultra_orchestrator; // nvidia/nemotron-3-ultra-550b-a55b:free
     roleKey = "ultra_orchestrator";
   } else {
     modelId = ROLE_TO_MODEL.super_executor; // nvidia/nemotron-3-super-120b-a12b:free
     roleKey = "super_executor";
+  }
+  if (escalate === "ultra") {
+    modelId = ROLE_TO_MODEL.ultra_orchestrator;
+    roleKey = "ultra_orchestrator";
   }
 
   // Construir system prompt base del rol.

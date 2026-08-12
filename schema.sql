@@ -333,3 +333,10 @@ CREATE INDEX IF NOT EXISTS idx_userskills_id ON user_skills(user_email, id);
 --  * El Worker debe hacer UPSERT (INSERT OR REPLACE) en api_key_state,
 --    api_key_cursor y external_connections para evitar race conditions.
 -- ==============================================================================
+
+-- v2.4 notification audit and future async reconciliation
+CREATE TABLE IF NOT EXISTS notification_events (id INTEGER PRIMARY KEY AUTOINCREMENT, user_email TEXT NOT NULL, event_type TEXT NOT NULL, dedupe_key TEXT, status TEXT NOT NULL, provider TEXT DEFAULT 'brevo', recipient TEXT, subject TEXT, error TEXT, ts DATETIME DEFAULT CURRENT_TIMESTAMP);
+CREATE INDEX IF NOT EXISTS idx_notification_events_user ON notification_events(user_email, ts DESC);
+CREATE INDEX IF NOT EXISTS idx_notification_events_dedupe ON notification_events(user_email, dedupe_key, ts DESC);
+CREATE TABLE IF NOT EXISTS async_jobs (id TEXT PRIMARY KEY, user_email TEXT NOT NULL, chat_id TEXT, tool_name TEXT NOT NULL, provider_job_id TEXT, status TEXT NOT NULL DEFAULT 'pending', args_json TEXT, result_json TEXT, notify_email INTEGER DEFAULT 0, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP);
+CREATE INDEX IF NOT EXISTS idx_async_jobs_user ON async_jobs(user_email, created_at DESC);

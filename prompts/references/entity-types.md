@@ -1,32 +1,19 @@
-# Referencia: Tipos de Entidades
+# Tipos de entidades para grafos Véritas
 
-## Persona
-- Nombres completos, alias, usernames
-- Roles, cargos, afiliaciones
+## Nodos sugeridos
+- **person:** individuo identificable o actor público.
+- **organization:** empresa, ONG, partido, medio, institución o grupo informal.
+- **location:** país, ciudad, instalación, región o punto geográfico.
+- **event:** suceso delimitado temporalmente.
+- **asset:** dominio, cuenta, documento, vehículo, infraestructura, producto o recurso.
+- **claim:** afirmación verificable.
+- **topic:** tema, narrativa, campaña o marco discursivo.
 
-## Organización
-- Empresas, ONGs, gobiernos, partidos políticos
-- Subunidades: departamentos, divisiones
+## Relaciones sugeridas
+- authored, owns, funds, employs, located_in, attended, published, amplifies, contradicts, supports, mentions, transacted_with, linked_to.
 
-## Lugar
-- Países, estados/provincias, ciudades
-- Direcciones específicas, coordenadas
-- Lugares genéricos: "en la calle", "en un restaurante"
+## Campos mínimos
+Cada nodo debe incluir id estable, label, type, confidence y evidence. Cada arista debe incluir source, target, relation, direction, confidence y evidence.
 
-## Evento
-- Incidentes, reuniones, conferencias, elecciones
-- Con fecha y lugar asociado
-
-## Concepto
-- Ideas, políticas, programas, leyes
-- Temas de debate, narrativas
-
-## Relaciones entre entidades
-- asociado_con: relación genérica
-- empleado_de: relación laboral
-- ubicado_en: relación geográfica
-- participó_en: participación en evento
-- mencionó: referencia explícita
-- financó: transferencia de recursos
-- dirige: relación de autoridad
-- es_pariente_de: relación familiar
+## Buenas prácticas
+Evita duplicados, fusiona aliases con cautela y no conviertas coincidencias nominales en identidad confirmada.
