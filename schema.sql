@@ -19,8 +19,27 @@
 -- ------------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS users (
   email TEXT PRIMARY KEY,
+  password_hash TEXT,                                 -- PBKDF2-SHA256 (hex), si el usuario usa login propio
+  password_salt TEXT,                                 -- salt aleatorio (hex) por usuario
   profile_json TEXT,                                  -- JSON con nombre, preferencias, ui_lang, maps_api_key_encrypted, etc.
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Sesiones de login por email+contraseña (token opaco, 7 días)
+CREATE TABLE IF NOT EXISTS sessions (
+  token TEXT PRIMARY KEY,
+  user_email TEXT NOT NULL,
+  expires_at INTEGER NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_email);
+CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
+
+-- Rate limiting silencioso por usuario (ventanas por scope)
+CREATE TABLE IF NOT EXISTS rate_limits (
+  scope_key TEXT PRIMARY KEY,                         -- "rl:<scope>:<email>:<window>"
+  count INTEGER DEFAULT 1,
+  window_start INTEGER NOT NULL
 );
 
 
@@ -338,5 +357,14 @@ CREATE INDEX IF NOT EXISTS idx_userskills_id ON user_skills(user_email, id);
 CREATE TABLE IF NOT EXISTS notification_events (id INTEGER PRIMARY KEY AUTOINCREMENT, user_email TEXT NOT NULL, event_type TEXT NOT NULL, dedupe_key TEXT, status TEXT NOT NULL, provider TEXT DEFAULT 'brevo', recipient TEXT, subject TEXT, error TEXT, ts DATETIME DEFAULT CURRENT_TIMESTAMP);
 CREATE INDEX IF NOT EXISTS idx_notification_events_user ON notification_events(user_email, ts DESC);
 CREATE INDEX IF NOT EXISTS idx_notification_events_dedupe ON notification_events(user_email, dedupe_key, ts DESC);
+CREATE TABLE IF NOT EXISTS llm_cache (
+  cache_key TEXT PRIMARY KEY,                         -- sha256(modelo + mensajes)
+  response_text TEXT NOT NULL,
+  response_json TEXT,
+  model TEXT,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_llm_cache_created ON llm_cache(created_at);
+
 CREATE TABLE IF NOT EXISTS async_jobs (id TEXT PRIMARY KEY, user_email TEXT NOT NULL, chat_id TEXT, tool_name TEXT NOT NULL, provider_job_id TEXT, status TEXT NOT NULL DEFAULT 'pending', args_json TEXT, result_json TEXT, notify_email INTEGER DEFAULT 0, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP);
 CREATE INDEX IF NOT EXISTS idx_async_jobs_user ON async_jobs(user_email, created_at DESC);

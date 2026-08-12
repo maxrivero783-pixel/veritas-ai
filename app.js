@@ -123,6 +123,11 @@ async function init() {
   applyI18n(initialLang);
   $$(`.lang-btn[data-lang="${initialLang}"]`).forEach((b) => b.classList.add("active"));
 
+  // v2.5: tema, UI nueva y comprobación de sesión (email+contraseña).
+  setupV25UI();
+  const authed = await ensureAuth();
+  if (!authed) return;
+
   // Hidratar tool registry desde el server.
   await fetchAndHydrate();
 
@@ -719,8 +724,8 @@ function setupEventListeners() {
     state.settings.personalization.persist = e.target.checked;
     saveSettings();
   });
-  $("#purgeBtn")?.addEventListener("click", () => {
-    if (confirm("¿Purgar TODOS los datos? Esta acción es irreversible.")) {
+  $("#purgeBtn")?.addEventListener("click", async () => {
+    if (await showConfirm("¿Purgar TODOS los datos? Esta acción es irreversible.", { title: "Purgar datos", danger: true, okLabel: "Purgar" })) {
       localStorage.clear();
       indexedDB.deleteDatabase("veritas_offline");
       location.reload();
@@ -788,7 +793,7 @@ function setupEventListeners() {
     toast(t("toast.saved"), "success");
   });
   $("#offlinePurge")?.addEventListener("click", async () => {
-    if (confirm("¿Purgar cache local?")) {
+    if (await showConfirm("¿Purgar cache local?", { title: "Purgar caché", danger: true, okLabel: "Purgar" })) {
       await getOfflineCacheManager().purge();
       updateOfflineSyncInfo(0, 0);
     }
@@ -1084,7 +1089,7 @@ async function openChat(chat) {
 }
 
 async function deleteChat(chat) {
-  if (!confirm(`¿Borrar "${chat.title}"?`)) return;
+  if (!(await showConfirm(`¿Borrar "${chat.title}"?`, { title: "Borrar chat", danger: true, okLabel: "Borrar" }))) return;
   try {
     await fetch(`/api/chat/${chat.id}`, { method: "DELETE" });
     if (state.currentChat?.id === chat.id) {
@@ -1443,6 +1448,7 @@ function renderMessages() {
   }
   state.messages.forEach((m) => renderMessage(m));
   scrollToBottom();
+  updateExportButtons();
 }
 
 function renderMessage(m) {
@@ -1474,7 +1480,7 @@ function renderMessage(m) {
   }
 
   const body = node.querySelector(".message-body");
-  body.innerHTML = formatMessageContent(m.content || "");
+  body.innerHTML = sanitizeHTML(formatMessageContent(m.content || ""));
 
   const thinking = node.querySelector(".message-thinking");
   if (m.thinking_content) {
@@ -1496,6 +1502,47 @@ function renderMessage(m) {
   }
 
   container.appendChild(node);
+}
+
+// v2.5 — Sanitizador de HTML por whitelist (anti-XSS). El contenido viene del
+// LLM (que a su vez puede haber leído webs escaneadas), así que nunca se
+// confía en él: se eliminan scripts, iframes, atributos on* y URLs no seguras.
+function sanitizeHTML(html) {
+  if (!html) return "";
+  try {
+    const doc = new DOMParser().parseFromString(String(html), "text/html");
+    const ALLOWED = new Set(["P","DIV","SPAN","BR","STRONG","B","EM","I","U","A","UL","OL","LI","BLOCKQUOTE","CODE","PRE","H1","H2","H3","H4","H5","H6","TABLE","THEAD","TBODY","TR","TH","TD","IMG","HR","MARK","SUP","SUB","DEL","INS"]);
+    const DANGEROUS = new Set(["SCRIPT","IFRAME","OBJECT","EMBED","LINK","META","STYLE","FORM","BASE","TEMPLATE","FRAME","APPLET"]);
+    const walk = (node) => {
+      Array.from(node.children).forEach((el) => {
+        const tag = el.tagName;
+        if (DANGEROUS.has(tag)) { el.remove(); return; }
+        if (!ALLOWED.has(tag)) {
+          while (el.firstChild) el.parentNode.insertBefore(el.firstChild, el);
+          el.remove(); return;
+        }
+        Array.from(el.attributes).forEach((attr) => {
+          const name = attr.name.toLowerCase();
+          if (name.indexOf("on") === 0) { el.removeAttribute(attr.name); return; }
+          if (name === "href" || name === "src") {
+            const v = (attr.value || "").trim().toLowerCase();
+            if (v && !(v.indexOf("http://") === 0 || v.indexOf("https://") === 0 || v.indexOf("data:image/") === 0 || v.indexOf("#") === 0 || v.indexOf("/") === 0)) {
+              el.removeAttribute(attr.name);
+            }
+            return;
+          }
+          if (!["class","id","target","rel","alt","title","colspan","rowspan","style"].includes(name)) {
+            el.removeAttribute(attr.name);
+          }
+        });
+        walk(el);
+      });
+    };
+    walk(doc.body);
+    return doc.body.innerHTML;
+  } catch (e) {
+    return String(html).replace(/<[^>]*>/g, "");
+  }
 }
 
 function formatMessageContent(content) {
@@ -2260,7 +2307,7 @@ async function callModel(userContent, previousAssistantText, isFollowUp) {
   if (provider === "puter") {
     return await callPuter(finalContext);
   } else {
-    return await callOpenRouter(finalContext);
+    return await callOpenRouterWithRetry(finalContext);
   }
 }
 
@@ -2327,6 +2374,32 @@ async function callPuter(messages) {
   }
 }
 
+// v2.5 — Reconexión SSE con backoff (hasta 3 intentos) si el stream se corta.
+async function callOpenRouterWithRetry(messages) {
+  let attempt = 0;
+  const maxAttempts = 3;
+  for (;;) {
+    try {
+      const result = await callOpenRouter(messages);
+      if (result && result.aborted) return result;
+      return result;
+    } catch (err) {
+      // Rate limit: aviso silencioso, sin reintentos agresivos.
+      if (err && err.error === "rate_limited") {
+        toast((err && err.message) || "Límite temporal de peticiones. Intenta en unos segundos.", "warning", 4000);
+        throw err;
+      }
+      const isOffline = state && state.isOffline;
+      if (isOffline || (err && err.message === "stream_interrupted" && attempt >= maxAttempts - 1)) throw err;
+      attempt++;
+      if (attempt >= maxAttempts) throw err;
+      const wait = Math.min(4000, 1000 * Math.pow(2, attempt - 1));
+      toast("Reconectando… (intento " + (attempt + 1) + "/" + maxAttempts + ")", "info", 2500);
+      await new Promise((r) => setTimeout(r, wait));
+    }
+  }
+}
+
 async function callOpenRouter(messages) {
   setEntityState("processing");
   showStreamingIndicator(t("stream.processing"), "processing");
@@ -2351,6 +2424,10 @@ async function callOpenRouter(messages) {
     if (state.toggles.thinking && state.currentModel.includes("nemotron")) {
       body.reasoning = { effort: "high" };
     }
+    // v2.5: caché opt-in de respuestas repetidas (solo chats propios, no compartidos).
+    if (!state.currentChat || !state.currentChat.is_shared) {
+      body.cache = true;
+    }
 
     const resp = await fetch("/api/chat/openrouter", {
       method: "POST",
@@ -2373,6 +2450,7 @@ async function callOpenRouter(messages) {
     const decoder = new TextDecoder();
     let buffer = "";
     let firstToken = true;
+    let sawDone = false; // v2.5: para detectar cortes del stream
 
     while (true) {
       // P0-4: check abort antes de cada read.
@@ -2389,7 +2467,7 @@ async function callOpenRouter(messages) {
       for (const line of lines) {
         if (!line.startsWith("data: ")) continue;
         const data = line.slice(6).trim();
-        if (data === "[DONE]") continue;
+        if (data === "[DONE]") { sawDone = true; continue; }
         try {
           const json = JSON.parse(data);
           const delta = json.choices?.[0]?.delta;
@@ -2430,7 +2508,11 @@ async function callOpenRouter(messages) {
   } catch (e) {
     // P0-4: AbortError se lanza cuando el fetch se cancela. Devolver partial.
     if (signal.aborted || e?.name === "AbortError") {
-      return { text, thinking_content: thinkingContent, tokens_in, tokens_out, cached_tokens, aborted: true };
+          // v2.5: si el stream terminó sin [DONE] y sin abort manual → corte de red.
+    if (!sawDone && !signal.aborted && text.length > 0) {
+      throw new Error("stream_interrupted");
+    }
+return { text, thinking_content: thinkingContent, tokens_in, tokens_out, cached_tokens, aborted: true };
     }
     throw e;
   } finally {
@@ -2501,7 +2583,7 @@ function updateStreamingMessage(text) {
     container.appendChild(_streamingMsgEl);
     scrollToBottom();
   }
-  _streamingMsgEl.querySelector(".message-body").innerHTML = formatMessageContent(text);
+  _streamingMsgEl.querySelector(".message-body").innerHTML = sanitizeHTML(formatMessageContent(text));
   scrollToBottom();
 }
 
@@ -2595,7 +2677,7 @@ async function tryFallback(error) {
     await runChatWithTools(state.messages[state.messages.length - 1].content);
   } else {
     // Manual: pedir confirmación.
-    const ok = confirm(t("model.unavailable", { model: state.currentModel, fallback: next }));
+    const ok = await showConfirm(t("model.unavailable", { model: state.currentModel, fallback: next }), { title: "Modelo no disponible", okLabel: "Usar fallback" });
     if (ok) {
       state.currentModel = next;
       state.currentRole = resolveUiRoleForCurrentSelection(next);
@@ -3048,7 +3130,7 @@ function restoreSandboxSnapshot() {
   if (state.sandbox.snapshots.length === 0) return toast("No hay snapshots", "warning");
   const latest = state.sandbox.snapshots[state.sandbox.snapshots.length - 1];
   const label = `${latest.label} · ${new Date(latest.created_at).toLocaleString()}`;
-  if (!confirm(`Restaurar último snapshot?\n${label}`)) return;
+  if (!(await showConfirm(`Restaurar último snapshot?\n${label}`, { title: "Restaurar snapshot", okLabel: "Restaurar" }))) return;
   state.sandbox.files = JSON.parse(JSON.stringify(latest.files));
   state.sandbox.activeFile = latest.activeFile || Object.keys(state.sandbox.files)[0] || null;
   renderSandboxTree();
@@ -3440,7 +3522,7 @@ function connectOAuth(provider) {
 }
 
 async function disconnectOAuth(provider) {
-  if (!confirm(`¿Desconectar ${provider}?`)) return;
+  if (!(await showConfirm(`¿Desconectar ${provider}?`, { title: "Desconectar", danger: true, okLabel: "Desconectar" }))) return;
   try {
     await fetch(`/api/oauth/${provider}/disconnect`, { method: "POST" });
     const card = document.querySelector(`.connection-card[data-provider="${provider}"]`);
@@ -3618,7 +3700,7 @@ async function downloadRepoDoc(docNumber, docName) {
 }
 
 async function deleteRepoDoc(docNumber, btn) {
-  if (!confirm("¿Borrar documento?")) return;
+  if (!(await showConfirm("¿Borrar documento?", { title: "Borrar documento", danger: true, okLabel: "Borrar" }))) return;
   try {
     const resp = await fetch("/api/repo/delete", {
       method: "DELETE",
@@ -4003,7 +4085,7 @@ function renderSkillsList(filter = "all", search = "") {
     if (deleteBtn) {
       deleteBtn.addEventListener("click", async (e) => {
         e.stopPropagation();
-        if (!confirm(`¿Eliminar la skill "${skill.name}"?`)) return;
+        if (!(await showConfirm(`¿Eliminar la skill "${skill.name}"?`, { title: "Eliminar skill", danger: true, okLabel: "Eliminar" }))) return;
         try {
           const resp = await fetch(`/api/skills/${encodeURIComponent(skill.id)}`, { method: "DELETE" });
           if (resp.ok) {
@@ -4682,6 +4764,254 @@ if (document.readyState === "loading") {
 }
 
 // Exponer para debugging y para notificaciones onclick.
+
+// ==============================================================================
+// v2.5 — Auth (email+contraseña), modal, búsqueda en conversación, export,
+//        tema claro/oscuro y onboarding de 5 pasos.
+// ==============================================================================
+
+// --- Token de sesión en todos los fetch a /api ---
+(function patchFetchWithToken() {
+  const orig = window.fetch.bind(window);
+  window.fetch = function (input, init) {
+    const url = typeof input === "string" ? input : (input && input.url) || "";
+    if (url.indexOf("/api/") === 0) {
+      const token = localStorage.getItem("veritas_token");
+      if (token) {
+        init = init || {};
+        const h = new Headers(init.headers || {});
+        if (!h.has("Authorization")) h.set("Authorization", "Bearer " + token);
+        init.headers = h;
+      }
+    }
+    return orig(input, init);
+  };
+})();
+
+function showAppLayout(show) {
+  const layout = document.querySelector(".app-layout");
+  if (layout) layout.style.display = show ? "" : "none";
+  const auth = $("#authView");
+  if (auth) auth.hidden = show;
+}
+
+async function ensureAuth() {
+  try {
+    const resp = await fetch("/api/auth/me", { headers: { Accept: "application/json" } });
+    if (resp.ok) {
+      const data = await resp.json().catch(() => ({}));
+      if (data && data.user) { showAppLayout(true); return true; }
+    }
+  } catch (e) { /* sin red: se intenta seguir con lo local */ }
+  showAppLayout(false);
+  return false;
+}
+
+async function handleAuthSubmit(mode) {
+  const email = ($("#authEmail").value || "").trim();
+  const password = $("#authPassword").value || "";
+  const errEl = $("#authError");
+  errEl.hidden = true;
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { errEl.textContent = "Email inválido."; errEl.hidden = false; return; }
+  if (password.length < 8) { errEl.textContent = "La contraseña debe tener al menos 8 caracteres."; errEl.hidden = false; return; }
+  try {
+    const resp = await fetch(`/api/auth/${mode}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) { errEl.textContent = (data && data.message) || "Error de autenticación."; errEl.hidden = false; return; }
+    localStorage.setItem("veritas_token", data.token);
+    localStorage.setItem("veritas_user", data.user);
+    showAppLayout(true);
+    $("#authPassword").value = "";
+    maybeShowOnboarding();
+    location.reload();
+  } catch (e) {
+    errEl.textContent = "Error de conexión: " + e.message;
+    errEl.hidden = false;
+  }
+}
+
+// --- Modal de confirmación (sustituye a confirm()) ---
+function showConfirm(message, opts = {}) {
+  return new Promise((resolve) => {
+    const root = $("#modalRoot");
+    if (!root) { resolve(window.confirm(message)); return; }
+    $("#modalTitle").textContent = opts.title || "Confirmar";
+    $("#modalMessage").textContent = message;
+    const ok = $("#modalOkBtn");
+    ok.textContent = opts.okLabel || "Confirmar";
+    ok.className = "auth-btn" + (opts.danger ? " danger" : "");
+    root.hidden = false;
+    const done = (val) => {
+      root.hidden = true;
+      ok.onclick = null; $("#modalCancelBtn").onclick = null; $("#modalOverlay").onclick = null;
+      resolve(val);
+    };
+    ok.onclick = () => done(true);
+    $("#modalCancelBtn").onclick = () => done(false);
+    $("#modalOverlay").onclick = (e) => { if (e.target === $("#modalOverlay")) done(false); };
+    ok.focus();
+  });
+}
+
+// --- Tema claro/oscuro ---
+function applyTheme(theme) {
+  document.documentElement.dataset.theme = theme;
+  localStorage.setItem("veritas_theme", theme);
+}
+function initTheme() {
+  const saved = localStorage.getItem("veritas_theme");
+  const theme = saved || (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+  applyTheme(theme);
+  const btn = $("#themeToggleBtn");
+  if (btn) btn.textContent = theme === "light" ? "🌙" : "🌓";
+}
+
+// --- Búsqueda dentro de la conversación (Ctrl+F) ---
+let _searchMarks = [];
+function clearSearchMarks() {
+  _searchMarks.forEach((m) => { const p = m.parentNode; if (p) { p.replaceChild(document.createTextNode(m.textContent), m); p.normalize(); } });
+  _searchMarks = [];
+}
+function searchInChat(query) {
+  clearSearchMarks();
+  const countEl = $("#chatSearchCount");
+  if (!query || query.length < 2) { if (countEl) countEl.hidden = true; return; }
+  const q = query.toLowerCase();
+  const bodies = document.querySelectorAll(".message-body");
+  let total = 0;
+  bodies.forEach((body) => {
+    const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
+    const nodes = [];
+    while (walker.nextNode()) nodes.push(walker.currentNode);
+    nodes.forEach((node) => {
+      const text = node.nodeValue || "";
+      const lower = text.toLowerCase();
+      if (lower.indexOf(q) === -1) return;
+      const frag = document.createDocumentFragment();
+      let idx = 0;
+      for (;;) {
+        const pos = lower.indexOf(q, idx);
+        if (pos === -1) { frag.appendChild(document.createTextNode(text.slice(idx))); break; }
+        frag.appendChild(document.createTextNode(text.slice(idx, pos)));
+        const mark = document.createElement("mark");
+        mark.textContent = text.slice(pos, pos + q.length);
+        frag.appendChild(mark);
+        _searchMarks.push(mark);
+        total++;
+        idx = pos + q.length;
+      }
+      node.parentNode.replaceChild(frag, node);
+    });
+  });
+  if (countEl) { countEl.textContent = total ? total + " resultados" : "Sin resultados"; countEl.hidden = false; }
+  if (total && _searchMarks[0]) _searchMarks[0].scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+// --- Exportar conversación (Markdown / JSON) ---
+function buildMarkdownExport() {
+  const lines = [
+    "# Véritas — Conversación",
+    "**Fecha:** " + new Date().toLocaleString(),
+    "**Modelo:** " + (state.currentModel || "—"),
+    "",
+  ];
+  (state.messages || []).forEach((m) => {
+    const role = m.role === "user" ? "👤 Usuario" : (m.role === "assistant" ? "🛡️ Véritas" : "🔧 Tool");
+    lines.push("## " + role + (m.model ? " (" + m.model + ")" : ""));
+    if (m.tools_used) lines.push("*Tools: " + (Array.isArray(m.tools_used) ? m.tools_used.join(", ") : m.tools_used) + "*");
+    lines.push("");
+    lines.push(String(m.content || "").replace(/\n{3,}/g, "\n\n"));
+    lines.push("");
+  });
+  return lines.join("\n");
+}
+function downloadBlob(filename, content, type) {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click();
+  setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 300);
+}
+function exportChatMarkdown() {
+  if (!state.messages || !state.messages.length) { toast("No hay mensajes que exportar", "warning"); return; }
+  const title = (state.currentChat && state.currentChat.title) || "conversacion";
+  downloadBlob("veritas-" + title.replace(/[^\w-]+/g, "_") + ".md", buildMarkdownExport(), "text/markdown;charset=utf-8");
+  toast("Conversación exportada (Markdown)", "success");
+}
+function exportChatJSON() {
+  if (!state.messages || !state.messages.length) { toast("No hay mensajes que exportar", "warning"); return; }
+  const payload = { exported_at: new Date().toISOString(), chat: state.currentChat || null, model: state.currentModel, messages: state.messages };
+  downloadBlob("veritas-export-" + Date.now() + ".json", JSON.stringify(payload, null, 2), "application/json;charset=utf-8");
+  toast("Conversación exportada (JSON)", "success");
+}
+function updateExportButtons() {
+  const has = state.messages && state.messages.length > 0;
+  if ($("#exportMdBtn")) $("#exportMdBtn").hidden = !has;
+  if ($("#exportJsonBtn")) $("#exportJsonBtn").hidden = !has;
+}
+
+// --- Onboarding de 5 pasos ---
+function maybeShowOnboarding() {
+  if (localStorage.getItem("veritas_onboarding_v1")) return;
+  const ov = $("#onboardingOverlay");
+  if (!ov) return;
+  let step = 0;
+  const total = 5;
+  const slides = ov.querySelectorAll(".onboarding-slide");
+  const dots = $("#onboardingDots");
+  dots.innerHTML = "";
+  for (let i = 0; i < total; i++) { const d = document.createElement("span"); d.className = "dot" + (i === 0 ? " active" : ""); dots.appendChild(d); }
+  const render = () => {
+    slides.forEach((sl, i) => sl.classList.toggle("active", i === step));
+    dots.querySelectorAll(".dot").forEach((d, i) => d.classList.toggle("active", i === step));
+    $("#onbPrev").disabled = step === 0;
+    $("#onbNext").textContent = step === total - 1 ? "Comenzar" : "Siguiente ›";
+  };
+  ov.hidden = false;
+  render();
+  const finish = () => { ov.hidden = true; localStorage.setItem("veritas_onboarding_v1", "1"); };
+  $("#onbNext").onclick = () => { if (step < total - 1) { step++; render(); } else finish(); };
+  $("#onbPrev").onclick = () => { if (step > 0) { step--; render(); } };
+  $("#onbSkip").onclick = finish;
+}
+
+// --- Setup v2.5 ---
+function setupV25UI() {
+  initTheme();
+  $("#themeToggleBtn")?.addEventListener("click", () => {
+    const next = document.documentElement.dataset.theme === "light" ? "dark" : "light";
+    applyTheme(next);
+    $("#themeToggleBtn").textContent = next === "light" ? "🌙" : "🌓";
+  });
+  $("#authForm")?.addEventListener("submit", (e) => { e.preventDefault(); handleAuthSubmit("login"); });
+  $("#authRegisterBtn")?.addEventListener("click", () => handleAuthSubmit("register"));
+  $("#exportMdBtn")?.addEventListener("click", exportChatMarkdown);
+  $("#exportJsonBtn")?.addEventListener("click", exportChatJSON);
+  document.addEventListener("keydown", (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") {
+      const t = e.target;
+      const inInput = t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
+      if (inInput) return;
+      e.preventDefault();
+      const input = $("#chatSearchInput");
+      if (input) { input.hidden = false; input.focus(); input.select(); }
+    }
+  });
+  $("#chatSearchInput")?.addEventListener("input", (e) => searchInChat(e.target.value.trim()));
+  $("#chatSearchInput")?.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      e.target.value = ""; e.target.hidden = true;
+      clearSearchMarks();
+      if ($("#chatSearchCount")) $("#chatSearchCount").hidden = true;
+    }
+  });
+}
+
 window.veritas = { state, toast, scrollToMessage: (id) => {
   const el = document.querySelector(`[data-msg-id="${id}"]`);
   if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });

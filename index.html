@@ -44,6 +44,80 @@
 <body class="offline-mode-false" data-state="idle">
 
   <!-- ============================================================ -->
+  <!-- AUTH — login/registro con email y contraseña -->
+  <!-- ============================================================ -->
+  <div id="authView" hidden>
+    <div class="auth-card">
+      <div class="welcome-orb">⬡</div>
+      <h1 class="auth-title">Véritas</h1>
+      <p class="auth-motto">Información es ventaja. La ventaja es tuya.</p>
+      <p class="auth-subtitle" data-i18n="auth.subtitle">Accede para continuar</p>
+      <form id="authForm" autocomplete="on">
+        <input type="email" id="authEmail" placeholder="email@ejemplo.com" required autocomplete="email" />
+        <input type="password" id="authPassword" placeholder="Contraseña (mín. 8 caracteres)" required minlength="8" autocomplete="current-password" />
+        <p class="auth-error" id="authError" hidden></p>
+        <div class="auth-actions">
+          <button type="submit" class="auth-btn primary" id="authLoginBtn" data-i18n="auth.login">Entrar</button>
+          <button type="button" class="auth-btn" id="authRegisterBtn" data-i18n="auth.register">Crear cuenta</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Modal genérico de confirmación (sustituye a confirm()) -->
+  <div id="modalRoot" hidden>
+    <div class="modal-overlay" id="modalOverlay">
+      <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+        <h3 id="modalTitle"></h3>
+        <p id="modalMessage"></p>
+        <div class="modal-actions">
+          <button class="auth-btn" id="modalCancelBtn" data-i18n="modal.cancel">Cancelar</button>
+          <button class="auth-btn danger" id="modalOkBtn" data-i18n="modal.confirm">Confirmar</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Onboarding de primer uso (5 pasos) -->
+  <div id="onboardingOverlay" hidden>
+    <div class="onboarding-box">
+      <div class="onboarding-slides" id="onboardingSlides">
+        <div class="onboarding-slide" data-step="0">
+          <div class="onboarding-icon">🎭</div>
+          <h3>Roles de IA</h3>
+          <p>Agente, Estratega, Pensador, Coder y Fast: cada uno con modelos y herramientas dedicadas, con cadenas de fallback automáticas.</p>
+        </div>
+        <div class="onboarding-slide" data-step="1">
+          <div class="onboarding-icon">🧰</div>
+          <h3>63 herramientas</h3>
+          <p>web_search, scraping, Shodan, ZoomEye, IntelX, GDELT, NASA, Semantic Scholar, GitHub, Dropbox y muchas más, integradas de serie.</p>
+        </div>
+        <div class="onboarding-slide" data-step="2">
+          <div class="onboarding-icon">🧠</div>
+          <h3>Skills</h3>
+          <p>Activa skills especializadas (análisis de conflictos, verificación de fuentes, geolocalización...) que guían al agente paso a paso.</p>
+        </div>
+        <div class="onboarding-slide" data-step="3">
+          <div class="onboarding-icon">📁</div>
+          <h3>Repositorio interno</h3>
+          <p>Guarda y busca documentos en tu repositorio privado (R2), con memoria persistente entre sesiones.</p>
+        </div>
+        <div class="onboarding-slide" data-step="4">
+          <div class="onboarding-icon">⚡</div>
+          <h3>Información es ventaja. La ventaja es tuya.</h3>
+          <p>Investigación rápida, rigurosa y con seguridad operacional. Bienvenido a Véritas.</p>
+        </div>
+      </div>
+      <div class="onboarding-nav">
+        <button class="auth-btn" id="onbPrev" data-i18n="onboarding.prev">‹ Anterior</button>
+        <span class="onboarding-dots" id="onboardingDots"></span>
+        <button class="auth-btn primary" id="onbNext" data-i18n="onboarding.next">Siguiente ›</button>
+        <button class="auth-btn" id="onbSkip" data-i18n="onboarding.skip">Omitir</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
   <!-- HEADER GLOBAL (mobile-only) -->
   <!-- ============================================================ -->
   <header class="app-header" id="appHeader">
@@ -124,6 +198,13 @@
         <div class="chat-title-wrapper">
           <h2 class="chat-title" id="chatTitle" data-i18n="chat.empty">Selecciona o crea un chat</h2>
           <span class="chat-cached-badge" id="chatCachedBadge" title="Tokens cached this chat" hidden>⚡ 0 cached this chat</span>
+        </div>
+        <div class="chat-header-tools">
+          <input type="search" id="chatSearchInput" class="chat-inline-search" placeholder="🔍 Buscar en esta conversación (Ctrl+F)" data-i18n-placeholder="chat.searchInChat" hidden />
+          <span class="search-count" id="chatSearchCount" hidden></span>
+          <button class="btn-icon" id="themeToggleBtn" title="Tema claro/oscuro" aria-label="Theme">🌓</button>
+          <button class="btn-icon" id="exportMdBtn" title="Exportar conversación (Markdown)" hidden>📄</button>
+          <button class="btn-icon" id="exportJsonBtn" title="Exportar conversación (JSON)" hidden>💾</button>
         </div>
         <div class="chat-model-info" id="chatModelInfo">
           <span class="model-chip" id="modelChip">—</span>
