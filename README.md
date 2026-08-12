@@ -334,7 +334,7 @@ veritas-ai/
 │       ├── shodan_search.js, zoomeye_search.js, intelx_search.js
 │       ├── gdelt_search.js, dns_lookup.js, ner_extract.js
 │       ├── send_email.js, analyze_media.js
-│       └── ... (34+ handlers)
+│       └── ... (51+ handlers)
 ├── prompts/                   # 78 system prompts
 │   └── veritas_agent_system_prompt.md
 └── tools/
