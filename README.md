@@ -496,3 +496,27 @@ Todos los correos se firman con: **- Remitido por Véritas, la IA especializada 
 > OAuth documentado (GITHUB_OAUTH_CLIENT_ID / DROPBOX_OAUTH_APP_KEY), adiós a
 > Dolphin (Estratega = GLM-4.7 Flash), mini-diálogos rotativos OSINT y lema
 > "Información es ventaja. La ventaja es tuya."
+
+---
+
+## 🔀 Prioridad de proveedores (por plan free)
+
+El dispatcher usa los proveedores en orden según **generosidad del plan free** y **efectividad** (v2.6):
+
+### Búsqueda web (`/api/search` → web_search)
+| Orden | Proveedor | Plan free | Nota |
+|---|---|---|---|
+| 1º | **Jina** | 1M tokens/mes (~generoso) | Primaria: plan más amplio |
+| 2º | **Tavily** | 1.000 créditos/mes | Respaldo |
+| 3º | **Serper** | 2.500 créditos (única vez) | Último recurso |
+
+### Scraping (`/api/scrape` → scrape_url)
+| Orden | Proveedor | Plan free | Nota |
+|---|---|---|---|
+| 1º | **Firecrawl** | 500 créditos/mes | Primaria: extracción estructurada (markdown) + render JS (`waitFor`) |
+| 2º | **Jina Reader** | Gratis (sin consumo de créditos) | Respaldo sin JS; texto plano |
+| 3º | **ScrapingBee** | 1.000 créditos/mes | Último respaldo (con o sin JS) |
+
+> Si el proveedor primario falla (status != 200 o excepción), se marca cooldown 30s
+> y se salta al siguiente. Configura las keys con `FIRECRAWL_API_KEY_1`,
+> `JINA_API_KEY_1`, `TAVILY_API_KEY_1`, `SERPER_API_KEY_1`, `SCRAPINGBEE_API_KEY_1`.

@@ -617,29 +617,8 @@ async function handleSearch(request, env, userEmail) {
   const { query, max_results = 5 } = await request.json().catch(() => ({}));
   if (!query) return errorResponse("missing_query", 400);
 
-  // Intentar Jina → Tavily → Serper, en orden.
-  for (const svc of ["jina", "tavily", "serper"]) {
-    try {
-      const mod = await import(`../../lib/services/${svc}.js`);
-      const result = await withKeyRotation(env, svc, async (key) => {
-        return await mod.callService({
-          endpoint: svc === "jina" ? "search" : "search",
-          payload: { query, num: max_results, max_results },
-          apiKey: key,
-        });
-      });
-      if (result.response && result.response.status >= 200 && result.response.status < 300) {
-        // callService devuelve un objeto { status, data, raw }; conKeyRotation devuelve { response, keyIndex, attempts }.
-        // Como callService no es un fetch directo, reorganizamos: usamos withKeyRotation solo para obtener la key.
-        // Reimplementación directa abajo.
-      }
-    } catch (e) {
-      // intentar siguiente
-      continue;
-    }
-  }
-
-  // Reimplementación directa sin withKeyRotation (que espera un fetch Response).
+  // v2.6: orden por generosidad del plan free — Jina (1M tokens/mes) →
+  // Tavily (1.000 créditos/mes) → Serper (2.500 créditos única vez).
   return await searchFallback(query, max_results, env);
 }
 
@@ -732,19 +711,40 @@ async function handleScrape(request, env, userEmail) {
   const { url: targetUrl, render_js = false } = await request.json().catch(() => ({}));
   if (!targetUrl) return errorResponse("missing_url", 400);
 
-  // Jina Reader primero (sin JS render)
-  if (!render_js && discoverKeys(env, "jina").length > 0) {
+  // v2.6: orden por efectividad y generosidad del plan free:
+  //   Firecrawl (500 créditos/mes, extracción estructurada + render JS) → primaria
+  //   Jina Reader (gratis, sin consumo de créditos) → respaldo sin JS
+  //   ScrapingBee (1.000 créditos/mes, render JS) → último respaldo
+  if (discoverKeys(env, "firecrawl").length > 0) {
+    try {
+      const { key } = await getKey(env, "firecrawl");
+      const mod = await import("../../lib/services/firecrawl.js");
+      const payload = { url: targetUrl, formats: ["markdown"], onlyMainContent: true };
+      if (render_js) payload.waitFor = 2000;
+      const r = await mod.callService({ endpoint: "scrape", payload, apiKey: key });
+      if (r.status === 200 && r.data) {
+        const content = (r.data && (r.data.markdown || r.data.content)) || r.raw || "";
+        if (content) {
+          return json({ provider: "firecrawl", content, url: targetUrl, render_js: !!render_js });
+        }
+      }
+      await markCooldown(env, "firecrawl", (await getKey(env, "firecrawl")).index, 30_000, `scrape ${r.status}`);
+    } catch (e) { /* fall through */ }
+  }
+
+  // Jina Reader (gratis; no consume créditos; sin render JS)
+  if (discoverKeys(env, "jina").length > 0) {
     try {
       const { key } = await getKey(env, "jina");
       const mod = await import("../../lib/services/jina.js");
       const r = await mod.callService({ endpoint: "reader", payload: { url: targetUrl }, apiKey: key });
       if (r.status === 200 && r.data) {
-        return json({ provider: "jina", content: r.data.content || r.raw, url: targetUrl });
+        return json({ provider: "jina", content: r.data.content || r.raw, url: targetUrl, render_js: false, warning: render_js ? "render_js no disponible en Jina Reader; se usó texto plano." : undefined });
       }
     } catch (e) { /* fall through */ }
   }
 
-  // ScrapingBee (con o sin JS)
+  // ScrapingBee (respaldo; con o sin JS)
   if (discoverKeys(env, "scrapingbee").length > 0) {
     try {
       const { key } = await getKey(env, "scrapingbee");
@@ -755,25 +755,24 @@ async function handleScrape(request, env, userEmail) {
         apiKey: key,
       });
       if (r.status === 200 && r.data) {
-        return json({ provider: "scrapingbee", content: r.data.content || r.raw, url: targetUrl });
+        return json({ provider: "scrapingbee", content: r.data.content || r.raw, url: targetUrl, render_js: !!render_js });
       }
     } catch (e) { /* fall through */ }
   }
 
-  // Render JS requested but ScrapingBee unavailable — try Jina anyway.
+  // Último intento: Jina incluso con render_js (mejor que nada)
   if (render_js && discoverKeys(env, "jina").length > 0) {
     try {
       const { key } = await getKey(env, "jina");
       const mod = await import("../../lib/services/jina.js");
       const r = await mod.callService({ endpoint: "reader", payload: { url: targetUrl }, apiKey: key });
       if (r.status === 200 && r.data) {
-        return json({ provider: "jina", content: r.data.content || r.raw, url: targetUrl, warning: "render_js requested but ScrapingBee unavailable; used Jina Reader (no JS render)." });
+        return json({ provider: "jina", content: r.data.content || r.raw, url: targetUrl, warning: "render_js requested but Firecrawl/ScrapingBee unavailable; used Jina Reader (no JS render)." });
       }
     } catch (e) { /* fall through */ }
   }
 
-  return errorResponse("scrape_failed", 503, { url: targetUrl });
-}
+  return json({ provider: "none", error: "No se pudo scrapear con ningún proveedor (configura FIRECRAWL_API_KEY_1, JINA_API_KEY_1 o SCRAPINGBEE_API_KEY_1)." }, 502);
 
 // ==============================================================================
 // 6.1 — STORAGE (Carpeta Proyecto en R2)
