@@ -2524,6 +2524,9 @@ body.is-offline .send-btn { background: var(--text-muted); }
 
 /* --- Modal --- */
 #modalRoot[hidden] { display: none; }
+/* v2.7-fix: .modal-overlay usa display:flex, lo que pisaba el atributo hidden
+   de settingsModal, inviteModal y skillEditorModal (se veían SIEMPRE). */
+.modal-overlay[hidden] { display: none; }
 .modal-overlay {
   position: fixed; inset: 0; z-index: 2500; background: rgba(4,8,16,.72);
   display: flex; align-items: center; justify-content: center; backdrop-filter: blur(3px);
