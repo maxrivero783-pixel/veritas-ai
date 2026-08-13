@@ -225,12 +225,12 @@ async function sha256Hex(str) {
   const digest = await crypto.subtle.digest("SHA-256", data);
   return bufToHex(digest);
 }
-async function llmCacheGet(env, key) {
+async function llmCacheGet(env, key, userEmail) {
   if (!env.DB) return null;
   try {
     const row = await env.DB.prepare(
-      "SELECT response_text, response_json FROM llm_cache WHERE cache_key = ? AND created_at > ?"
-    ).bind(key, Date.now() - 24 * 3600 * 1000).first();
+      "SELECT response_text, response_json FROM llm_cache WHERE cache_key = ? AND user_email = ? AND created_at > ?"
+    ).bind(key, userEmail || "", Date.now() - 24 * 3600 * 1000).first();
     if (!row) return null;
     return { text: row.response_text, json: row.response_json ? JSON.parse(row.response_json) : null };
   } catch { return null; }
@@ -271,13 +271,13 @@ async function toolCacheSet(env, key, userEmail, toolName, result) {
   } catch { /* best-effort */ }
 }
 
-async function llmCacheSet(env, key, text, responseJson, model) {
+async function llmCacheSet(env, key, text, responseJson, model, userEmail) {
   if (!env.DB) return;
   try {
     await env.DB.prepare(
-      "INSERT INTO llm_cache (cache_key, response_text, response_json, model, created_at) VALUES (?, ?, ?, ?, ?) " +
+      "INSERT INTO llm_cache (cache_key, user_email, response_text, response_json, model, created_at) VALUES (?, ?, ?, ?, ?, ?) " +
       "ON CONFLICT(cache_key) DO UPDATE SET response_text = excluded.response_text, response_json = excluded.response_json, model = excluded.model, created_at = excluded.created_at"
-    ).bind(key, text || "", responseJson ? JSON.stringify(responseJson) : null, model || "", Date.now()).run();
+    ).bind(key, userEmail || "", text || "", responseJson ? JSON.stringify(responseJson) : null, model || "", Date.now()).run();
   } catch { /* best-effort */ }
 }
 
@@ -1587,7 +1587,7 @@ async function handleChatOpenRouter(request, env, userEmail) {
   let cacheKey = null;
   if (useCache) {
     cacheKey = await sha256Hex(model + "|" + JSON.stringify(messages));
-    const hit = await llmCacheGet(env, cacheKey);
+    const hit = await llmCacheGet(env, cacheKey, userEmail);
     if (hit) return json({ ...(hit.json || { cached_text: hit.text }), cached: true, model, from_cache: true });
   }
 
@@ -1718,7 +1718,7 @@ async function handleChatOpenRouter(request, env, userEmail) {
   if (degraded) respHeaders.set("X-Véritas-Degraded", "1");
   const upstreamData = await upstreamResp.json().catch(() => null);
   if (useCache && cacheKey && upstreamData) {
-    await llmCacheSet(env, cacheKey, upstreamData.choices && upstreamData.choices[0] && upstreamData.choices[0].message && upstreamData.choices[0].message.content || "", upstreamData, model);
+    await llmCacheSet(env, cacheKey, upstreamData.choices && upstreamData.choices[0] && upstreamData.choices[0].message && upstreamData.choices[0].message.content || "", upstreamData, model, userEmail);
   }
   if (upstreamData && upstreamData.usage) {
     await logOpenRouterCall(env, userEmail, model, keyIndexUsed, upstreamResp.status, startTs, {
@@ -2830,7 +2830,7 @@ async function handleAgentOrchestrate(request, env, userEmail) {
   let cacheKey = null;
   if (useCache) {
     cacheKey = await sha256Hex(model + "|" + JSON.stringify(messages));
-    const hit = await llmCacheGet(env, cacheKey);
+    const hit = await llmCacheGet(env, cacheKey, userEmail);
     if (hit) return json({ ...(hit.json || { cached_text: hit.text }), cached: true, model, from_cache: true });
   }
 
