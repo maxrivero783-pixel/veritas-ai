@@ -3899,6 +3899,22 @@ async function loadUsageDashboard() {
   const panel = $("#usageDashboard");
   if (!panel) return;
   panel.innerHTML = '<p class="usage-loading">Cargando uso…</p>';
+
+  // v2.7: aviso de cuotas bajas (banner en el propio Véritas).
+  try {
+    const qresp = await fetch("/api/quota");
+    if (qresp.ok) {
+      const qdata = await qresp.json();
+      if (qdata.low_quota_services && qdata.low_quota_services.length) {
+        const low = (qdata.quotas || []).filter((q) => q.remaining_pct < 25);
+        let warn = '<div class="quota-warning">⚠️ <strong>Cuotas bajas:</strong> ';
+        warn += low.map((q) => `${q.service} (${q.remaining_pct}%)`).join(", ");
+        warn += '. <span class="quota-hint">Se notificará por email al operador. Revisa el plan o añade otra key.</span></div>';
+        panel.innerHTML = warn + panel.innerHTML;
+      }
+    }
+  } catch { /* sin cuota visible */ }
+
   try {
     const resp = await fetch("/api/usage?days=7");
     if (!resp.ok) {
