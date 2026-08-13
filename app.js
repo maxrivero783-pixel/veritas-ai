@@ -239,166 +239,212 @@ function initEntityCanvas() {
   const canvas = $("#entityCanvas");
   if (!canvas) return;
   const ctx = canvas.getContext("2d");
-  const W = canvas.width, H = canvas.height;
-  const cx = W / 2, cy = H / 2;
-  const particles = [];
-  const NUM_PARTICLES = 30;
+  let W = canvas.width, H = canvas.height;
+  let cx = W / 2, cy = H / 2;
 
-  // Crear partículas.
+  // --- 28 partículas orbitales ---
+  const particles = [];
+  const NUM_PARTICLES = 28;
   for (let i = 0; i < NUM_PARTICLES; i++) {
     particles.push({
       angle: Math.random() * Math.PI * 2,
-      radius: 25 + Math.random() * 35,
-      speed: 0.005 + Math.random() * 0.01,
-      size: 1 + Math.random() * 2,
-      opacity: 0.3 + Math.random() * 0.7,
+      radius: 28 + Math.random() * 38,
+      speed: 0.003 + Math.random() * 0.009,
+      size: 0.6 + Math.random() * 1.6,
+      opacity: 0.18 + Math.random() * 0.45,
+      wobble: Math.random() * Math.PI * 2,
+    });
+  }
+
+  // --- 6 tentáculos neuronales ---
+  const tentacles = [];
+  const NUM_TENTACLES = 6;
+  const TENT_SEGS = 5;
+  for (let i = 0; i < NUM_TENTACLES; i++) {
+    tentacles.push({
+      angle: (i / NUM_TENTACLES) * Math.PI * 2,
+      length: 36 + Math.random() * 24,
+      phase: Math.random() * Math.PI * 2,
     });
   }
 
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-  // --- State machine con transición suave ---
-  // `_displayedLevel` es el nivel interpolado que se dibuja (0=idle, 1=active, 2=processing).
-  // `_targetLevel` es el nivel objetivo al que se transiciona.
-  // `_glowFade` es un factor 0..1 que controla el glow residual tras salir de processing.
+  // State machine con transición suave.
   let _displayedLevel = 0;
   let _targetLevel = 0;
-  let _glowFade = 0; // se mantiene >0 durante 800ms tras salir de processing
-  const TRANSITION_SPEED = 0.0035; // por ms → ~285ms para t=0..1 (suave con easing)
+  let _glowFade = 0;
+  const TRANSITION_SPEED = 0.0035;
   const GLOW_FADE_DURATION_MS = 800;
 
-  // Exponer para setEntityState.
   state._canvasTarget = (lvl) => { _targetLevel = lvl; };
   state._canvasTriggerGlowFade = () => { _glowFade = 1; };
+
+  function resize() {
+    const rect = canvas.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    // Tamaño lógico (CSS pixels).
+    const targetW = Math.max(120, rect.width);
+    const targetH = Math.max(90, rect.height);
+    W = targetW; H = targetH;
+    cx = W / 2; cy = H / 2;
+    // Backing store físico.
+    canvas.width = Math.round(targetW * dpr);
+    canvas.height = Math.round(targetH * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  window.addEventListener("veritas:resize", resize);
+  window.addEventListener("resize", resize);
+  setTimeout(resize, 50);
 
   function draw(timestamp) {
     const mode = state.streamingState || "idle";
     const palette = entityPalette(mode);
-    // Avanzar la transición hacia _targetLevel con easeInOutCubic.
+
+    // Transición de nivel.
     const diff = _targetLevel - _displayedLevel;
     if (Math.abs(diff) > 0.001) {
-      // Mover displayedLevel hacia target a velocidad constante; el easing se
-      // aplica al interpolar propiedades visuales, no al avance del nivel (más
-      // simple y da el mismo efecto orgánico).
-      const step = TRANSITION_SPEED * 16; // ~16ms por frame
+      const step = TRANSITION_SPEED * 16;
       _displayedLevel += Math.sign(diff) * Math.min(Math.abs(diff), step);
     } else {
       _displayedLevel = _targetLevel;
     }
-
-    // Decay del glow fade (800ms tras salir de processing).
     if (_glowFade > 0) {
       _glowFade = Math.max(0, _glowFade - (16 / GLOW_FADE_DURATION_MS));
     }
 
-    // Limpiar con efecto de fade.
-    ctx.fillStyle = rgb(palette.bg, palette.fade);
-    ctx.fillRect(0, 0, W, H);
-
-    // --- Aplicar easing al nivel para transiciones orgánicas ---
-    // easeInOutCubic sobre el progreso de idle→active→processing.
-    // Mapeamos _displayedLevel (0..2) a través de un easing relativo.
     const lvl = _displayedLevel;
+    const idleWeight = Math.max(0, 1 - lvl);
+    const activeWeight = Math.max(0, Math.min(1, lvl));
+    const processingWeight = Math.max(0, lvl - 1);
 
-    // --- Idle: punto luminoso distante (estrella), parpadeo cada ~3s ---
-    // Cuando lvl ≈ 0, dibujar estrella distante pequeña que parpadea.
-    // Mezclamos con el orbe activo según lvl.
-    const idleWeight = Math.max(0, 1 - lvl); // 1 en idle, 0 en active+
-    const activeWeight = Math.max(0, Math.min(1, lvl)); // 0 en idle, 1 en active+
-    const processingWeight = Math.max(0, lvl - 1); // 0 en idle/active, 1 en processing
+    // Limpiar con fade (en píxeles físicos vía setTransform identidad).
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = rgb(palette.bg, palette.fade);
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.restore();
 
-    // Parpadeo idle cada 3s (periodo 3000ms).
-    const blinkPhase = (Math.sin(timestamp / 3000 * Math.PI * 2) + 1) / 2; // 0..1
-    const idleOpacity = 0.3 + 0.7 * blinkPhase; // 0.3..1.0
+    // --- Estrella de origen (punto lejano) ---
+    // En idle: una estrella lejana, pequeña y con parpadeo, que sugiere un
+    // punto de señal distante. Conforme sube la actividad, la estrella
+    // "crece" y se convierte en el núcleo/orbe central (efecto de zoom).
+    const blinkPhase = (Math.sin(timestamp / 3000 * Math.PI * 2) + 1) / 2;
+    const idleOpacity = 0.35 + 0.65 * blinkPhase;
+    // Profundidad: en idle la estrella está lejos (radio 1.2); en active se acerca.
+    const depth = 0.4 + activeWeight * 0.6 + processingWeight * 0.3; // 0.4 → 1.3
+    const starR = (1.2 + idleWeight * 0.4) * depth;
+    // Pequeño desplazamiento para sugerir un punto lejano en el cielo.
+    const starX = cx;
+    const starY = cy;
 
-    // Estrella distante: pequeña, ligeramente desplazada, esmeralda tenue.
-    if (idleWeight > 0.01) {
-      const starX = cx + 3;
-      const starY = cy - 2;
-      const starR = 1.5 + idleWeight * 0.5;
-      ctx.fillStyle = rgb(palette.primary, idleOpacity * idleWeight * 0.8);
+    if (idleWeight > 0.01 || activeWeight > 0.01) {
+      // Halo de la estrella.
+      const haloR = starR * (8 + processingWeight * 6);
+      const haloGrad = ctx.createRadialGradient(starX, starY, 0, starX, starY, haloR);
+      const coreAlpha = Math.max(idleWeight * idleOpacity * 0.5, activeWeight * 0.4);
+      haloGrad.addColorStop(0, rgb(palette.primary, coreAlpha));
+      haloGrad.addColorStop(0.5, rgb(palette.secondary, 0.1 * (activeWeight + processingWeight)));
+      haloGrad.addColorStop(1, rgb(palette.primary, 0));
+      ctx.fillStyle = haloGrad;
       ctx.beginPath();
-      ctx.arc(starX, starY, starR, 0, Math.PI * 2);
+      ctx.arc(starX, starY, haloR, 0, Math.PI * 2);
       ctx.fill();
-      // Pequeño halo de estrella.
-      if (blinkPhase > 0.7) {
-        ctx.fillStyle = rgb(palette.primary, (blinkPhase - 0.7) * idleWeight * 0.2);
-        ctx.beginPath();
-        ctx.arc(starX, starY, starR * 3, 0, Math.PI * 2);
-        ctx.fill();
-      }
-    }
 
-    // --- Orbe central (activo/processing) ---
-    // Radio interpola de 0 (idle) a 6 (active) a 8 (processing) con pulso.
-    const pulseScale = processingWeight > 0 ? 1 + 0.15 * Math.sin(timestamp / 200) : 1;
-    const orbRadius = (activeWeight * 6 + processingWeight * 2) * pulseScale;
-
-    if (orbRadius > 0.5) {
-      // Glow del orbe: esmeralda en processing, cian en active.
-      // El glow persiste durante _glowFade tras salir de processing.
-      const glowStrength = processingWeight + _glowFade * 0.5;
-      if (glowStrength > 0.01) {
-        const gradient = ctx.createRadialGradient(cx, cy, 0, cx, cy, 40);
-        gradient.addColorStop(0, rgb(palette.primary, 0.4 * glowStrength));
-        gradient.addColorStop(0.55, rgb(palette.secondary, 0.16 * glowStrength));
-        gradient.addColorStop(1, rgb(palette.primary, 0));
-        ctx.fillStyle = gradient;
+      // Cruz de estrella sutil (solo en idle).
+      if (idleWeight > 0.4 && blinkPhase > 0.55) {
+        const flare = (blinkPhase - 0.55) * 2.2 * idleWeight;
+        ctx.strokeStyle = rgb(palette.primary, flare * 0.4);
+        ctx.lineWidth = 0.7;
+        const fLen = starR * 6;
         ctx.beginPath();
-        ctx.arc(cx, cy, 40, 0, Math.PI * 2);
-        ctx.fill();
+        ctx.moveTo(starX - fLen, starY); ctx.lineTo(starX + fLen, starY);
+        ctx.moveTo(starX, starY - fLen); ctx.lineTo(starX, starY + fLen);
+        ctx.stroke();
       }
 
-      // Orbe.
-      ctx.fillStyle = rgb(palette.primary, 1);
-      ctx.globalAlpha = activeWeight;
+      // Núcleo.
+      const pulseScale = processingWeight > 0 ? 1 + 0.18 * Math.sin(timestamp / 200) : 1;
+      const coreR = Math.max(0.6, starR * pulseScale);
+      ctx.fillStyle = rgb(palette.primary, Math.max(0.3, activeWeight + processingWeight * 0.8 + idleWeight * idleOpacity * 0.5));
       ctx.beginPath();
-      ctx.arc(cx, cy, orbRadius, 0, Math.PI * 2);
+      ctx.arc(starX, starY, coreR, 0, Math.PI * 2);
       ctx.fill();
-      ctx.globalAlpha = 1;
     }
 
-    if (reducedMotion) {
-      requestAnimationFrame(draw);
-      return;
-    }
+    if (reducedMotion) { requestAnimationFrame(draw); return; }
 
-    // --- Partículas ---
-    // En idle: no se dibujan (idleWeight ≈ 1 → alpha ≈ 0).
-    // En active: Browniano, cian.
-    // En processing: anillos concéntricos, esmeralda, aceleradas.
+    // --- Tentáculos neuronales ---
+    // Se dibujan desde el centro hacia afuera como cadenas de segmentos
+    // que se curvan con el tiempo. En idle son sutiles; en processing
+    // se intensifican y laten.
+    const tentIntensity = 0.25 + activeWeight * 0.4 + processingWeight * 0.6;
+    ctx.lineCap = "round";
+    tentacles.forEach((t) => {
+      const baseAngle = t.angle + (activeWeight * 0.2 + processingWeight * 0.5) *
+        Math.sin(timestamp / 1400 + t.phase);
+      const segLen = (t.length / TENT_SEGS) * (1 + processingWeight * 0.15 * Math.sin(timestamp / 600 + t.phase));
+      let px = cx, py = cy;
+      ctx.beginPath();
+      ctx.moveTo(px, py);
+      for (let s = 0; s < TENT_SEGS; s++) {
+        const wob = Math.sin(timestamp / 700 + t.phase + s * 0.7) *
+          (3 + s * 2.2) * (0.4 + activeWeight * 0.6 + processingWeight * 0.8);
+        const radial = baseAngle + (s / TENT_SEGS) * 0.9 * wob * 0.04 + wob * 0.015;
+        const nx = px + Math.cos(radial) * segLen;
+        const ny = py + Math.sin(radial) * segLen;
+        ctx.lineTo(nx, ny);
+        px = nx; py = ny;
+      }
+      const alpha = tentIntensity * (0.35 + 0.15 * Math.sin(timestamp / 800 + t.phase));
+      ctx.strokeStyle = rgb(palette.secondary, alpha);
+      ctx.lineWidth = 0.8 + processingWeight * 0.6;
+      ctx.stroke();
+
+      // Nodo en la punta.
+      ctx.fillStyle = rgb(palette.primary, alpha * 1.2);
+      ctx.beginPath();
+      ctx.arc(px, py, 1.2 + processingWeight * 0.8, 0, Math.PI * 2);
+      ctx.fill();
+    });
+
+    // --- Partículas orbitales ---
+    const orbitScale = 0.6 + activeWeight * 0.4 + processingWeight * 0.3;
     particles.forEach((p) => {
-      // Velocidad de rotación según estado.
-      const speedMul = 1 + processingWeight * 3 + activeWeight * 0.5;
+      const speedMul = 1 + processingWeight * 3.2 + activeWeight * 0.6;
       p.angle += p.speed * speedMul;
-
-      // Browniano en active.
       if (activeWeight > 0.3 && processingWeight < 0.3) {
-        p.angle += (Math.random() - 0.5) * 0.05 * activeWeight;
+        p.angle += (Math.random() - 0.5) * 0.04 * activeWeight;
       }
-
-      // Radio: anillos concéntricos en processing, órbita normal en active.
-      const baseRadius = p.radius;
+      const baseRadius = p.radius * orbitScale;
       const ringMod = processingWeight > 0
         ? Math.sin(timestamp / 500 + p.angle) * 10 * processingWeight
-        : 0;
+        : Math.sin(timestamp / 1800 + p.wobble) * 2 * idleWeight;
       const r = baseRadius + ringMod;
-
       const x = cx + Math.cos(p.angle) * r;
       const y = cy + Math.sin(p.angle) * r;
 
-      // Color: cian en active, esmeralda en processing, interpolado.
       const cyanComp = activeWeight * (1 - processingWeight);
       const greenComp = processingWeight;
-      const alpha = (cyanComp * 0.7 + greenComp * 1.0) * p.opacity;
+      const idleComp = idleWeight;
+      const alpha = (cyanComp * 0.55 + greenComp * 0.95 + idleComp * 0.25) * p.opacity;
 
       if (alpha > 0.02) {
-        const r_col = Math.round(palette.secondary[0] * cyanComp + palette.primary[0] * Math.max(greenComp, 0.1));
-        const g_col = Math.round(palette.secondary[1] * cyanComp + palette.primary[1] * Math.max(greenComp, 0.1));
-        const b_col = Math.round(palette.secondary[2] * cyanComp + palette.primary[2] * Math.max(greenComp, 0.1));
+        const r_col = Math.round(
+          palette.secondary[0] * cyanComp +
+          palette.primary[0] * Math.max(greenComp, idleComp * 0.5)
+        );
+        const g_col = Math.round(
+          palette.secondary[1] * cyanComp +
+          palette.primary[1] * Math.max(greenComp, idleComp * 0.5)
+        );
+        const b_col = Math.round(
+          palette.secondary[2] * cyanComp +
+          palette.primary[2] * Math.max(greenComp, idleComp * 0.5)
+        );
         ctx.fillStyle = `rgba(${r_col}, ${g_col}, ${b_col}, ${alpha})`;
         ctx.beginPath();
-        ctx.arc(x, y, p.size, 0, Math.PI * 2);
+        ctx.arc(x, y, p.size * (0.8 + processingWeight * 0.4), 0, Math.PI * 2);
         ctx.fill();
       }
     });
@@ -406,9 +452,9 @@ function initEntityCanvas() {
     requestAnimationFrame(draw);
   }
 
-  // Estado inicial: idle.
   state.streamingState = "idle";
-  $("#entityStateIndicator").dataset.state = "idle";
+  const ind = $("#entityStateIndicator");
+  if (ind) ind.dataset.state = "idle";
   requestAnimationFrame(draw);
 }
 
@@ -1236,11 +1282,15 @@ function populateModelSelector() {
 function renderChatHeader() {
   if (!state.currentChat) {
     $("#chatTitle").textContent = t("chat.empty");
+    const ct = $("#chatCrumbTitle");
+    if (ct) ct.textContent = "Sin título";
     $("#modelChip").textContent = "—";
     hide($("#sharedBanner"));
     return;
   }
   $("#chatTitle").textContent = state.currentChat.title;
+  const ct2 = $("#chatCrumbTitle");
+  if (ct2) ct2.textContent = state.currentChat.title;
   const modelChip = $("#modelChip");
   modelChip.textContent = state.currentModel || "—";
   modelChip.className = `model-chip ${getProvider(state.currentModel)}`;
@@ -3017,14 +3067,39 @@ function repairSandboxWithCoder() {
   toast("Prompt de reparación preparado para Coder", "info", 4000);
 }
 
-function showSandbox() {
-  show($("#sandbox"));
+function showSandbox(tab = "sandbox") {
+  const panel = $("#rightPanel");
+  if (panel) panel.hidden = false;
+  if (tab === "sandbox") show($("#sandbox"));
+  switchRightTab(tab);
   $(".app-layout")?.classList.remove("sandbox-hidden");
 }
 
+function showProjectPanel() { showSandbox("project"); }
+function showGraphPanel() { showSandbox("graph"); }
+
 function toggleSandbox() {
   const layout = $(".app-layout");
-  if (layout) layout.classList.toggle("sandbox-hidden");
+  const panel = $("#rightPanel");
+  if (!layout || !panel) return;
+  if (layout.classList.contains("sandbox-hidden")) {
+    layout.classList.remove("sandbox-hidden");
+    panel.hidden = false;
+  } else {
+    layout.classList.add("sandbox-hidden");
+    panel.hidden = true;
+  }
+}
+
+function switchRightTab(name) {
+  const tabs = document.querySelectorAll(".rtab");
+  tabs.forEach((t) => t.classList.toggle("active", t.dataset.rtab === name));
+  ["sandbox", "project", "graph"].forEach((v) => {
+    const el = document.getElementById("view-" + v);
+    if (el) el.hidden = v !== name;
+  });
+  if (name === "project") renderProjectTree();
+  if (name === "graph") renderEntityGraph();
 }
 
 function clearSandbox() {
@@ -5083,6 +5158,248 @@ function setupV25UI() {
       if ($("#chatSearchCount")) $("#chatSearchCount").hidden = true;
     }
   });
+
+  // === v2.7.1 OSINT/sci-fi UI: sidebar colapsable + right-panel tabs + breadcrumb ===
+  initCollapsibleSidebar();
+  initRightPanelTabs();
+  initChatBreadcrumb();
+  initContextTicker();
+}
+
+// ----------------------------------------------------------------------
+// Sidebar colapsable (mantiene entityCanvas visible)
+// ----------------------------------------------------------------------
+function initCollapsibleSidebar() {
+  const layout = $(".app-layout");
+  const collapseBtn = $("#sidebarCollapseBtn");
+  const expandBtn = $("#sidebarExpandBtn");
+  if (!layout) return;
+  const apply = (collapsed) => layout.classList.toggle("sidebar-collapsed", collapsed);
+  try {
+    const saved = localStorage.getItem("veritas:sidebar-collapsed") === "1";
+    if (saved) apply(true);
+  } catch {}
+  collapseBtn?.addEventListener("click", () => { apply(true); try { localStorage.setItem("veritas:sidebar-collapsed", "1"); } catch {} });
+  expandBtn?.addEventListener("click", () => { apply(false); try { localStorage.removeItem("veritas:sidebar-collapsed"); } catch {} });
+  // El canvas debe redibujarse al colapsar (cambio de tamaño).
+  const ro = new ResizeObserver(() => window.dispatchEvent(new Event("veritas:resize")));
+  ro.observe($("#entityCanvas"));
+}
+
+// ----------------------------------------------------------------------
+// Right panel: pestañas Sandbox / Proyecto / Grafo
+// ----------------------------------------------------------------------
+function initRightPanelTabs() {
+  document.querySelectorAll(".rtab").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const name = btn.dataset.rtab;
+      if (!name) return;
+      // Asegurarse de que el panel derecho esté visible.
+      const panel = $("#rightPanel");
+      if (panel) panel.hidden = false;
+      $(".app-layout")?.classList.remove("sandbox-hidden");
+      switchRightTab(name);
+    });
+  });
+  $("#rightPanelCollapse")?.addEventListener("click", () => toggleSandbox());
+}
+
+// ----------------------------------------------------------------------
+// Breadcrumb de operación editable (título del chat)
+// ----------------------------------------------------------------------
+function initChatBreadcrumb() {
+  const crumbTitle = $("#chatCrumbTitle");
+  if (!crumbTitle) return;
+  crumbTitle.addEventListener("blur", () => {
+    const newTitle = crumbTitle.textContent.trim();
+    if (newTitle && state.currentChatId) {
+      state.chats[state.currentChatId] = state.chats[state.currentChatId] || {};
+      state.chats[state.currentChatId].title = newTitle;
+      const titleEl = $("#chatTitle");
+      if (titleEl) titleEl.textContent = newTitle;
+      renderChatList();
+      // Persistir best-effort (fire and forget)
+      fetch(`/api/chats/${encodeURIComponent(state.currentChatId)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: newTitle }),
+      }).catch(() => {});
+    }
+  });
+  crumbTitle.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); crumbTitle.blur(); }
+    if (e.key === "Escape") { crumbTitle.blur(); }
+  });
+}
+
+// ----------------------------------------------------------------------
+// Context ticker (tokens, herramientas, fallback)
+// ----------------------------------------------------------------------
+function initContextTicker() {
+  const tCtx = $("#tickerCtx");
+  const tTools = $("#tickerTools");
+  const tFallback = $("#tickerFallback");
+  if (!tCtx) return;
+  const computeToolsCount = () => {
+    try {
+      if (window.__VERITAS_TOOLS_COUNT__) return window.__VERITAS_TOOLS_COUNT__;
+      // TOOL_REGISTRY es un Map; tras fetchAndHydrate tendrá el conteo real.
+      if (typeof TOOL_REGISTRY !== "undefined") {
+        if (TOOL_REGISTRY instanceof Map) return TOOL_REGISTRY.size;
+        if (TOOL_REGISTRY && typeof TOOL_REGISTRY === "object") return Object.keys(TOOL_REGISTRY).length;
+      }
+    } catch {}
+    return 18;
+  };
+  const update = () => {
+    const used = (state.tokenUsage?.total_tokens || 0);
+    const avail = (state.settings?.tokens?.contextWindow || 200000);
+    if (tCtx) tCtx.textContent = `ctx ${(used/1000).toFixed(1)}k/${Math.round(avail/1000)}k`;
+    if (tTools) tTools.textContent = `${computeToolsCount()} tools disponibles`;
+    if (tFallback) {
+      const last = state.lastProvider || "Estratega";
+      tFallback.textContent = `Fallback: ${last}`;
+    }
+  };
+  update();
+  document.addEventListener("veritas:tokens-updated", update);
+  document.addEventListener("veritas:chat-loaded", update);
+  setInterval(update, 5000);
+}
+
+// ----------------------------------------------------------------------
+// Project tree (pestaña Proyecto del panel derecho)
+// ----------------------------------------------------------------------
+const PROJECT_TREE_BASE = [
+  { name: "docs/", type: "folder" },
+  { name: "README.md", type: "md", indent: 1 },
+  { name: "ARCHITECTURE.md", type: "md", indent: 1 },
+  { name: "functions/", type: "folder" },
+  { name: "chat.js", type: "file", indent: 1 },
+  { name: "tools.js", type: "file", indent: 1 },
+  { name: "sandbox.js", type: "file", indent: 1 },
+  { name: "lib/", type: "folder" },
+  { name: "memory.js", type: "file", indent: 1 },
+  { name: "keyRotation.js", type: "file", indent: 1 },
+  { name: "prompts/", type: "folder" },
+  { name: "osint/", type: "folder", indent: 1 },
+  { name: "verification.md", type: "md", indent: 2 },
+  { name: "entity_graph.md", type: "md", indent: 2 },
+  { name: "tools/", type: "folder" },
+  { name: "webSearch.js", type: "file", indent: 1 },
+  { name: "registryLookup.js", type: "file", indent: 1 },
+  { name: "index.html", type: "file" },
+  { name: "app.js", type: "file" },
+  { name: "styles.css", type: "file" },
+  { name: "schema.sql", type: "file" },
+  { name: "wrangler.toml", type: "file" },
+];
+
+function _treeIcon(type) {
+  const folder = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>';
+  const md = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>';
+  const file = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>';
+  return type === "folder" ? folder : (type === "md" ? md : file);
+}
+
+function renderProjectTree() {
+  const root = $("#projectTree");
+  if (!root || root.dataset.rendered === "1") return;
+  // Mezclar archivos reales del sandbox con el árbol base.
+  const sandboxFiles = Object.keys(state.sandbox?.files || {}).map((p) => ({ name: p, type: "file", indent: Math.min(3, p.split("/").length - 1) }));
+  const all = [...PROJECT_TREE_BASE];
+  if (sandboxFiles.length) {
+    all.push({ name: "sandbox-output/", type: "folder" });
+    sandboxFiles.forEach((f) => all.push({ ...f, indent: (f.indent || 0) + 1 }));
+  }
+  root.innerHTML = all.map((f) => {
+    const indent = f.indent ? `<span class="tree-indent"></span>`.repeat(f.indent) : "";
+    return `<div class="tree-row ${f.type}">${indent}${_treeIcon(f.type)}<span>${f.name}</span></div>`;
+  }).join("");
+  root.dataset.rendered = "1";
+}
+
+// ----------------------------------------------------------------------
+// Entity graph (pestaña Grafo del panel derecho)
+// ----------------------------------------------------------------------
+let _entityGraphRendered = false;
+function _collectEntityNodes() {
+  // Agregar entidades detectadas desde perfiles/memoria si están disponibles.
+  const nodes = [];
+  const edges = [];
+  try {
+    const profiles = state.entityProfiles || (window.veritas?.state?.entityProfiles);
+    if (Array.isArray(profiles)) {
+      profiles.slice(0, 20).forEach((p, i) => {
+        nodes.push({
+          id: p.id || p.name || `e${i}`,
+          label: p.name || p.id || `Entidad ${i+1}`,
+          type: p.type || "entity",
+        });
+      });
+    }
+  } catch {}
+  return { nodes, edges };
+}
+
+function renderEntityGraph() {
+  const svg = $("#entityGraphSvg");
+  const empty = $("#entityGraphEmpty");
+  const meta = $("#entityGraphMeta");
+  if (!svg) return;
+  const { nodes, edges } = _collectEntityNodes();
+  const W = 400, H = 320;
+  if (!nodes.length) {
+    if (empty) empty.hidden = false;
+    if (meta) meta.textContent = "0 nodos · 0 relaciones";
+    if (!_entityGraphRendered) {
+      // Placeholder sutil con un nodo central.
+      svg.innerHTML = `
+        <circle cx="${W/2}" cy="${H/2}" r="10" fill="#35f2a0" opacity="0.15"/>
+        <circle cx="${W/2}" cy="${H/2}" r="3" fill="#35f2a0" opacity="0.6"/>
+        <text x="${W/2}" y="${H/2 + 28}" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" fill="#6c8480">entity_graph · a la espera de datos</text>
+      `;
+      _entityGraphRendered = true;
+    }
+    return;
+  }
+  if (empty) empty.hidden = true;
+  // Layout circular simple.
+  const cx = W / 2, cy = H / 2, R = Math.min(W, H) / 2 - 40;
+  const pos = nodes.map((_, i) => {
+    const a = (i / nodes.length) * Math.PI * 2 - Math.PI / 2;
+    return { x: cx + Math.cos(a) * R, y: cy + Math.sin(a) * R };
+  });
+  const colorFor = (type) => {
+    if (/sancion|ofac|sdn/i.test(type)) return "#ff4d5e";
+    if (/empresa|mercantil|org/i.test(type)) return "#3fd1ff";
+    if (/persona|individuo/i.test(type)) return "#35f2a0";
+    if (/fuente|registro/i.test(type)) return "#b98cff";
+    return "#35f2a0";
+  };
+  let out = "";
+  edges.forEach(([a, b]) => {
+    const ia = nodes.findIndex((n) => n.id === a);
+    const ib = nodes.findIndex((n) => n.id === b);
+    if (ia < 0 || ib < 0) return;
+    out += `<line x1="${pos[ia].x}" y1="${pos[ia].y}" x2="${pos[ib].x}" y2="${pos[ib].y}" stroke="#2a3944" stroke-width="1"/>`;
+  });
+  if (!edges.length && nodes.length > 1) {
+    // Conectar al centro (nodo 0) como anillo.
+    for (let i = 1; i < nodes.length; i++) {
+      out += `<line x1="${pos[0].x}" y1="${pos[0].y}" x2="${pos[i].x}" y2="${pos[i].y}" stroke="#1f332b" stroke-width="0.8" stroke-dasharray="2 3"/>`;
+    }
+  }
+  nodes.forEach((n, i) => {
+    const c = colorFor(n.type);
+    out += `<circle cx="${pos[i].x}" cy="${pos[i].y}" r="6" fill="${c}" opacity="0.9">
+      <title>${n.label} (${n.type})</title>
+    </circle>`;
+    out += `<text x="${pos[i].x}" y="${pos[i].y + 16}" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="8" fill="#a9bdb8">${n.label.slice(0, 20)}${n.label.length > 20 ? "…" : ""}</text>`;
+  });
+  svg.innerHTML = out;
+  if (meta) meta.textContent = `${nodes.length} nodos · ${edges.length} relaciones`;
+  _entityGraphRendered = true;
 }
 
 window.veritas = { state, toast, scrollToMessage: (id) => {

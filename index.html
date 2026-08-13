@@ -7,10 +7,10 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self' https: data:; script-src 'unsafe-inline' 'unsafe-eval' https://js.puter.com https://unpkg.com https://cdn.jsdelivr.net https://esm.sh; style-src 'unsafe-inline' https:; img-src https: data:; connect-src https:; font-src https: data:;" />
   <title>Véritas — IA Orquestadora</title>
 
-  <!-- Fuentes -->
+  <!-- Fuentes (OSINT/sci-fi: JetBrains Mono + Space Grotesk + Inter) -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700&family=Rajdhani:wght@400;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
 
   <!-- Estilos -->
   <link rel="stylesheet" href="./styles.css" />
@@ -144,8 +144,15 @@
       <div class="entity-canvas-wrapper">
         <canvas id="entityCanvas" width="200" height="160" aria-hidden="true"></canvas>
         <div class="entity-state-indicator" id="entityStateIndicator" data-state="idle"></div>
+        <button class="sidebar-collapse-btn" id="sidebarCollapseBtn" title="Colapsar panel" aria-label="Colapsar panel">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
+        <button class="sidebar-expand-btn" id="sidebarExpandBtn" title="Expandir panel" aria-label="Expandir panel">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+        </button>
       </div>
 
+      <div class="sidebar-collapsible">
       <h1 class="brand">Véritas</h1>
       <p class="brand-tagline" data-i18n="app.tagline">Verdad sin filtro</p>
 
@@ -186,12 +193,25 @@
         <span class="status-dot" id="statusDot"></span>
         <span class="status-text" id="statusText" data-i18n="status.online">En línea</span>
       </div>
+      </div>
     </aside>
 
     <!-- ========================================================== -->
     <!-- CENTRO (~45%) — ÁREA DE CHAT -->
     <!-- ========================================================== -->
     <main class="chat-area" id="chatArea">
+
+      <!-- Breadcrumb de operación editable (OSINT/sci-fi) -->
+      <div class="chat-breadcrumb" id="chatBreadcrumb">
+        <span class="crumb-root">
+          <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 22 7 22 17 12 22 2 17 2 7"/></svg>
+          VÉRITAS
+        </span>
+        <svg class="crumb-sep" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+        <span class="crumb-section" id="chatCrumbSection">Operación</span>
+        <svg class="crumb-sep" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+        <span class="crumb-title" id="chatCrumbTitle" contenteditable="true" spellcheck="false" title="Clic para renombrar la operación">Sin título</span>
+      </div>
 
       <!-- Header del chat (título + indicadores) -->
       <div class="chat-header" id="chatHeader">
@@ -313,13 +333,50 @@
 
         <!-- Botón Invitar (sesión compartida, solo roles elegibles) -->
         <button class="action-btn small" id="inviteBtn" data-i18n="shared.invite" hidden>Invitar</button>
+
+        <!-- Context ticker (OSINT/sci-fi: tokens, tools, fallback) -->
+        <div class="context-ticker" id="contextTicker">
+          <span class="ticker-item" title="Contexto usado / disponible">
+            <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+            <span id="tickerCtx">ctx 0k/200k</span>
+          </span>
+          <span class="ticker-item" title="Herramientas disponibles">
+            <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+            <span id="tickerTools">18 tools disponibles</span>
+          </span>
+          <span class="ticker-item" title="Proveedor de fallback">
+            <span class="live-dot"></span>
+            <span id="tickerFallback">Fallback: Estratega</span>
+          </span>
+        </div>
       </div>
     </main>
 
     <!-- ========================================================== -->
-    <!-- SIDEBAR DERECHO (~30%) — SANDBOX UNIFICADO -->
+    <!-- PANEL DERECHO — 3 pestañas: Sandbox / Proyecto / Grafo -->
     <!-- ========================================================== -->
-    <aside class="sandbox" id="sandbox" aria-label="Sandbox" hidden>
+    <aside class="right-panel" id="rightPanel" aria-label="Panel derecho" hidden>
+      <div class="right-tabs" id="rightTabs">
+        <button class="rtab active" data-rtab="sandbox" title="Sandbox">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+          Sandbox
+        </button>
+        <button class="rtab" data-rtab="project" title="Proyecto">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+          Proyecto
+        </button>
+        <button class="rtab" data-rtab="graph" title="Grafo de entidades">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M2 12h4M18 12h4M12 2v4M12 18v4"/></svg>
+          Grafo
+        </button>
+        <button class="rtab-collapse" id="rightPanelCollapse" title="Cerrar panel" aria-label="Cerrar panel">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+        </button>
+      </div>
+
+      <!-- VISTA: SANDBOX -->
+      <div class="rt-view" id="view-sandbox">
+      <div class="sandbox" id="sandbox" aria-label="Sandbox">
 
       <!-- Toolbar superior -->
       <div class="sandbox-toolbar">
@@ -431,6 +488,38 @@
         <div class="panel-content" id="panelNetwork" hidden></div>
         <div class="panel-content" id="panelTests" hidden></div>
         <div class="panel-content" id="panelDiff" hidden></div>
+      </div>
+      </div><!-- /.sandbox -->
+      </div><!-- /#view-sandbox -->
+
+      <!-- VISTA: PROYECTO -->
+      <div class="rt-view" id="view-project" hidden>
+        <div class="project-view">
+          <div class="project-head">
+            <span class="project-crumb">veritas-ai/</span>
+            <button class="icon-btn" id="projectSyncBtn" title="Sincronizar con GitHub">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.9a3.4 3.4 0 0 0-1-2.6c3-.4 6-2 6-6.5A5 5 0 0 0 20 4.8 4.7 4.7 0 0 0 19.9.6S18.7.2 16 2a13.4 13.4 0 0 0-7 0C6.3.2 5 .6 5 .6A4.7 4.7 0 0 0 4.9 4.8 5 5 0 0 0 3.7 8.1c0 4.5 3 6.1 6 6.5a3.4 3.4 0 0 0-1 2.6V21"/></svg>
+            </button>
+          </div>
+          <div class="project-tree" id="projectTree"></div>
+        </div>
+      </div>
+
+      <!-- VISTA: GRAFO DE ENTIDADES -->
+      <div class="rt-view" id="view-graph" hidden>
+        <div class="graph-view">
+          <div class="graph-legend">
+            <span><i class="lg lg-1"></i> Entidad mercantil</span>
+            <span><i class="lg lg-2"></i> Sancionado (OFAC/SDN)</span>
+            <span><i class="lg lg-3"></i> Persona vinculada</span>
+            <span><i class="lg lg-4"></i> Fuente / registro</span>
+          </div>
+          <div class="graph-canvas-wrap">
+            <svg id="entityGraphSvg" viewBox="0 0 400 320" preserveAspectRatio="xMidYMid meet"></svg>
+            <div class="graph-empty" id="entityGraphEmpty">Sin entidades todavía. Las entidades detectadas en el chat aparecerán aquí.</div>
+          </div>
+          <div class="graph-meta" id="entityGraphMeta"></div>
+        </div>
       </div>
     </aside>
   </div>
