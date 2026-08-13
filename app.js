@@ -4320,10 +4320,12 @@ async function saveSkillFromEditor() {
   }
 }
 
-/** Cierra el modal de editor de skill. */
+/** Cierra el modal de editor de skill. */window.saveSkillFromEditor = saveSkillFromEditor;
+
 function closeSkillEditor() {
   $("#skillEditorModal").hidden = true;
 }
+window.closeSkillEditor = closeSkillEditor;
 
 function updateSkillsIndicator() {
   const badge = $("#skillsActiveIndicator");

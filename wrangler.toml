@@ -62,10 +62,10 @@ crons = ["0 */6 * * *"]
 
 # Lista de dominios permitidos para el proxy /api/artifact/proxy (anti-SSRF).
 # Vacío = cualquier HTTPS. Recomendar rellenar con dominios conocidos en prod.
-ARTIFACT_PROXY_ALLOWED_HOSTS = ""
+ARTIFACT_PROXY_ALLOWED_HOSTS = "unpkg.com,cdn.jsdelivr.net,esm.sh,cdn.plot.ly,api.open-meteo.com,api.semanticscholar.org,api.openalex.org,api.crossref.org,api.wikidata.org,en.wikipedia.org,hacker-news.firebaseio.com,nominatim.openstreetmap.org,registry.npmjs.org,pypi.org,crt.sh,www.cisa.gov,nvd.nist.gov,api.nasa.gov,sec-api.io,rdap.arin.net,api.geonames.org"
 
 # Versión pública de la app (visible en Ajustes → Acerca de).
-APP_VERSION = "2.4.0"
+APP_VERSION = "2.7.1"
 
 # ------------------------------------------------------------------------------
 # Observabilidad — Cloudflare Logs (ACTIVADO v2.7)
@@ -75,7 +75,7 @@ APP_VERSION = "2.4.0"
 # ------------------------------------------------------------------------------
 [observability]
 enabled = true
-head_sampling_rate = 1.0
+head_sampling_rate = 0.1
 
 # ------------------------------------------------------------------------------
 # Limits del Worker (defaults de Cloudflare, documentados aquí para referencia)

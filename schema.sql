@@ -370,11 +370,13 @@ CREATE INDEX IF NOT EXISTS idx_tool_cache_created ON tool_cache(created_at);
 
 CREATE TABLE IF NOT EXISTS llm_cache (
   cache_key TEXT PRIMARY KEY,                         -- sha256(modelo + mensajes)
+  user_email TEXT NOT NULL,
   response_text TEXT NOT NULL,
   response_json TEXT,
   model TEXT,
   created_at INTEGER NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_llm_cache_user ON llm_cache(user_email, created_at);
 CREATE INDEX IF NOT EXISTS idx_llm_cache_created ON llm_cache(created_at);
 
 CREATE TABLE IF NOT EXISTS async_jobs (id TEXT PRIMARY KEY, user_email TEXT NOT NULL, chat_id TEXT, tool_name TEXT NOT NULL, provider_job_id TEXT, status TEXT NOT NULL DEFAULT 'pending', args_json TEXT, result_json TEXT, notify_email INTEGER DEFAULT 0, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP);

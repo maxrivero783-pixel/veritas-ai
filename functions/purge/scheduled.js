@@ -33,6 +33,11 @@ import { callService as brevoCall } from '../../lib/services/brevo.js';
 const QUOTA_THRESHOLD_PCT = 25;
 
 // Consulta el % restante de cuota de un proveedor (best-effort).
+// NOTA (v2.7.1): quotaRemainingPct también existe en lib/quotaGuard.js con firma
+// diferente (service, apiKey) vs (env, service, endpoint, parse).
+// La de quotaGuard es para el consent gate; la de aquí es para el cron de alertas.
+// Se mantienen separadas porque tienen propósitos y firmas distintas.
+
 async function quotaRemainingPct(env, service, endpoint, parse) {
   try {
     const keys = discoverKeys(env, service);

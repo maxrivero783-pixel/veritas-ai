@@ -1128,41 +1128,6 @@ completa para análisis profundos sin interrupciones.
 </sys_prompt>
 `.trim();
 
-// Rol 3 — Razonamiento (nemotron-ultra, OpenRouter). Soporta delta.reasoning.
-// Tools: búsqueda, scraping, leer/escribir docs, analizar multimedia,
-// repositorio, firecrawl, browser_use, steel, dropbox.
-const NEMOTRON_ULTRA_ADAPTATION = `
-IDENTIDAD DE ROL — RAZONAMIENTO (nemotron-3-ultra-550b-a55b:free)
-Eres el módulo de Razonamiento profundo de VÉRITAS, servido vía OpenRouter con
-nvidia/nemotron-3-ultra-550b-a55b:free. Heredas la identidad nuclear de VÉRITAS.
-
-SOBRE RAZONAMIENTO NATIVO: si el proveedor subyacente soporta el campo
-delta.reasoning en el stream SSE, puedes razonar ahí (la aplicación lo
-capturará y mostrará en el indicador "Pensando..."). Si no lo soporta o tienes
-dudas, envuelve SIEMPRE tu razonamiento en:
-
-  <razonamiento_interno>
-  [descomposición, supuestos, cadena inferencial, análisis contrafactual,
-   verificación de consistencia, detección de sesgos. Espacio de trabajo
-   crudo, sin restricciones de formato.]
-  </razonamiento_interno>
-
-La salida final (fuera de la etiqueta) debe ser clínicamente limpia, conteniendo
-solo las conclusiones, datos y estructura comunicacional resultantes. Nunca
-repitas el razonamiento crudo en la salida final.
-
-Tools disponibles (protocolo XML embebido):
-  - search_repository, read_project_file
-  - web_search, scrape_url, firecrawl_scrape, firecrawl_crawl
-  - browser_use_browse, steel_session
-  - dropbox_list_folder, dropbox_read_file, dropbox_search
-
-Tu especialidad son consultas que requieren cadenas inferenciales largas,
-análisis contrafactual y verificación de consistencia. Aplica la Directiva 9
-(cascada de confianza: marca [ESPECULACIÓN] o [NO VERIFICADO] lo que no puedas
-verificar).
-`.trim();
-
 // Rol 4 — Coder (north-mini-code, OpenRouter). Adaptación fuerte. NO prosa larga.
 // Self-contained: no depende de BASE_SYSTEM_PROMPT externo.
 const LAGUNA_ADAPTATION = `
@@ -1541,7 +1506,7 @@ limitaciones de cuota de OpenRouter. Eres rápido y disponible.
  * Construye el system prompt completo para un rol.
  *
  * @param {string} roleKey - Una de: ultra_orchestrator, super_executor, nano_vl,
- *                           nano_omni, strategist, nemotron_ultra (alias), laguna, glm_flash.
+ *                           nano_omni, strategist, laguna, glm_flash.
  * @param {object} [opts]  - Opciones futuras (p.ej. toolMode, sharedSession).
  * @returns {string} El system prompt completo.
  */
@@ -1552,26 +1517,10 @@ export function buildSystemPrompt(roleKey, opts = {}) {
     throw new Error(`Unknown role key: ${roleKey}`);
   }
 
-  // Legacy alias: nemotron_ultra → ultra_orchestrator.
-  if (roleKey === "nemotron_ultra") roleKey = "ultra_orchestrator";
-
   // Todos los roles son self-contained (incluyen identity, tools, output
   // standards, privacy, language, provider_note dentro del <sys_prompt>).
-  // Se retornan directamente sin concatenar bloques compartidos.
-  // Nota: nemotron_ultra (NEMOTRON_ULTRA_ADAPTATION) sigue siendo legacy
-  // porque es un alias duplicado de ultra_orchestrator con ligeras variantes.
-  if (roleKey !== "nemotron_ultra") {
-    return adaptation;
-  }
-
-  // nemotron_ultra (legacy): prompt con bloques compartidos.
-  return [
-    base ? `=== BASE SYSTEM PROMPT ===\n${base}` : "",
-    adaptation,
-    TOOL_CALL_PROTOCOL,
-    RESTRICTION_UNIVERSAL,
-    RESTRICTION_IDIOMA,
-  ].filter(Boolean).join("\n\n---\n\n");
+  // Se retornan directamente.
+  return adaptation;
 }
 
 // ------------------------------------------------------------------------------
@@ -1583,7 +1532,6 @@ const ADAPTATIONS = {
   nano_vl:            NANO_VL_ADAPTATION,
   nano_omni:          NANO_OMNI_ADAPTATION,
   strategist:         STRATEGIST_ADAPTATION,
-  nemotron_ultra:     NEMOTRON_ULTRA_ADAPTATION, // legacy alias — mapa a ultra_orchestrator
   laguna:             LAGUNA_ADAPTATION,
   glm_flash:          GLM_FLASH_ADAPTATION,
 };
@@ -1660,35 +1608,6 @@ export const PROMPT_KEY_TO_UI_ROLE = Object.fromEntries(
   Object.entries(UI_ROLE_TO_PROMPT_KEY).map(([k, v]) => [v, k])
 );
 
-// ------------------------------------------------------------------------------
-// Helper interno: trunca el base prompt para GLM-Flash (~30% del tamaño).
-// Estrategia: tomar las DIRECTIVAS (en mayúsculas) y los bloques XML clave,
-// omitir comentarios y redundancias.
-// ------------------------------------------------------------------------------
-function truncateForFast(base) {
-  if (!base) return "";
-  // Heurística simple: dividir por doble salto de línea, quedarse con párrafos
-  // que contengan mayúsculas sostenidas (directivas) o etiquetas XML.
-  const paragraphs = base.split(/\n\s*\n/);
-  const kept = paragraphs.filter(p => {
-    const upper = (p.match(/[A-ZÁÉÍÓÚÑ]/g) || []).length;
-    const lower = (p.match(/[a-záéíóúñ]/g) || []).length;
-    const hasXml = /[<>]/.test(p);
-    const isDirective = upper > lower * 0.6 && upper > 5;
-    return isDirective || hasXml;
-  });
-  // Target ~30% del original por número de caracteres.
-  const target = Math.floor(base.length * 0.30);
-  let out = "";
-  for (const p of kept) {
-    if ((out + p).length > target) break;
-    out += p + "\n\n";
-  }
-  return out.trim() || base.slice(0, target);
-}
-
-// ------------------------------------------------------------------------------
-// Export default (compatibilidad con import default).
 // ------------------------------------------------------------------------------
 export default {
   SYSTEM_PROMPTS,

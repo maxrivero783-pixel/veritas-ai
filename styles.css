@@ -2497,7 +2497,6 @@ body.is-offline .send-btn { background: var(--text-muted); }
   display: flex; align-items: center; justify-content: center;
   background: linear-gradient(135deg, var(--bg-base, #0a0f1c), #101b33);
 }
-#authView[hidden] { display: none; }
 .auth-card {
   background: var(--bg-elev, #111827); border: 1px solid #1f2937; border-radius: 16px;
   padding: 34px 30px; width: min(380px, 92vw); text-align: center;
@@ -2523,10 +2522,8 @@ body.is-offline .send-btn { background: var(--text-muted); }
 .auth-btn.danger { background: var(--accent-red, #f87171); color: #2a0a0a; border-color: transparent; }
 
 /* --- Modal --- */
-#modalRoot[hidden] { display: none; }
 /* v2.7-fix: .modal-overlay usa display:flex, lo que pisaba el atributo hidden
    de settingsModal, inviteModal y skillEditorModal (se veían SIEMPRE). */
-.modal-overlay[hidden] { display: none; }
 .modal-overlay {
   position: fixed; inset: 0; z-index: 2500; background: rgba(4,8,16,.72);
   display: flex; align-items: center; justify-content: center; backdrop-filter: blur(3px);
@@ -2541,7 +2538,6 @@ body.is-offline .send-btn { background: var(--text-muted); }
 .modal-actions .auth-btn { flex: 0 0 auto; min-width: 110px; }
 
 /* --- Onboarding --- */
-#onboardingOverlay[hidden] { display: none; }
 #onboardingOverlay {
   position: fixed; inset: 0; z-index: 2600; background: rgba(4,8,16,.82);
   display: flex; align-items: center; justify-content: center; backdrop-filter: blur(4px);
