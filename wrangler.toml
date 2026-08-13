@@ -68,11 +68,14 @@ ARTIFACT_PROXY_ALLOWED_HOSTS = ""
 APP_VERSION = "2.4.0"
 
 # ------------------------------------------------------------------------------
-# Observabilidad (opcional). Descomentar para enviar logs a Cloudflare Logs.
+# Observabilidad — Cloudflare Logs (ACTIVADO v2.7)
+# Workers Logs: gratuito en todos los planes con cuota de eventos (free tier
+# ~500K eventos/mes). head_sampling_rate=1.0 registra todos los requests
+# (ideal para depuración); en producción con mucho tráfico, bajar a 0.1.
 # ------------------------------------------------------------------------------
-# [observability]
-# enabled = true
-# head_sampling_rate = 0.1
+[observability]
+enabled = true
+head_sampling_rate = 1.0
 
 # ------------------------------------------------------------------------------
 # Limits del Worker (defaults de Cloudflare, documentados aquí para referencia)
