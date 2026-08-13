@@ -2619,3 +2619,16 @@ mark.search-current { background: rgba(80, 200, 120, .6); }
 .usage-table th { color: var(--accent-eme, #50C878); font-weight: 600; }
 .usage-table td { color: var(--text-secondary, #94a3b8); font-family: ui-monospace, monospace; }
 .usage-err { color: var(--accent-red, #f87171); font-weight: 600; }
+
+/* v2.7 — Aviso de cuota baja */
+.quota-warning {
+  background: rgba(180, 83, 9, .12);
+  border: 1px solid rgba(180, 83, 9, .5);
+  color: #fbbf24;
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-size: 13px;
+  margin-bottom: 12px;
+  line-height: 1.5;
+}
+.quota-hint { color: var(--text-muted, #94a3b8); font-size: 12px; }

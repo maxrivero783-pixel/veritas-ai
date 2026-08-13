@@ -498,6 +498,7 @@ export async function onRequest(context) {
     // 6.4 — keys management (admin)
     if (path === "/api/keys/status" && method === "GET") return await handleKeysStatus(request, env, userEmail);
     if (path === "/api/usage" && method === "GET") return await handleUsage(request, env, userEmail);
+    if (path === "/api/quota" && method === "GET") return await handleQuota(request, env, userEmail);
     if (path === "/api/keys/health" && method === "POST") return await handleKeysHealth(request, env, userEmail);
     if (path === "/api/keys/cooldown/reset" && method === "POST") return await handleKeysCooldownReset(request, env, userEmail);
     if (path === "/api/keys/services" && method === "GET") return await handleKeysServices(env, userEmail);
@@ -781,6 +782,27 @@ const R2_FREE_TIER_BYTES = 10 * 1024 * 1024 * 1024;
 const R2_SOFT_WARN_BYTES = 8 * 1024 * 1024 * 1024;
 const R2_HARD_GUARD_BYTES = Math.floor(9.5 * 1024 * 1024 * 1024);
 
+// v2.7: uso TOTAL del bucket (todos los usuarios) con caché de 5 min.
+// Protege el límite real de 10GB del free tier, no solo el uso por usuario.
+let _bucketUsageCache = { ts: 0, bytes: 0 };
+async function estimateBucketTotalUsage(env) {
+  const now = Date.now();
+  if (_bucketUsageCache.ts && now - _bucketUsageCache.ts < 5 * 60 * 1000) {
+    return { total_bytes: _bucketUsageCache.bytes, cached: true };
+  }
+  let totalBytes = 0;
+  try {
+    let cursor = undefined;
+    do {
+      const list = await env.BUCKET.list({ limit: 1000, cursor });
+      totalBytes += (list.objects || []).reduce((sum, o) => sum + (o.size || 0), 0);
+      cursor = list.truncated ? list.cursor : undefined;
+    } while (cursor);
+  } catch { /* best effort */ }
+  _bucketUsageCache = { ts: now, bytes: totalBytes };
+  return { total_bytes: totalBytes, cached: false };
+}
+
 async function estimateUserR2Usage(env, userEmail) {
   let projectBytes = 0;
   try {
@@ -829,6 +851,16 @@ async function handleStorageUpload(request, env, userEmail) {
   const usage = await estimateUserR2Usage(env, userEmail);
   const projectedUsage = { ...usage, projected_total_bytes: usage.total_bytes + buf.byteLength, projected_ratio: (usage.total_bytes + buf.byteLength) / R2_FREE_TIER_BYTES };
   if (projectedUsage.projected_total_bytes > R2_HARD_GUARD_BYTES) return r2QuotaError(projectedUsage);
+
+  // v2.7: guard rail a nivel de bucket total (compartido entre usuarios).
+  const bucketUsage = await estimateBucketTotalUsage(env);
+  if (bucketUsage.total_bytes + buf.byteLength > R2_HARD_GUARD_BYTES) {
+    return errorResponse("r2_bucket_quota_guard", 413, {
+      message: "El bucket compartido de R2 está al límite del free tier (~9.5GB). Libera espacio o migra a plan pago.",
+      bucket_total_bytes: bucketUsage.total_bytes,
+      free_tier_bytes: R2_FREE_TIER_BYTES,
+    });
+  }
 
   await env.BUCKET.put(r2Key, buf, {
     customMetadata: { user_email: userEmail, original_name: file.name, mime_type: file.type || "application/octet-stream" },
@@ -882,6 +914,16 @@ async function handleRepoUpload(request, env, userEmail) {
   const usage = await estimateUserR2Usage(env, userEmail);
   const projectedUsage = { ...usage, projected_total_bytes: usage.total_bytes + buf.byteLength, projected_ratio: (usage.total_bytes + buf.byteLength) / R2_FREE_TIER_BYTES };
   if (projectedUsage.projected_total_bytes > R2_HARD_GUARD_BYTES) return r2QuotaError(projectedUsage);
+
+  // v2.7: guard rail a nivel de bucket total (compartido entre usuarios).
+  const bucketUsage = await estimateBucketTotalUsage(env);
+  if (bucketUsage.total_bytes + buf.byteLength > R2_HARD_GUARD_BYTES) {
+    return errorResponse("r2_bucket_quota_guard", 413, {
+      message: "El bucket compartido de R2 está al límite del free tier (~9.5GB). Libera espacio o migra a plan pago.",
+      bucket_total_bytes: bucketUsage.total_bytes,
+      free_tier_bytes: R2_FREE_TIER_BYTES,
+    });
+  }
 
   // Insertar en D1 para obtener doc_number autoincremental.
   const ins = await env.DB.prepare(
@@ -1792,6 +1834,89 @@ async function handleKeysStatus(request, env, userEmail) {
   }
   const status = await getPoolStatus(env, service);
   return json(status);
+}
+
+// ------------------------------------------------------------------------------
+// Cuota de proveedores: consulta el quotaEndpoint y extrae % restante.
+// Devuelve null si el servicio no expone cuota (o no hay endpoint fiable).
+// ------------------------------------------------------------------------------
+async function getQuotaRemaining(env, service) {
+  const svc = SERVICE_REGISTRY[service];
+  if (!svc || !svc.quotaEndpoint) return null;
+  const keys = discoverKeys(env, service);
+  if (!keys.length) return null;
+  const key = keys[0].value;
+  try {
+    const url = new URL(svc.quotaEndpoint);
+    if (svc.healthCheckQuery) {
+      const q = svc.healthCheckQuery(key);
+      for (const [k, v] of Object.entries(q)) url.searchParams.set(k, v);
+    }
+    const resp = await fetch(url.toString(), {
+      method: svc.healthCheckMethod,
+      headers: svc.healthCheckHeaders(key),
+      body: svc.healthCheckBody ? svc.healthCheckBody(key) : undefined,
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!resp.ok) return null;
+    const data = await resp.json().catch(() => null);
+    if (!data) return null;
+    return parseQuotaData(service, data);
+  } catch { return null; }
+}
+
+// Mapeo best-effort del formato de cuota de cada proveedor.
+function parseQuotaData(service, data) {
+  let used = null, limit = null;
+  switch (service) {
+    case "firecrawl":
+      used = data.creditsUsed ?? data.credits_used ?? null;
+      limit = data.maxCredits ?? data.max_credits ?? null;
+      break;
+    case "jina":
+      used = data.used_credits ?? data.usedCredits ?? data.usage?.used ?? null;
+      limit = data.total_credits ?? data.totalCredits ?? data.usage?.limit ?? null;
+      break;
+    case "openrouter":
+      used = data.data?.usage ?? null;
+      limit = data.data?.limit ?? null;
+      break;
+    case "shodan":
+      used = data.usage?.query_credits ?? null;
+      limit = data.usage_limits?.query_credits ?? null;
+      break;
+    case "scrapingbee":
+      used = data.usage?.pages?.used ?? data.usage?.used ?? null;
+      limit = data.usage?.pages?.total ?? data.usage?.total ?? null;
+      break;
+    default:
+      return null;
+  }
+  if (used == null || !limit) return null;
+  const usedN = Number(used), limitN = Number(limit);
+  if (!limitN) return null;
+  return {
+    service,
+    used: usedN,
+    limit: limitN,
+    remaining: Math.max(0, limitN - usedN),
+    remaining_pct: Math.round(((limitN - usedN) / limitN) * 100),
+  };
+}
+
+// ------------------------------------------------------------------------------
+// /api/quota — Estado de cuotas de proveedores (admin).
+// ------------------------------------------------------------------------------
+async function handleQuota(request, env, userEmail) {
+  if (!isAdmin(userEmail, env)) return errorResponse("admin_required", 403);
+  const services = ["firecrawl", "jina", "openrouter", "shodan", "scrapingbee", "tavily", "serper"];
+  const out = [];
+  for (const svc of services) {
+    const q = await getQuotaRemaining(env, svc);
+    if (q) out.push(q);
+  }
+  const low = out.filter((q) => q.remaining_pct < 25).map((q) => q.service);
+  return json({ quotas: out, low_quota_services: low, checked_at: new Date().toISOString() });
 }
 
 // ------------------------------------------------------------------------------

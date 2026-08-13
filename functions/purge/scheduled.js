@@ -27,6 +27,105 @@
 //   - D1 no soporta DELETE con JOIN; usamos subquery.
 // ==============================================================================
 
+import { discoverKeys } from '../../lib/keyRotator.js';
+import { callService as brevoCall } from '../../lib/services/brevo.js';
+
+const QUOTA_THRESHOLD_PCT = 25;
+
+// Consulta el % restante de cuota de un proveedor (best-effort).
+async function quotaRemainingPct(env, service, endpoint, parse) {
+  try {
+    const keys = discoverKeys(env, service);
+    if (!keys.length) return null;
+    const resp = await fetch(endpoint(keys[0].value), { signal: AbortSignal.timeout(8000) });
+    if (!resp.ok) return null;
+    const data = await resp.json().catch(() => null);
+    if (!data) return null;
+    return parse(data);
+  } catch { return null; }
+}
+
+// Envía email de alerta (con dedupe diario vía notification_events).
+async function notifyQuotaLow(env, service, pct) {
+  try {
+    const dedupeKey = `${service}:${new Date().toISOString().slice(0, 10)}`;
+    const existing = await env.DB.prepare(
+      "SELECT id FROM notification_events WHERE event_type = 'quota_low' AND dedupe_key = ?"
+    ).bind(dedupeKey).first();
+    if (existing) return false; // ya notificado hoy
+
+    const recipients = [];
+    if (env.ADMIN_EMAILS) recipients.push(...env.ADMIN_EMAILS.split(",").map((e) => e.trim()).filter(Boolean));
+    if (env.DEV_USER_EMAIL) recipients.push(env.DEV_USER_EMAIL.trim());
+    if (!recipients.length) return false;
+
+    const keys = discoverKeys(env, "brevo");
+    if (!keys.length) return false;
+    const { key } = await import('../../lib/keyRotator.js').then((m) => m.getKey(env, "brevo"));
+
+    const subject = `⚠️ Cuota baja: ${service} (${pct}% restante) — Véritas`;
+    const text = `Véritas AI — Aviso de cuota baja.
+
+El proveedor ${service} tiene solo ${pct}% de cuota restante en su plan gratuito.
+Cuando se agote, las herramientas que dependen de él dejarán de funcionar hasta el próximo ciclo.
+
+Recomendado:
+- Revisar el dashboard de uso en Véritas (Ajustes → Dashboard).
+- Considerar añadir otra key (${service.toUpperCase()}_API_KEY_2) o migrar a plan de pago.
+
+— Remitido por Véritas, la IA especializada en OSINT -`;
+    const html = `<div style="font-family:Segoe UI,Arial,sans-serif;color:#374151;"><h3 style="color:#b45309;">⚠️ Cuota baja: ${service}</h3><p>El proveedor <strong>${service}</strong> tiene solo <strong>${pct}%</strong> de cuota restante en su plan gratuito.</p><p>Cuando se agote, las herramientas que dependen de él dejarán de funcionar hasta el próximo ciclo.</p><p>Revisa el dashboard de uso (Ajustes → Dashboard) o añade otra key (<code>${service.toUpperCase()}_API_KEY_2</code>).</p><hr style="border:0;border-top:1px solid #d1d5db;"><p style="color:#6b7280;font-size:12px;">— Remitido por Véritas, la IA especializada en OSINT -</p></div>`;
+
+    const result = await brevoCall({
+      endpoint: "send_email",
+      apiKey: key,
+      payload: {
+        sender: { name: env.BREVO_SENDER_NAME || "Véritas", email: env.BREVO_SENDER_EMAIL || "no-reply@veritas.local" },
+        to: recipients.map((email) => ({ email })),
+        subject,
+        textContent: text,
+        htmlContent: html,
+        tags: ["veritas", "quota-alert"],
+      },
+    });
+
+    if (result.status >= 200 && result.status < 300) {
+      await env.DB.prepare(
+        "INSERT INTO notification_events (user_email, event_type, dedupe_key, status, provider, recipient, subject) VALUES (?, 'quota_low', ?, 'sent', 'brevo', ?, ?)"
+      ).bind(recipients[0], dedupeKey, recipients[0], subject).run();
+      return true;
+    }
+    return false;
+  } catch { return false; }
+}
+
+// Comprueba cuotas de los proveedores clave y alerta si están bajas.
+async function checkQuotaAlerts(env) {
+  const alerts = [];
+  // Consultar con la primera key de cada servicio (endpoints de cuota fiables).
+  const simple = [
+    ["firecrawl", (k) => `https://api.firecrawl.dev/v1/key`, { Authorization: `Bearer ${k}` }, (d) => { const u = d.creditsUsed, l = d.maxCredits; return u != null && l ? Math.round(((l - u) / l) * 100) : null; }],
+    ["jina", (k) => `https://api.jina.ai/v1/api-key/info`, { Authorization: `Bearer ${k}` }, (d) => { const u = d.used_credits ?? d.usedCredits, l = d.total_credits ?? d.totalCredits; return u != null && l ? Math.round(((l - u) / l) * 100) : null; }],
+    ["shodan", (k) => `https://api.shodan.io/api-info?key=${k}`, {}, (d) => { const u = d.usage?.query_credits, l = d.usage_limits?.query_credits; return u != null && l ? Math.round(((l - u) / l) * 100) : null; }],
+  ];
+  for (const [service, endpoint, headers, parse] of simple) {
+    try {
+      const keys = discoverKeys(env, service);
+      if (!keys.length) continue;
+      const resp = await fetch(endpoint(keys[0].value), { headers, signal: AbortSignal.timeout(8000) });
+      if (!resp.ok) continue;
+      const data = await resp.json().catch(() => null);
+      if (!data) continue;
+      const pct = parse(data);
+      if (pct != null && pct < QUOTA_THRESHOLD_PCT) {
+        const sent = await notifyQuotaLow(env, service, pct);
+        alerts.push({ service, pct, notified: sent });
+      }
+    } catch { /* skip */ }
+  }
+  return alerts;
+}
+
 export async function scheduled(event, env, ctx) {
   const now = Date.now();
   const results = {
@@ -35,8 +134,19 @@ export async function scheduled(event, env, ctx) {
     memories_purged: 0,
     oauth_pending_purged: 0,
     turn_locks_purged: 0,
+    audit_logs_purged: 0,
     backup: null,
+    quota_alerts: [],
   };
+
+  // --------------------------------------------------------------------------
+  // 0a. Alertas de cuota baja (cada 6h; email con dedupe diario).
+  // --------------------------------------------------------------------------
+  try {
+    results.quota_alerts = await checkQuotaAlerts(env);
+  } catch (e) {
+    results.quota_alerts = "error: " + (e && e.message ? e.message : String(e));
+  }
 
   // --------------------------------------------------------------------------
   // 0. Backup diario de D1 → R2 (una vez al día, 03:00 UTC). Retención 30 días.
@@ -162,6 +272,35 @@ export async function scheduled(event, env, ctx) {
     results.turn_locks_purged = del.meta.changes || 0;
   } catch (e) {
     console.error("[purge] Error purgando turn locks:", e);
+  }
+
+  // --------------------------------------------------------------------------
+  // 5. Purgar tablas de auditoría (>90 días) — evita agotar D1 free (5GB/5M filas).
+  //    openrouter_calls, tool_calls, external_api_calls crecen sin techo.
+  //    D1 limita DELETE a 500 filas sin rowid: usamos batch DELETE con LIMIT + loop.
+  // --------------------------------------------------------------------------
+  try {
+    const cutoff = new Date(Date.now() - 90 * 24 * 3600 * 1000).toISOString();
+    const auditTables = [
+      { table: "openrouter_calls", col: "ts" },
+      { table: "tool_calls", col: "ts" },
+      { table: "external_api_calls", col: "ts" },
+    ];
+    for (const t of auditTables) {
+      let total = 0;
+      for (;;) {
+        const batch = await env.DB.prepare(
+          `DELETE FROM ${t.table} WHERE ${t.col} < ? AND id IN (SELECT id FROM ${t.table} WHERE ${t.col} < ? LIMIT 500)`
+        ).bind(cutoff, cutoff).run();
+        const changes = batch.meta.changes || 0;
+        total += changes;
+        if (changes < 500) break;
+      }
+      results.audit_logs_purged += total;
+      if (total > 0) console.log(`[purge] ${t.table}: purgadas ${total} filas (>90 días)`);
+    }
+  } catch (e) {
+    console.error("[purge] Error purgando tablas de auditoría:", e);
   }
 
   console.log("[purge] Ejecución completada:", JSON.stringify(results));
