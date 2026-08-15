@@ -16,7 +16,7 @@ Guía completa paso a paso para desplegar Véritas en Cloudflare Pages + D1 usan
 - Una cuenta de GitHub con acceso al repositorio `maxrivero783-pixel/veritas-ai`.
 - Una API key de [OpenRouter](https://openrouter.ai/keys) (la única imprescindible; recomendables 2-3 para rotación).
 - (Opcional) API keys de Jina, Tavily, Serper, Firecrawl, ScrapingBee, Browser Use, Steel, Shodan, etc. — las herramientas que no tengan key simplemente quedan deshabilitadas.
-- (Opcional, para conexiones) una OAuth App en GitHub y/o una App en Dropbox.
+- (Opcional, para conexiones) una OAuth App en GitHub.
 
 Toda la configuración se hace desde:
 
@@ -191,7 +191,6 @@ Si tienes pensado usar OAuth:
 | Variable | Valor |
 |---|---|
 | `GITHUB_OAUTH_CLIENT_ID` | Client ID de tu GitHub OAuth App (paso 10) |
-| `DROPBOX_OAUTH_APP_KEY` | App key de Dropbox (paso 10) |
 
 ### 7.3 Añadir secretos
 
@@ -238,7 +237,6 @@ EMAIL_API_KEY          # API key de Brevo (notificaciones)
 BREVO_SENDER_EMAIL     # remitente verificado en Brevo
 BREVO_SENDER_NAME      # ej. "Véritas"
 GITHUB_OAUTH_CLIENT_SECRET
-DROPBOX_OAUTH_APP_SECRET
 ```
 
 > **Sobre los pools de keys**: sufijar con `_1`, `_2`, `_3…` hace que Véritias rote automáticamente entre ellas. Si tienes 2 keys de OpenRouter, añade `OPENROUTER_API_KEY_2` además de la `_1`; si una recibe 429/5xx pasa a cooldown 60 s y el tráfico sigue por la otra.
@@ -286,7 +284,7 @@ al mismo endpoint con el header.
 
 ## 9. OAuth apps (opcional)
 
-Solo necesitas esto si vas a conectar GitHub o Dropbox como fuentes de archivos.
+Solo necesitas esto si vas a conectar GitHub como fuente de archivos.
 
 ### 9.1 GitHub OAuth App
 
@@ -298,20 +296,6 @@ Solo necesitas esto si vas a conectar GitHub o Dropbox como fuentes de archivos.
 3. **Register application**.
 4. Copia el **Client ID** (público) → ponlo en la variable pública `GITHUB_OAUTH_CLIENT_ID`.
 5. Pulsa **Generate a new client secret** → copia el secreto → ponlo como secreto `GITHUB_OAUTH_CLIENT_SECRET`.
-
-### 9.2 Dropbox App
-
-1. Abre <https://www.dropbox.com/developers/apps> → **Create apps**.
-2. Tipo: **Scoped access** → **Full Dropbox** (o App folder si prefieres aislar).
-3. Nombre: `Véritas`.
-4. En la pestaña **Permissions**, marca:
-   - `account_info.read`
-   - `files.content.read`
-   - `files.content.write`
-5. En **OAuth 2 → Redirect URIs** añade:
-   `https://veritas-ai.pages.dev/api/oauth/dropbox/callback`
-6. Copia **App key** → variable pública `DROPBOX_OAUTH_APP_KEY`.
-7. Copia **App secret** → secreto `DROPBOX_OAUTH_APP_SECRET`.
 
 Tras cambiar variables en Cloudflare, haz un **Retry deployment** (paso 7.4).
 
@@ -417,7 +401,7 @@ Exportar los datos a un archivo:
 - [ ] Variable pública `PAGES_URL` con la URL real de Pages
 - [ ] Variable pública `ADMIN_EMAILS` con tu correo
 - [ ] `PURGE_SECRET` configurado (Cloudflare Encrypt + GitHub secret) y cron probado con **Run workflow**
-- [ ] (Opcional) OAuth apps GitHub/Dropbox con callback correcta
+- [ ] (Opcional) OAuth app de GitHub con callback correcta
 - [ ] Retry deployment hecho tras añadir bindings/variables
 - [ ] `https://<tu-dominio>/api/status` responde 200 (y `storage.available` indica si R2 está activo)
 - [ ] Registro de usuario y primer mensaje funcionando
@@ -463,4 +447,3 @@ falla con `Authentication error [code: 10000]` porque no trae permiso
 - Cloudflare Pages: <https://dash.cloudflare.com/?to=/:account/pages>
 - OpenRouter keys: <https://openrouter.ai/keys>
 - GitHub OAuth Apps: <https://github.com/settings/developers>
-- Dropbox Developers: <https://www.dropbox.com/developers/apps>

@@ -15,7 +15,7 @@ Véritas no es solo un chat. Es un **centro de mando**: combina modelos IA, memo
 - 🔎 **Investigación y scraping multi-proveedor**: Jina, Tavily, Serper, Firecrawl, ScrapingBee, Spider Cloud, Rover, Browserless, Steel, Browser-use, GDELT y más.
 - 🛰️ **OSINT defensivo**: DNS, Shodan, ZoomEye, Intelligence X, GFW, Apify Social/Places, NER y análisis coordinado.
 - 🧾 **Document intelligence**: LlamaParse, AssemblyAI, análisis multimodal y repositorio documental en R2.
-- 🔐 **OAuth real**: GitHub y Dropbox con tokens cifrados, refresh, auditoría y rate-limit handling.
+- 🔐 **OAuth real**: GitHub con tokens cifrados, refresh, auditoría y rate-limit handling.
 - 💻 **Sandbox web pro**: previews HTML, 14 plantillas, snapshots, diff, test runner browser-side, error overlay, consola/network capture, export y push a GitHub.
 - 🧠 **Memoria cross-chat**: memorias categorizadas con importancia, expiración y deduplicación.
 - 👥 **Sesión compartida**: owner + editor, presencia, turnos, heartbeat y polling.
@@ -92,7 +92,6 @@ Véritas no es solo un chat. Es un **centro de mando**: combina modelos IA, memo
 - AssemblyAI para transcripción de audio.
 - Percepción multimodal para imagen, PDF, audio y video.
 - Generación guiada de DOCX/PDF/PPTX/XLSX mediante skills documentales y sandbox.
-- Dropbox OAuth para listar, buscar, leer, escribir y subir archivos grandes.
 
 ### Memoria y contexto
 
@@ -264,12 +263,11 @@ Fallbacks adicionales permitidos:
 | `llamaparse_parse` | PDF/DOCX complejo a Markdown |
 | `assemblyai_transcribe` | Transcripción/análisis de audio |
 
-### OAuth: GitHub y Dropbox
+### OAuth: GitHub
 
 | Provider | Tools |
 |---|---|
 | GitHub | `github_list_repos`, `github_read_file`, `github_write_file`, `github_write_files`, `github_create_branch`, `github_create_pr` |
-| Dropbox | `dropbox_list_folder`, `dropbox_read_file`, `dropbox_write_file`, `dropbox_search`, `dropbox_upload_large` |
 
 ---
 
@@ -331,7 +329,6 @@ Actualiza `wrangler.toml`:
 ```toml
 database_id = "<ID_REAL_DE_D1>"
 GITHUB_OAUTH_CLIENT_ID = "<CLIENT_ID>"
-DROPBOX_OAUTH_APP_KEY = "<APP_KEY>"
 ```
 
 ### 3. Crear esquema D1
@@ -350,7 +347,6 @@ ADMIN_EMAILS=dev@veritas.local
 OPENROUTER_API_KEY_1=sk-or-v1-...
 OAUTH_ENCRYPTION_KEY=<32 bytes hex>
 GITHUB_OAUTH_CLIENT_SECRET=...
-DROPBOX_OAUTH_APP_SECRET=...
 ```
 
 ### 5. Ejecutar
@@ -394,7 +390,6 @@ OAuth / sistema:
 
 ```txt
 GITHUB_OAUTH_CLIENT_SECRET
-DROPBOX_OAUTH_APP_SECRET
 OAUTH_ENCRYPTION_KEY
 DEV_USER_EMAIL
 ADMIN_EMAILS

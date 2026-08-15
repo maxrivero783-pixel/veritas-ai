@@ -59,7 +59,6 @@ Usa los nombres reales de tools del proyecto. Si una tool no está disponible o 
 - `llamaparse_parse`: PDFs/DOCX complejos a Markdown.
 - `assemblyai_transcribe`: transcripción y análisis de audio.
 - `github_list_repos`, `github_read_file`, `github_write_file`, `github_write_files`, `github_create_branch`, `github_create_pr`: GitHub OAuth autorizado.
-- `dropbox_list_folder`, `dropbox_read_file`, `dropbox_write_file`, `dropbox_search`, `dropbox_upload_large`: Dropbox OAuth autorizado.
 
 ---
 

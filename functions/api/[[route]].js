@@ -247,7 +247,7 @@ const TOOL_CACHE_ALLOWLIST = new Set([
   "hackernews_search", "pypi_package_info", "npm_package_info", "sec_edgar_search",
   "shodan_search", "zoomeye_search", "intelx_search", "gfw_search", "jina_reader_search",
   "jina_github_search", "rover_scrape", "github_list_repos", "github_read_file",
-  "dropbox_list_folder", "dropbox_read_file", "dropbox_search", "search_repository",
+  "search_repository",
   "read_project_file", "firecrawl_scrape",
 ]);
 
@@ -2231,9 +2231,9 @@ async function handleToolsRegistry() {
 // 6.6 — OAUTH (start, callback, disconnect, connections, account)
 // ==============================================================================
 async function handleOAuthStart(provider, request, env, userEmail) {
-  if (!["github", "dropbox"].includes(provider)) return errorResponse("unknown_provider", 400, { provider });
+  if (provider !== "github") return errorResponse("unknown_provider", 400, { provider });
   const adapter = (await import(`../../lib/services/oauth/${provider}.js`)).default;
-  const clientId = provider === "github" ? env.GITHUB_OAUTH_CLIENT_ID : env.DROPBOX_OAUTH_APP_KEY;
+  const clientId = env.GITHUB_OAUTH_CLIENT_ID;
   if (!clientId) return errorResponse("client_id_missing", 500, { provider });
 
   const state = generateOAuthState();
@@ -2264,7 +2264,7 @@ async function handleOAuthStart(provider, request, env, userEmail) {
 }
 
 async function handleOAuthCallback(provider, request, env) {
-  if (!["github", "dropbox"].includes(provider)) return errorResponse("unknown_provider", 400);
+  if (provider !== "github") return errorResponse("unknown_provider", 400);
   const url = new URL(request.url);
   const code = url.searchParams.get("code");
   const state = url.searchParams.get("state");
@@ -2282,8 +2282,8 @@ async function handleOAuthCallback(provider, request, env) {
   await env.DB.prepare(`DELETE FROM oauth_pending WHERE state = ?`).bind(state).run();
 
   const adapter = (await import(`../../lib/services/oauth/${provider}.js`)).default;
-  const clientId = provider === "github" ? env.GITHUB_OAUTH_CLIENT_ID : env.DROPBOX_OAUTH_APP_KEY;
-  const clientSecret = provider === "github" ? env.GITHUB_OAUTH_CLIENT_SECRET : env.DROPBOX_OAUTH_APP_SECRET;
+  const clientId = env.GITHUB_OAUTH_CLIENT_ID;
+  const clientSecret = env.GITHUB_OAUTH_CLIENT_SECRET;
   const redirectUri = `${frontendBase}/api/oauth/${provider}/callback`;
 
   try {
@@ -2315,19 +2315,9 @@ async function handleOAuthCallback(provider, request, env) {
 }
 
 async function handleOAuthDisconnect(provider, env, userEmail) {
-  if (!["github", "dropbox"].includes(provider)) return errorResponse("unknown_provider", 400);
-  // Best-effort revoke en el provider.
-  try {
-    const conn = await getValidConnection(env, userEmail, provider).catch(() => null);
-    if (conn) {
-      const adapter = (await import(`../../lib/services/oauth/${provider}.js`)).default;
-      // GitHub: DELETE /applications/{client_id}/token. Dropbox: POST /auth/token_revoke.
-      // Best-effort; si falla, igual borramos la fila local.
-      if (provider === "dropbox") {
-        await adapter.apiCall({ accessToken: conn.accessToken, method: "POST", path: "/auth/token_revoke", apiArg: {} }).catch(() => {});
-      }
-    }
-  } catch (e) { /* best-effort */ }
+  if (provider !== "github") return errorResponse("unknown_provider", 400);
+  // Nota: la revocación en GitHub es best-effort (el usuario puede revocar
+     // desde GitHub → Settings → Applications); aquí basta borrar la fila local.
   await env.DB.prepare(
     `DELETE FROM external_connections WHERE user_email = ? AND provider = ?`
   ).bind(userEmail, provider).run();
@@ -2352,7 +2342,7 @@ async function handleOAuthConnections(env, userEmail) {
 }
 
 async function handleOAuthAccount(provider, env, userEmail) {
-  if (!["github", "dropbox"].includes(provider)) return errorResponse("unknown_provider", 400);
+  if (provider !== "github") return errorResponse("unknown_provider", 400);
   const row = await env.DB.prepare(
     `SELECT account_metadata, invalid FROM external_connections WHERE user_email = ? AND provider = ?`
   ).bind(userEmail, provider).first();
