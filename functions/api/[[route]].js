@@ -1917,6 +1917,15 @@ async function handleDebugTrace(request, env, userEmail) {
   if (mode === "jsondata") {
     return json(data, 200, { "X-Véritas-Key-Index": "1" });
   }
+  if (mode === "hdr") {
+    return json({ ok: 1 }, 200, { "X-Véritas-Key-Index": "1" });
+  }
+  if (mode === "bigdata") {
+    return json(data, 200, {});
+  }
+  if (mode === "rawstring") {
+    return new Response(raw, { status: 200, headers: { "Content-Type": "application/json" } });
+  }
   if (data && data.usage) {
     await logOpenRouterCall(env, userEmail, model, 1, upstreamResp.status, Date.now(), {
       tokens_in: data.usage.prompt_tokens, tokens_out: data.usage.completion_tokens, cached_tokens: 0,
