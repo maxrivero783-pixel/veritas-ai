@@ -108,12 +108,13 @@ No necesitas crear carpetas ni subir nada; el Worker las crea solas.
    - **Build output directory**: escribe `.` (un punto).
    - **Root directory**: déjalo vacío.
    - **Deploy command**: déjalo **vacío** (muy importante). ⚠️ Si aquí aparece
-     `npx wrangler deploy`, **bórralo**. Este repo se despliega solo como sitio
-     estático + Pages Functions; poner `wrangler deploy` produce el error
-     `Missing entry-point to Worker script or to assets directory`.
-     Si al guardarlo vacío el dashboard responde `Invalid request body` (bug
-     conocido), escribe en su lugar: `npx wrangler pages deploy . --project-name=<tu-proyecto>`
-     — es un despliegue válido de Pages y evita el error.
+     `npx wrangler deploy` (o cualquier comando wrangler), **bórralo**. Este
+     repo se despliega solo como sitio estático + Pages Functions; los comandos
+     wrangler en el build fallan (`Missing entry-point…` o
+     `Authentication error [code: 10000]`). Si al guardarlo vacío el dashboard
+     responde `Invalid request body`, asegúrate de que **Build output directory
+     = `.`** y reintenta (o usa modo incógnito); como último recurso, recrea el
+     proyecto con esta misma configuración.
    - **Environment variables**: abre la sección y añade las variables listadas en la sección 7.1 (puedes hacerlo después, pero conviene poner las no-secretas ahora).
 6. Pulsa **Save and Deploy**.
 
@@ -327,7 +328,8 @@ A partir de este momento:
 | Síntoma | Causa | Arreglo en el dashboard |
 |---|---|---|
 | Build falla con `Missing entry-point to Worker script or to assets directory` (y el log muestra `Executing user deploy command: npx wrangler deploy`) | Pusiste `npx wrangler deploy` en el **Deploy command** | Settings → Builds & deployments → Build settings → Edit → **borra el Deploy command** (déjalo vacío) → Save → Retry deployment |
-| Al guardar Build configuration el dashboard responde `Invalid request body` | Bug del dashboard guardando campos vacíos | **A)** En Deploy command escribe `npx wrangler pages deploy . --project-name=<tu-proyecto>` (despliegue válido) y guarda. **B)** Reintenta en modo incógnito u otro navegador. **C)** Elimina y recrea el proyecto Pages (la D1 no se toca). |
+| Al guardar Build configuration el dashboard responde `Invalid request body` | Bug del dashboard guardando campos vacíos (a veces porque **Build output directory** quedó vacío) | Pon **Build output directory = `.`**, luego vacía el Deploy command y guarda. Si sigue fallando: modo incógnito u otro navegador; último recurso: recrear el proyecto (sección 5). |
+| Build falla con `Authentication error [code: 10000]` ejecutando `wrangler pages deploy` | El token del build no tiene permiso **Pages: Edit** | **A)** Vacía el Deploy command (deploy nativo, sin wrangler) — pon antes Build output directory = `.` para que el dashboard te deje guardar. **B)** Si necesitas el Deploy command, crea tu propio token (apéndice B). **C)** Último recurso: recrea el proyecto (sección 5). |
 | `D1_ERROR: no such table: users` | Schema no aplicado | D1 → `veritas-db` → Console → pega `schema.sql` → Execute |
 | `DB binding is required` | Falta binding D1 | Settings → Bindings → añade `DB` → Retry deployment |
 | `r2_unavailable` (solo al subir/bajar archivos) | No añadiste el binding `BUCKET` | Opcional: crea el bucket (paso 4), añade binding `BUCKET` y redeployea. Si no quieres R2, ignóralo. |
@@ -383,9 +385,9 @@ Exportar los datos a un archivo:
 ## 14. Checklist final
 
 - [ ] D1 `veritas-db` creada y schema importado (22 tablas visibles)
+- [ ] Binding `DB` → D1 `veritas-db` (ID `5733290e-0553-4b78-8ad6-1073fac7ecf2`)
 - [ ] (Opcional) R2 `veritas-storage` creado
 - [ ] Repo conectado a Pages (output dir `.`, sin build command)
-- [ ] Binding `DB` → D1 `veritas-db`
 - [ ] (Opcional) Binding `BUCKET` → R2 `veritas-storage`
 - [ ] Secreto `OAUTH_ENCRYPTION_KEY` (64 hex) generado y guardado
 - [ ] Secreto `OPENROUTER_API_KEY_1` configurado
@@ -396,6 +398,35 @@ Exportar los datos a un archivo:
 - [ ] Retry deployment hecho tras añadir bindings/variables
 - [ ] `https://<tu-dominio>/api/status` responde 200 (y `storage.available` indica si R2 está activo)
 - [ ] Registro de usuario y primer mensaje funcionando
+
+---
+
+## Apéndice B — Token de Cloudflare con permiso Pages (si necesitas Deploy command)
+
+Solo si el dashboard no te deja vaciar el Deploy command y prefieres mantener
+`npx wrangler pages deploy`. Se hace todo en el navegador. El token del build
+falla con `Authentication error [code: 10000]` porque no trae permiso
+**Pages: Edit**; con un token propio sí funciona.
+
+1. Ve a <https://dash.cloudflare.com/profile/api-tokens> (menú arriba-derecha → **My Profile** → **API Tokens**).
+2. Pulsa **Create Token**.
+3. Elige **Create Custom Token** (abajo) → **Get started**.
+4. Configura:
+   - **Token name**: `veritas-pages-deploy`.
+   - **Permissions**: añade dos filas:
+     - `Account` → `Pages` → `Edit`
+     - `Account` → `Account Settings` → `Read`
+   - **Account Resources**: tu cuenta (`...@gmail.com's Account`).
+   - **TTL**: Start Date = hoy; deja End Date vacío (o pon un fin lejano).
+5. **Continue to summary → Create Token**. Copia el token (solo se muestra una vez).
+6. En el proyecto Pages: **Settings → Environment variables** → **Production** → **Add variable**:
+   - Nombre: `CLOUDFLARE_API_TOKEN`
+   - Valor: el token copiado → marca **Encrypt** → guarda.
+7. **Retry deployment**. El build usará tu token y podrá desplegar.
+
+> ⚠️ No pegues ese token en el chat ni en ningún archivo del repo: es una
+> credencial de tu cuenta. Si se filtra, bórralo en la misma pantalla (
+> **Roll** / **Delete**) y crea otro.
 
 ---
 
