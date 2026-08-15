@@ -441,6 +441,10 @@ export async function onRequest(context) {
 
   // Dispatch por path.
   try {
+    // v2.7.2 — R2 opcional: si no hay binding BUCKET, devolver 503 claro en
+    // las rutas de archivo en vez de romper con "env.BUCKET undefined".
+    if (routeNeedsBucket(path) && !hasBucket(env)) return r2UnavailableResponse();
+
     // 6.1 — search / scrape / storage / repo / db / status
     if (path === "/api/search" && method === "POST") return await handleSearch(request, env, userEmail);
     if (path === "/api/scrape" && method === "POST") return await handleScrape(request, env, userEmail);
@@ -838,6 +842,32 @@ function r2QuotaError(projectedUsage) {
     message: "El archivo superaría el guard rail local de R2 (~9.5GB). Libera espacio o migra a plan pago antes de subir más multimedia.",
     usage: projectedUsage,
   });
+}
+
+// v2.7.2 — R2 opcional: si el despliegue no tiene binding BUCKET (R2 no
+// disponible / no contratado), las funciones de archivo devuelven 503 con un
+// mensaje claro y el resto de la app (chat, LLM, herramientas) sigue operando.
+function hasBucket(env) {
+  return Boolean(env && env.BUCKET);
+}
+function r2UnavailableResponse() {
+  return errorResponse("r2_unavailable", 503, {
+    message: "Almacenamiento de archivos desactivado: este despliegue no tiene R2 configurado (binding BUCKET). Chat, LLM y herramientas funcionan con normalidad.",
+  });
+}
+// Rutas que necesitan R2 sí o sí (subir/bajar/borrar archivos y repo documental).
+function routeNeedsBucket(path) {
+  return (
+    path === "/api/storage/upload" ||
+    path === "/api/storage/list" ||
+    path.startsWith("/api/storage/download/") ||
+    path.startsWith("/api/storage/delete/") ||
+    path === "/api/repo/upload" ||
+    path === "/api/repo/get" ||
+    path.startsWith("/api/repo/download/") ||
+    path === "/api/repo/delete" ||
+    path === "/api/repo/write"
+  );
 }
 
 async function handleStorageUpload(request, env, userEmail) {
@@ -1429,7 +1459,7 @@ async function handleRepoSearch(request, env, userEmail) {
   ).bind(userEmail, `%${query}%`).all();
 
   let byContent = [];
-  if (content_search) {
+  if (content_search && hasBucket(env)) {
     // Buscar en contenido de documentos de texto (.txt, .md, .py, .js, .ts, .csv, .json, .html).
     const textDocs = await env.DB.prepare(
       `SELECT doc_number, doc_name, file_size, mime_type, r2_key, created_at
@@ -1809,6 +1839,11 @@ async function handleStatus(env, userEmail) {
 
   // Puter no se puede ping desde Worker (corre en cliente). El frontend hace el ping.
   return json({
+    storage: {
+      provider: "r2",
+      available: hasBucket(env),
+      note: hasBucket(env) ? "R2 operativo." : "R2 no configurado: funciones de archivo desactivadas; el resto de la app funciona.",
+    },
     openrouter: openrouterAvailable,
     openrouter_pool_degraded: openrouterPool ? openrouterPool.degraded : null,
     puter: { provider: "puter", available: true, note: "Ping is done client-side; Worker always returns available=true." },
@@ -2998,6 +3033,8 @@ async function handlePerceive(request, env, userEmail) {
   let contentParts;
 
   if (attachment_r2_key) {
+    // v2.7.2 — sin R2 no hay attachments por clave; avisar claro.
+    if (!hasBucket(env)) return r2UnavailableResponse();
     // Leer de R2. La key ya debe incluir el prefijo del usuario (ej: attachments/user@/file.png).
     const r2Key = attachment_r2_key.startsWith("attachments/")
       ? attachment_r2_key
