@@ -1739,7 +1739,7 @@ async function handleChatOpenRouter(request, env, userEmail) {
   // --- Stream passthrough ---
   if (stream) {
     // TransformStream para interceptar el último evento (usage) y persistirlo.
-    const { readable, writable } = new TransformStream({
+    const ts = new TransformStream({
       async transform(chunk, controller) {
         controller.enqueue(chunk);
       },
@@ -1754,7 +1754,7 @@ async function handleChatOpenRouter(request, env, userEmail) {
     headers.set("X-Veritas-Key-Index", String(keyIndexUsed));
     if (degraded) headers.set("X-Veritas-Degraded", "1");
 
-    return new Response(upstreamResp.body.pipeThrough(writable), { status: 200, headers });
+    return new Response(upstreamResp.body.pipeThrough(ts), { status: 200, headers });
   }
 
   // Non-streaming: devolver JSON tal cual + header con key_index (+ caché).
@@ -3024,7 +3024,7 @@ async function handleAgentOrchestrate(request, env, userEmail) {
 
   // Stream passthrough (igual que handleChatOpenRouter).
   if (stream) {
-    const { readable, writable } = new TransformStream({
+    const ts = new TransformStream({
       async transform(chunk, controller) {
         controller.enqueue(chunk);
       },
@@ -3037,7 +3037,7 @@ async function handleAgentOrchestrate(request, env, userEmail) {
     headers.set("X-Veritas-Role", roleKey);
     if (degraded) headers.set("X-Veritas-Degraded", "1");
 
-    return new Response(upstreamResp.body.pipeThrough(writable), { status: 200, headers });
+    return new Response(upstreamResp.body.pipeThrough(ts), { status: 200, headers });
   }
 
   // Non-streaming.
