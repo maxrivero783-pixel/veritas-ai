@@ -232,7 +232,12 @@ SPIDER_CLOUD_API_KEY_1
 GFW_API_KEY_1
 JINA_READER_API_KEY_1
 JINA_GITHUB_API_KEY_1
+COURTLISTENER_API_TOKEN_1
+AVIATIONSTACK_API_KEY_1
+EXA_API_KEY_1
+SCRAPEDO_API_TOKEN_1
 NVD_API_KEY
+SEC_USER_AGENT         # opcional: User-Agent para SEC EDGAR (Nombre email@dominio.com)
 EMAIL_API_KEY          # API key de Brevo (notificaciones)
 BREVO_SENDER_EMAIL     # remitente verificado en Brevo
 BREVO_SENDER_NAME      # ej. "Véritas"
