@@ -131,7 +131,7 @@ async function checkQuotaAlerts(env) {
   return alerts;
 }
 
-export async function scheduled(event, env, ctx) {
+async function runPurge(env) {
   const now = Date.now();
   const results = {
     ts: new Date().toISOString(),
@@ -313,4 +313,39 @@ export async function scheduled(event, env, ctx) {
   return new Response(JSON.stringify(results), {
     headers: { "Content-Type": "application/json" },
   });
+}
+
+
+// ------------------------------------------------------------------------------
+// v2.7.2 — Cloudflare Pages NO soporta Cron Triggers ni el export `scheduled`
+// (eso es solo de Workers). Por eso la purga se expone también como endpoint
+// HTTP protegido, invocable por un programador externo cada 6 horas:
+//
+//   GET/POST /purge/scheduled   + header "x-purge-secret" (o ?secret=...)
+//
+// El programador puede ser GitHub Actions (ver .github/workflows/cron-purge.yml)
+// o un servicio tipo cron-job.org. Requiere env.PURGE_SECRET configurado.
+// ------------------------------------------------------------------------------
+export async function scheduled(event, env, ctx) {
+  // Se conserva por si en el futuro se migra a un Worker con Cron Trigger.
+  return runPurge(env);
+}
+
+export async function onRequest(context) {
+  const { request, env } = context;
+  const url = new URL(request.url);
+  const provided = request.headers.get("x-purge-secret") || url.searchParams.get("secret") || "";
+  if (!env.PURGE_SECRET || provided !== env.PURGE_SECRET) {
+    return new Response(JSON.stringify({ error: "unauthorized", message: "Falta o es inválido x-purge-secret." }), {
+      status: 401,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+  if (!env.DB) {
+    return new Response(JSON.stringify({ error: "no_db", message: "D1 no está configurado." }), {
+      status: 503,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+  return runPurge(env);
 }

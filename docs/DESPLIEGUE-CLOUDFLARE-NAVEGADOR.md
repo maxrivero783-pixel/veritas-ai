@@ -181,7 +181,7 @@ Pulsa **Add variable** y añade estas como **plaintext** (texto plano):
 | Variable | Valor |
 |---|---|
 | `APP_VERSION` | `2.7.1` |
-| `PAGES_URL` | `https://veritas-ai.pages.dev` (cambia por tu URL real) |
+| `PAGES_URL` | tu URL real de Pages (p. ej. `https://veritas-ai-brp.pages.dev` — ojo: si tu subdominio estaba ocupado, Cloudflare añade un sufijo como `-brp`) |
 | `ADMIN_EMAILS` | tu correo (ej. `tucorreo@dominio.com`). CSV si hay varios admins |
 | `ALLOW_REGISTRATION` | `true` |
 | `ARTIFACT_PROXY_ALLOWED_HOSTS` | (déjalo vacío: usará el valor por defecto del Worker) |
@@ -251,14 +251,36 @@ DROPBOX_OAUTH_APP_SECRET
 
 ---
 
-## 8. Configurar el Cron Trigger
+## 8. Configurar el Cron (mantenimiento cada 6 horas)
 
-1. **Workers & Pages → `veritas-ai` → Settings → Triggers → Cron Triggers**.
-2. Pulsa **Add cron trigger**.
-3. **Cron expression**: escribe `0 */6 * * *` (cada 6 horas).
-4. Pulsa **Add**.
+> ⚠️ **Cloudflare Pages NO soporta Cron Triggers** (son exclusivos de
+> Workers). Véritas resuelve esto exponiendo la purga como endpoint HTTP
+> protegido y programándolo con **GitHub Actions** (incluido en el repo:
+> `.github/workflows/cron-purge.yml`).
 
-> El plan Free admite hasta 3 cron triggers con intervalo mínimo de 1 hora. El cron de Véritas ejecuta purga de sesiones caducadas y alertas de cuotas.
+**Endpoint:** `GET/POST https://<tu-dominio>/purge/scheduled` con header `x-purge-secret`.
+
+### Pasos
+
+1. **Genera un secreto** (en cualquier página web, F12 → Console):
+   ```js
+   [...crypto.getRandomValues(new Uint8Array(24))].map(b=>b.toString(16).padStart(2,'0')).join('')
+   ```
+2. **En Cloudflare Pages**: Settings → Variables and Secrets → Production →
+   añade `PURGE_SECRET` con ese valor → **Encrypt** 🔒.
+3. **En GitHub**: repo → Settings → Secrets and variables → Actions →
+   **New repository secret** → nombre `PURGE_SECRET`, mismo valor.
+4. **Redespliega** la app (Run workflow del deploy) para que tome la variable.
+5. **Prueba**: GitHub → Actions → *Cron — mantenimiento Véritas* →
+   **Run workflow**. El log debe mostrar `HTTP 200` y un JSON con
+   `messages_purged`, `memories_purged`, etc.
+
+A partir de ahí corre solo cada 6 h (00/06/12/18 UTC). Alternativa sin
+GitHub: cualquier programador HTTP gratuito (p. ej. cron-job.org) que llame
+al mismo endpoint con el header.
+
+> Nota: GitHub puede retrasar los crons unos minutos y los desactiva si el
+> repo pasa 60 días sin actividad (basta un push o Run workflow para revivirlo).
 
 ---
 
@@ -372,7 +394,7 @@ Exportar los datos a un archivo:
 
 ### 13.4 Cron
 
-- **Settings → Triggers → Cron Triggers** muestra la última ejecución y el estado.
+- El mantenimiento corre vía GitHub Actions (workflow *Cron — mantenimiento Véritas*); revisa sus ejecuciones en la pestaña **Actions** del repo.
 - Si quieres otra frecuencia, elimina el trigger y crea uno nuevo (mínimo 1 h en Free).
 
 ### 13.5 Actualizar Véritas
@@ -394,7 +416,7 @@ Exportar los datos a un archivo:
 - [ ] Secreto `OPENROUTER_API_KEY_1` configurado
 - [ ] Variable pública `PAGES_URL` con la URL real de Pages
 - [ ] Variable pública `ADMIN_EMAILS` con tu correo
-- [ ] Cron `0 */6 * * *` registrado
+- [ ] `PURGE_SECRET` configurado (Cloudflare Encrypt + GitHub secret) y cron probado con **Run workflow**
 - [ ] (Opcional) OAuth apps GitHub/Dropbox con callback correcta
 - [ ] Retry deployment hecho tras añadir bindings/variables
 - [ ] `https://<tu-dominio>/api/status` responde 200 (y `storage.available` indica si R2 está activo)

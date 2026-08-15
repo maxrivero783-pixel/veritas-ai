@@ -1,0 +1,27 @@
+name: Cron — mantenimiento Véritas (cada 6h)
+
+# Cloudflare Pages no soporta Cron Triggers (solo Workers), así que el
+# mantenimiento periódico se dispara desde aquí llamando al endpoint
+# protegido /purge/scheduled de la app.
+#
+# Requiere el secret PURGE_SECRET en GitHub (Settings → Secrets → Actions)
+# y la variable PURGE_SECRET en Cloudflare Pages (Encrypt).
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"   # 00:00, 06:00, 12:00, 18:00 UTC
+  workflow_dispatch:         # permite lanzarlo a mano desde la pestaña Actions
+
+jobs:
+  purge:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ejecutar purga y mantenimiento
+        run: |
+          curl -sS --max-time 120 \
+            -H "x-purge-secret: ${{ secrets.PURGE_SECRET }}" \
+            "https://veritas-ai-brp.pages.dev/purge/scheduled" \
+            -o response.json -w "HTTP %{http_code}\n"
+          echo "--- resultado ---"
+          cat response.json
+          echo
