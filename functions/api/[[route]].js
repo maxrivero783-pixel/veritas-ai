@@ -239,6 +239,12 @@ async function llmCacheGet(env, key, userEmail) {
 // Caché de resultados de tools de solo lectura (D1, TTL 15 min por defecto).
 // ------------------------------------------------------------------------------
 const TOOL_CACHE_TTL_MS = 15 * 60 * 1000;
+// v2.7.3 — Tools cuya salida es PRIVADA por usuario (GitHub OAuth, archivos de
+// proyecto en R2, repo documental). Su caché se saltea por user_email para
+// evitar leak entre usuarios; el resto (datos públicos) sigue compartida.
+const TOOL_CACHE_USER_SCOPED = new Set([
+  "github_list_repos", "github_read_file", "read_project_file", "search_repository",
+]);
 const TOOL_CACHE_ALLOWLIST = new Set([
   "web_search", "scrape_url", "gdelt_search", "dns_lookup", "ner_extract",
   "wikipedia_search", "wikidata_search", "semantic_scholar_search", "openalex_search",
@@ -1616,7 +1622,7 @@ async function handleChatOpenRouter(request, env, userEmail) {
   const useCache = clientBody.cache === true && !is_shared && !stream;
   let cacheKey = null;
   if (useCache) {
-    cacheKey = await sha256Hex(model + "|" + JSON.stringify(messages));
+    cacheKey = await sha256Hex(userEmail + "|" + model + "|" + JSON.stringify(messages));
     const hit = await llmCacheGet(env, cacheKey, userEmail);
     if (hit) return json({ ...(hit.json || { cached_text: hit.text }), cached: true, model, from_cache: true });
   }
@@ -2074,7 +2080,8 @@ async function handleToolInvoke(request, env, userEmail) {
   const useToolCache = body.no_cache !== true && TOOL_CACHE_ALLOWLIST.has(toolName);
   let toolCacheKey = null;
   if (useToolCache) {
-    toolCacheKey = await sha256Hex(toolName + "|" + JSON.stringify(validation.args || {}));
+    const _userScoped = TOOL_CACHE_USER_SCOPED.has(toolName) ? userEmail + "|" : "";
+    toolCacheKey = await sha256Hex(toolName + "|" + _userScoped + JSON.stringify(validation.args || {}));
     const hit = await toolCacheGet(env, toolCacheKey);
     if (hit) {
       return json({ ...hit, from_cache: true, cached_at: new Date().toISOString() });
@@ -2848,7 +2855,7 @@ async function handleAgentOrchestrate(request, env, userEmail) {
   const useCache = body.cache === true && !stream;
   let cacheKey = null;
   if (useCache) {
-    cacheKey = await sha256Hex(model + "|" + JSON.stringify(messages));
+    cacheKey = await sha256Hex(userEmail + "|" + model + "|" + JSON.stringify(messages));
     const hit = await llmCacheGet(env, cacheKey, userEmail);
     if (hit) return json({ ...(hit.json || { cached_text: hit.text }), cached: true, model, from_cache: true });
   }
@@ -2983,7 +2990,16 @@ async function handleAgentOrchestrate(request, env, userEmail) {
   respHeaders.set("X-Véritas-Key-Index", String(keyIndexUsed));
   respHeaders.set("X-Véritas-Role", roleKey);
   if (degraded) respHeaders.set("X-Véritas-Degraded", "1");
-  return new Response(upstreamResp.body, { status: 200, headers: respHeaders });
+  // v2.7.3 — poblar la caché opt-in del orquestador (antes solo leía, nunca escribía).
+  const rawUpstream = await upstreamResp.text();
+  if (useCache && cacheKey) {
+    try {
+      const data = JSON.parse(rawUpstream);
+      const text = data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content || "";
+      await llmCacheSet(env, cacheKey, text, data, modelId, userEmail);
+    } catch { /* best-effort */ }
+  }
+  return new Response(rawUpstream, { status: 200, headers: respHeaders });
 }
 
 // POST /api/chat/perceive
