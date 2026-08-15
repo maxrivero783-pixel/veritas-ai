@@ -326,8 +326,6 @@ function handleCORS() {
     ...(ao ? { "Access-Control-Allow-Origin": ao, "Vary": "Origin" } : {}),
   };
   return new Response(null, { status: 204, headers });
-},
-  });
 }
 
 // ==============================================================================
@@ -778,6 +776,7 @@ async function handleScrape(request, env, userEmail) {
   }
 
   return json({ provider: "none", error: "No se pudo scrapear con ningún proveedor (configura FIRECRAWL_API_KEY_1, JINA_API_KEY_1 o SCRAPINGBEE_API_KEY_1)." }, 502);
+}
 
 // ==============================================================================
 // 6.1 — STORAGE (Carpeta Proyecto en R2)
@@ -1396,7 +1395,7 @@ async function handleMemoryBatchCreate(request, env, userEmail) {
 
   const validCategories = ["personal", "tech", "preference", "fact"];
   const inserted = [];
-  const duplicates = 0;
+  let duplicates = 0;
 
   for (const m of memories) {
     if (!m.content || typeof m.content !== "string") continue;
@@ -2854,14 +2853,8 @@ async function handleAgentOrchestrate(request, env, userEmail) {
     return errorResponse("missing_messages", 400);
   }
 
-  // Rate limiting silencioso por usuario (30 req/min).
-  const rl = await rateLimit(env, userEmail, "chat", 30, 60);
-  if (rl.limited) {
-    return errorResponse("rate_limited", 429, { message: "Límite temporal de peticiones alcanzado. Intenta en unos segundos.", retry_after_sec: rl.retryAfterSec });
-  }
-
-  // Caché opt-in (cache:true, solo no-stream y no compartido): 24h.
-  const useCache = clientBody.cache === true && !is_shared && !stream;
+  // Caché opt-in (cache:true, solo no-stream): 24h.
+  const useCache = body.cache === true && !stream;
   let cacheKey = null;
   if (useCache) {
     cacheKey = await sha256Hex(model + "|" + JSON.stringify(messages));

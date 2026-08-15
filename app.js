@@ -3201,7 +3201,7 @@ function createSandboxSnapshot(label = "manual") {
   return snapshot;
 }
 
-function restoreSandboxSnapshot() {
+async function restoreSandboxSnapshot() {
   loadSandboxSnapshots();
   if (state.sandbox.snapshots.length === 0) return toast("No hay snapshots", "warning");
   const latest = state.sandbox.snapshots[state.sandbox.snapshots.length - 1];
