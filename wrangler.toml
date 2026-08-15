@@ -60,8 +60,8 @@ pages_build_output_dir = "."
 # como `wrangler secret put <NAME>` y NO aparecen aquí.
 # ------------------------------------------------------------------------------
 [vars]
-# Nota: los OAuth Client IDs (GITHUB_OAUTH_CLIENT_ID, DROPBOX_OAUTH_APP_KEY) y
-# los secrets (GITHUB_OAUTH_CLIENT_SECRET, DROPBOX_OAUTH_APP_SECRET,
+# Nota: los OAuth Client IDs (GITHUB_OAUTH_CLIENT_ID) y
+# los secrets (GITHUB_OAUTH_CLIENT_SECRET,
 # OAUTH_ENCRYPTION_KEY, API keys...) se configuran en el dashboard
 # (Settings → Variables), NO aquí. Ver README.md → Setup.
 
@@ -102,7 +102,6 @@ APP_VERSION = "2.7.1"
 #
 #   OPENROUTER_API_KEY_1=sk-or-v1-...
 #   GITHUB_OAUTH_CLIENT_SECRET=...
-#   DROPBOX_OAUTH_APP_SECRET=...
 #   OAUTH_ENCRYPTION_KEY=<openssl rand -hex 32>
 #   DEV_USER_EMAIL=dev@veritas.local
 #   ADMIN_EMAILS=dev@veritas.local
@@ -121,7 +120,6 @@ APP_VERSION = "2.7.1"
 # BROWSER_USE_API_KEY_1, _2, _N        (opcional, browser_use_browse)
 # STEEL_API_KEY_1, _2, _N              (opcional, steel_session)
 # GITHUB_OAUTH_CLIENT_SECRET           (obligatorio para conexiones GitHub)
-# DROPBOX_OAUTH_APP_SECRET             (obligatorio para conexiones Dropbox)
 # OAUTH_ENCRYPTION_KEY                 (32 bytes hex, obligatorio)
 # DEV_USER_EMAIL                       (solo dev local)
 # ADMIN_EMAILS                         (CSV, para endpoints /api/keys/*)

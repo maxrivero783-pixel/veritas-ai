@@ -258,7 +258,6 @@ Documentos, audio y media:
 
 OAuth autorizado por usuario:
   github_list_repos, github_read_file, github_write_file, github_write_files, github_create_branch, github_create_pr
-  dropbox_list_folder, dropbox_read_file, dropbox_write_file, dropbox_search, dropbox_upload_large
 
 Estrategia de selección:
   - Noticias/eventos: gdelt_search -> web_search -> scrape_url/firecrawl_scrape.
@@ -525,7 +524,6 @@ Documentos, audio y media:
 
 OAuth autorizado por usuario:
   github_list_repos, github_read_file, github_write_file, github_write_files, github_create_branch, github_create_pr
-  dropbox_list_folder, dropbox_read_file, dropbox_write_file, dropbox_search, dropbox_upload_large
 
 Estrategia de selección:
   - Noticias/eventos: gdelt_search -> web_search -> scrape_url/firecrawl_scrape.
@@ -976,7 +974,6 @@ Documentos, audio y media:
 
 OAuth autorizado por usuario:
   github_list_repos, github_read_file, github_write_file, github_write_files, github_create_branch, github_create_pr
-  dropbox_list_folder, dropbox_read_file, dropbox_write_file, dropbox_search, dropbox_upload_large
 
 Estrategia de selección:
   - Noticias/eventos: gdelt_search -> web_search -> scrape_url/firecrawl_scrape.
@@ -1242,7 +1239,6 @@ Documentos, audio y media:
 
 OAuth autorizado por usuario:
   github_list_repos, github_read_file, github_write_file, github_write_files, github_create_branch, github_create_pr
-  dropbox_list_folder, dropbox_read_file, dropbox_write_file, dropbox_search, dropbox_upload_large
 
 Estrategia de selección:
   - Noticias/eventos: gdelt_search -> web_search -> scrape_url/firecrawl_scrape.
@@ -1435,7 +1431,7 @@ HERRAMIENTAS
 Solo tienes acceso a web_search (function calling nativo de Puter.js).
 Se activa cuando el usuario tiene el toggle "Búsqueda Web" encendido.
 
-NO tienes acceso a: repositorio, sandbox, scraping, GitHub, Dropbox,
+NO tienes acceso a: repositorio, sandbox, scraping, GitHub,
 analyze_media, ni tools XML embebidas de Véritas.
 
 </tools>

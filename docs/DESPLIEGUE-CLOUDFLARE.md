@@ -32,7 +32,7 @@ Cloudflare Pages (estáticos)  +  Pages Functions  /functions/api/[[route]].js
 - Cuenta de GitHub con el repo `maxrivero783-pixel/veritas-ai`.
 - Una API key de **OpenRouter** (mínimo 1; recomendadas 2–3 para rotación).
 - (Opcional) API keys de los servicios que quieras usar: Jina, Tavily, Serper, ScrapingBee, Firecrawl, Browser Use, Steel, Shodan, ZoomEye, etc. Sin ellas esas herramientas simplemente no estarán disponibles.
-- (Opcional, para OAuth) una **OAuth App de GitHub** y una **App de Dropbox**.
+- (Opcional, para OAuth) una **OAuth App de GitHub**.
 - Node.js 18+ y Wrangler CLI en tu máquina local:
 
 ```bash
@@ -144,7 +144,6 @@ Las **variables públicas** (no sensibles) se ponen en **Settings → Environmen
 | `CROSSREF_MAILTO` | email para la API de Crossref | opcional |
 | `OPENALEX_MAILTO` | email para la API de OpenAlex | opcional |
 | `GITHUB_OAUTH_CLIENT_ID` | Client ID de la GitHub OAuth App | obligatorio para GitHub |
-| `DROPBOX_OAUTH_APP_KEY` | App key de Dropbox | obligatorio para Dropbox |
 
 ### 6.2 Secretos (encriptados)
 
@@ -159,9 +158,8 @@ wrangler pages secret put OAUTH_ENCRYPTION_KEY
 wrangler pages secret put OPENROUTER_API_KEY_1
 # pega tu sk-or-v1-... y Enter
 
-# 3) Secrets de OAuth (solo si usas GitHub/Dropbox)
+# 3) Secrets de OAuth (solo si usas GitHub)
 wrangler pages secret put GITHUB_OAUTH_CLIENT_SECRET
-wrangler pages secret put DROPBOX_OAUTH_APP_SECRET
 
 # 4) Herramientas opcionales, según lo que vayas a usar:
 wrangler pages secret put JINA_API_KEY_1
@@ -222,7 +220,7 @@ wrangler pages deploy . --project-name=veritas-ai
 
 ---
 
-## 8. OAuth apps (solo si conectas GitHub / Dropbox)
+## 8. OAuth apps (solo si conectas GitHub)
 
 ### 8.1 GitHub OAuth App
 
@@ -232,14 +230,6 @@ wrangler pages deploy . --project-name=veritas-ai
 4. **Authorization callback URL**: `https://veritas-ai.pages.dev/api/oauth/github/callback`
 5. Crea el Client ID y genera un Client Secret.
 6. Pon el Client ID en la variable pública `GITHUB_OAUTH_CLIENT_ID` y el Client Secret en el secreto `GITHUB_OAUTH_CLIENT_SECRET`.
-
-### 8.2 Dropbox App
-
-1. [dropbox.com/developers/apps](https://www.dropbox.com/developers/apps) → **Create apps** → **Scoped access** → **Full Dropbox** (o App folder).
-2. **Redirect URI**: `https://veritas-ai.pages.dev/api/oauth/dropbox/callback`
-3. En **Permissions**, marca `files.content.read/write`, `account.info.read`.
-4. Copia **App key** y **App secret**.
-5. Pon el App key en `DROPBOX_OAUTH_APP_KEY` y el secret en `DROPBOX_OAUTH_APP_SECRET`.
 
 ---
 
@@ -273,8 +263,6 @@ OAUTH_ENCRYPTION_KEY=<openssl rand -hex 32>
 # opcionales:
 GITHUB_OAUTH_CLIENT_ID=...
 GITHUB_OAUTH_CLIENT_SECRET=...
-DROPBOX_OAUTH_APP_KEY=...
-DROPBOX_OAUTH_APP_SECRET=...
 JINA_API_KEY_1=...
 TAVILY_API_KEY_1=...
 ```

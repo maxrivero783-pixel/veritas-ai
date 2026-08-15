@@ -744,8 +744,6 @@ function setupEventListeners() {
   // Conexiones OAuth.
   $("#connectGithub")?.addEventListener("click", () => connectOAuth("github"));
   $("#disconnectGithub")?.addEventListener("click", () => disconnectOAuth("github"));
-  $("#connectDropbox")?.addEventListener("click", () => connectOAuth("dropbox"));
-  $("#disconnectDropbox")?.addEventListener("click", () => disconnectOAuth("dropbox"));
 
   // Settings saves.
   $("#saveProfile")?.addEventListener("click", saveProfile);
@@ -4590,7 +4588,7 @@ function updateDeepThinkingVisibility() {
         "Verificación cruzada de claims y fuentes",
         "Escalamiento automático a Ultra para investigación profunda",
         "Percepción visual vía Nano VL (imágenes, diagramas)",
-        "Integración con GitHub y Dropbox para repositorio de evidencia",
+        "Integración con GitHub para repositorio de evidencia",
       ],
       tips: [
         "Especifica entidades concretas (nombres, URLs, fechas) cuando sea posible",
@@ -4607,7 +4605,6 @@ function updateDeepThinkingVisibility() {
         "Generación de artefactos con Live Preview (HTML/CSS/JS en sandbox)",
         "Plantillas pre-armadas: MapLibre, Three.js, Chart.js, D3, Tailwind, Plotly",
         "Operaciones con GitHub: crear branches, PRs, leer/escribir archivos",
-        "Integración con Dropbox para almacenamiento de proyectos",
         "Código funcional al primer intento (filosofía de código sobre explicación)",
         "Fetch vía proxy para APIs con restricciones CORS",
         "Fallback a GLM Flash para parches pequeños o lookups puntuales",

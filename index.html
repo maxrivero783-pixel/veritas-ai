@@ -90,7 +90,7 @@
         <div class="onboarding-slide" data-step="1">
           <div class="onboarding-icon">🧰</div>
           <h3>63 herramientas</h3>
-          <p>web_search, scraping, Shodan, ZoomEye, IntelX, GDELT, NASA, Semantic Scholar, GitHub, Dropbox y muchas más, integradas de serie.</p>
+          <p>web_search, scraping, Shodan, ZoomEye, IntelX, GDELT, NASA, Semantic Scholar, GitHub y muchas más, integradas de serie.</p>
         </div>
         <div class="onboarding-slide" data-step="2">
           <div class="onboarding-icon">🧠</div>
@@ -625,7 +625,7 @@
         <!-- Conexiones externas -->
         <section class="settings-section" id="settings-connections" hidden>
           <h3 data-i18n="settings.connections">Conexiones externas</h3>
-          <p class="hint">GitHub y Dropbox usan OAuth cifrado en el Worker. Las tools solo acceden a cuentas conectadas por el usuario y auditan llamadas externas.</p>
+          <p class="hint">GitHub usa OAuth cifrado en el Worker. Las tools solo acceden a cuentas conectadas por el usuario y auditan llamadas externas.</p>
           <div class="connection-cards">
             <div class="connection-card" data-provider="github">
               <div class="conn-header">
@@ -636,16 +636,6 @@
               <div class="conn-account" id="connAccountGithub" hidden></div>
               <button class="action-btn" id="connectGithub" data-i18n="connections.connect">Conectar</button>
               <button class="action-btn danger" id="disconnectGithub" data-i18n="connections.disconnect" hidden>Desconectar</button>
-            </div>
-            <div class="connection-card" data-provider="dropbox">
-              <div class="conn-header">
-                <span class="conn-icon">📦</span>
-                <span class="conn-name">Dropbox</span>
-                <span class="conn-status" id="connStatusDropbox" data-i18n="connections.disconnected">Desconectado</span>
-              </div>
-              <div class="conn-account" id="connAccountDropbox" hidden></div>
-              <button class="action-btn" id="connectDropbox" data-i18n="connections.connect">Conectar</button>
-              <button class="action-btn danger" id="disconnectDropbox" data-i18n="connections.disconnect" hidden>Desconectar</button>
             </div>
           </div>
         </section>
