@@ -19,7 +19,7 @@
 #   wrangler d1 execute veritas-db --file=./schema.sql
 # ==============================================================================
 
-name = "veritas"
+name = "veritas-ai"
 compatibility_date = "2025-06-01"
 pages_build_output_dir = "."
 
