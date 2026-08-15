@@ -16,7 +16,7 @@
   # Permite: Puter.js, unpkg, jsDelivr, esm.sh (CDNs del Sandbox).
   # 'unsafe-inline' + 'unsafe-eval' necesarios para el iframe del Sandbox
   # (plantillas, CodeMirror, librerías CDN ejecutan JS inline/eval).
-  Content-Security-Policy: default-src 'self' https: data:; script-src 'unsafe-inline' 'unsafe-eval' https://js.puter.com https://unpkg.com https://cdn.jsdelivr.net https://esm.sh; style-src 'unsafe-inline' https:; img-src https: data:; connect-src https:; font-src https: data:;
+  Content-Security-Policy: default-src 'self' https: data:; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://js.puter.com https://unpkg.com https://cdn.jsdelivr.net https://esm.sh; style-src 'self' 'unsafe-inline' https:; img-src https: data:; connect-src 'self' https: wss:; font-src https: data:;
 
   # Security headers estándar (defensa en profundidad)
   X-Content-Type-Options: nosniff
