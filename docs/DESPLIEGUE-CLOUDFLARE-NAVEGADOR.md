@@ -111,6 +111,9 @@ No necesitas crear carpetas ni subir nada; el Worker las crea solas.
      `npx wrangler deploy`, **bórralo**. Este repo se despliega solo como sitio
      estático + Pages Functions; poner `wrangler deploy` produce el error
      `Missing entry-point to Worker script or to assets directory`.
+     Si al guardarlo vacío el dashboard responde `Invalid request body` (bug
+     conocido), escribe en su lugar: `npx wrangler pages deploy . --project-name=<tu-proyecto>`
+     — es un despliegue válido de Pages y evita el error.
    - **Environment variables**: abre la sección y añade las variables listadas en la sección 7.1 (puedes hacerlo después, pero conviene poner las no-secretas ahora).
 6. Pulsa **Save and Deploy**.
 
@@ -324,6 +327,7 @@ A partir de este momento:
 | Síntoma | Causa | Arreglo en el dashboard |
 |---|---|---|
 | Build falla con `Missing entry-point to Worker script or to assets directory` (y el log muestra `Executing user deploy command: npx wrangler deploy`) | Pusiste `npx wrangler deploy` en el **Deploy command** | Settings → Builds & deployments → Build settings → Edit → **borra el Deploy command** (déjalo vacío) → Save → Retry deployment |
+| Al guardar Build configuration el dashboard responde `Invalid request body` | Bug del dashboard guardando campos vacíos | **A)** En Deploy command escribe `npx wrangler pages deploy . --project-name=<tu-proyecto>` (despliegue válido) y guarda. **B)** Reintenta en modo incógnito u otro navegador. **C)** Elimina y recrea el proyecto Pages (la D1 no se toca). |
 | `D1_ERROR: no such table: users` | Schema no aplicado | D1 → `veritas-db` → Console → pega `schema.sql` → Execute |
 | `DB binding is required` | Falta binding D1 | Settings → Bindings → añade `DB` → Retry deployment |
 | `r2_unavailable` (solo al subir/bajar archivos) | No añadiste el binding `BUCKET` | Opcional: crea el bucket (paso 4), añade binding `BUCKET` y redeployea. Si no quieres R2, ignóralo. |
