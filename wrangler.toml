@@ -42,14 +42,17 @@ pages_build_output_dir = "."
 # Bindings: D1 (SQLite) y R2 (object storage)
 # ------------------------------------------------------------------------------
 # ------------------------------------------------------------------------------
-# Bindings D1 (SQLite) y R2 (object storage) — CONFIGURAR EN EL DASHBOARD.
+# Bindings D1 (SQLite) y R2 (object storage).
+# En este modo de despliegue (wrangler pages deploy + pages_build_output_dir)
+# los bindings se leen de ESTE archivo, no del dashboard.
 # ------------------------------------------------------------------------------
-# [[d1_databases]]
-# binding       = "DB"
-# database_name = "veritas-db"
-# database_id   = "PON_AQUI_EL_DATABASE_ID"   # wrangler d1 list
-# # query_pattern = "log_4xx_and_5xx"
-#
+[[d1_databases]]
+binding       = "DB"
+database_name = "veritas-db"
+database_id   = "5733290e-0553-4b78-8ad6-1073fac7ecf2"
+
+# R2 desactivado (degradación elegante v2.7.2): si algún día se activa,
+# descomentar y crear el bucket veritas-storage.
 # [[r2_buckets]]
 # binding = "BUCKET"
 # bucket_name = "veritas-storage"
