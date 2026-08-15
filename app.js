@@ -4899,22 +4899,6 @@ function debounce(fn, ms) {
   };
 }
 
-// ==============================================================================
-// BOOT
-// ==============================================================================
-if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", init);
-} else {
-  init();
-}
-
-// Exponer para debugging y para notificaciones onclick.
-
-// ==============================================================================
-// v2.5 — Auth (email+contraseña), modal, búsqueda en conversación, export,
-//        tema claro/oscuro y onboarding de 5 pasos.
-// ==============================================================================
-
 // --- Token de sesión en todos los fetch a /api ---
 (function patchFetchWithToken() {
   const orig = window.fetch.bind(window);
@@ -4933,6 +4917,22 @@ if (document.readyState === "loading") {
   };
 })();
 
+// ==============================================================================
+// BOOT
+// ==============================================================================
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", init);
+} else {
+  init();
+}
+
+// Exponer para debugging y para notificaciones onclick.
+
+// ==============================================================================
+// v2.5 — Auth (email+contraseña), modal, búsqueda en conversación, export,
+//        tema claro/oscuro y onboarding de 5 pasos.
+// ==============================================================================
+
 function showAppLayout(show) {
   const layout = document.querySelector(".app-layout");
   if (layout) layout.style.display = show ? "" : "none";
@@ -4942,7 +4942,10 @@ function showAppLayout(show) {
 
 async function ensureAuth() {
   try {
-    const resp = await fetch("/api/auth/me", { headers: { Accept: "application/json" } });
+    const _tok = localStorage.getItem("veritas_token");
+    const resp = await fetch("/api/auth/me", {
+      headers: { Accept: "application/json", ...(_tok ? { Authorization: "Bearer " + _tok } : {}) },
+    });
     if (resp.ok) {
       const data = await resp.json().catch(() => ({}));
       if (data && data.user) { showAppLayout(true); return true; }
