@@ -1751,8 +1751,8 @@ async function handleChatOpenRouter(request, env, userEmail) {
     headers.set("Cache-Control", "no-cache");
     headers.set("Connection", "keep-alive");
     headers.set("Content-Type", "text/event-stream");
-    headers.set("X-Véritas-Key-Index", String(keyIndexUsed));
-    if (degraded) headers.set("X-Véritas-Degraded", "1");
+    headers.set("X-Veritas-Key-Index", String(keyIndexUsed));
+    if (degraded) headers.set("X-Veritas-Degraded", "1");
 
     return new Response(upstreamResp.body.pipeThrough(writable), { status: 200, headers });
   }
@@ -1760,8 +1760,8 @@ async function handleChatOpenRouter(request, env, userEmail) {
   // Non-streaming: devolver JSON tal cual + header con key_index (+ caché).
   const respHeaders = new Headers();
   respHeaders.set("Content-Type", "application/json");
-  respHeaders.set("X-Véritas-Key-Index", String(keyIndexUsed));
-  if (degraded) respHeaders.set("X-Véritas-Degraded", "1");
+  respHeaders.set("X-Veritas-Key-Index", String(keyIndexUsed));
+  if (degraded) respHeaders.set("X-Veritas-Degraded", "1");
   const upstreamData = await upstreamResp.json().catch(() => null);
   if (useCache && cacheKey && upstreamData) {
     await llmCacheSet(env, cacheKey, upstreamData.choices && upstreamData.choices[0] && upstreamData.choices[0].message && upstreamData.choices[0].message.content || "", upstreamData, model, userEmail);
@@ -1772,7 +1772,7 @@ async function handleChatOpenRouter(request, env, userEmail) {
       cached_tokens: (upstreamData.usage.prompt_tokens_details && upstreamData.usage.prompt_tokens_details.cached_tokens) || 0,
     });
   }
-  if (upstreamData) return json(upstreamData, 200, { "X-Véritas-Key-Index": String(keyIndexUsed), ...(degraded ? { "X-Véritas-Degraded": "1" } : {}) });
+  if (upstreamData) return json(upstreamData, 200, { "X-Veritas-Key-Index": String(keyIndexUsed), ...(degraded ? { "X-Veritas-Degraded": "1" } : {}) });
   return new Response(upstreamResp.body, { status: 200, headers: respHeaders });
 }
 
@@ -2484,8 +2484,8 @@ async function handleArtifactProxy(request, env, userEmail) {
       headers: {
         "Content-Type": resp.headers.get("Content-Type") || "application/json",
         "Access-Control-Allow-Origin": "*",
-        "X-Véritas-Proxy-Latency": String(latency),
-        "X-Véritas-Proxy-Service": serviceForHost || "none",
+        "X-Veritas-Proxy-Latency": String(latency),
+        "X-Veritas-Proxy-Service": serviceForHost || "none",
       },
     });
   } catch (e) {
@@ -3033,9 +3033,9 @@ async function handleAgentOrchestrate(request, env, userEmail) {
     headers.set("Cache-Control", "no-cache");
     headers.set("Connection", "keep-alive");
     headers.set("Content-Type", "text/event-stream");
-    headers.set("X-Véritas-Key-Index", String(keyIndexUsed));
-    headers.set("X-Véritas-Role", roleKey);
-    if (degraded) headers.set("X-Véritas-Degraded", "1");
+    headers.set("X-Veritas-Key-Index", String(keyIndexUsed));
+    headers.set("X-Veritas-Role", roleKey);
+    if (degraded) headers.set("X-Veritas-Degraded", "1");
 
     return new Response(upstreamResp.body.pipeThrough(writable), { status: 200, headers });
   }
@@ -3043,9 +3043,9 @@ async function handleAgentOrchestrate(request, env, userEmail) {
   // Non-streaming.
   const respHeaders = new Headers();
   respHeaders.set("Content-Type", "application/json");
-  respHeaders.set("X-Véritas-Key-Index", String(keyIndexUsed));
-  respHeaders.set("X-Véritas-Role", roleKey);
-  if (degraded) respHeaders.set("X-Véritas-Degraded", "1");
+  respHeaders.set("X-Veritas-Key-Index", String(keyIndexUsed));
+  respHeaders.set("X-Veritas-Role", roleKey);
+  if (degraded) respHeaders.set("X-Veritas-Degraded", "1");
   // v2.7.3 — poblar la caché opt-in del orquestador (antes solo leía, nunca escribía).
   const rawUpstream = await upstreamResp.text();
   if (useCache && cacheKey) {
