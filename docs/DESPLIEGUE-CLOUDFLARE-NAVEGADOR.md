@@ -100,22 +100,23 @@ No necesitas crear carpetas ni subir nada; el Worker las crea solas.
 2. Abre la pestaña **Pages** y pulsa **Connect to Git**.
 3. Autoriza a Cloudflare sobre tu cuenta de GitHub si es la primera vez (puedes limitar el acceso al repositorio `veritas-ai`).
 4. Selecciona `maxrivero783-pixel/veritas-ai` y pulsa **Begin setup**.
-5. En **Build settings**:
+5. En **Build settings** (sistema *Workers Builds*):
    - **Project name**: `veritas-ai` (este nombre define tu URL final).
    - **Production branch**: `main`.
    - **Framework preset**: `None`.
    - **Build command**: déjalo **vacío**.
    - **Build output directory**: escribe `.` (un punto).
    - **Root directory**: déjalo vacío.
-   - **Deploy command**: déjalo **vacío** (muy importante). ⚠️ Si aquí aparece
-     `npx wrangler deploy` (o cualquier comando wrangler), **bórralo**. Este
-     repo se despliega solo como sitio estático + Pages Functions; los comandos
-     wrangler en el build fallan (`Missing entry-point…` o
-     `Authentication error [code: 10000]`). Si al guardarlo vacío el dashboard
-     responde `Invalid request body`, asegúrate de que **Build output directory
-     = `.`** y reintenta (o usa modo incógnito); como último recurso, recrea el
-     proyecto con esta misma configuración.
-   - **Environment variables**: abre la sección y añade las variables listadas en la sección 7.1 (puedes hacerlo después, pero conviene poner las no-secretas ahora).
+   - **Deploy command**: ⚠️ En el sistema nuevo este campo es **obligatorio**.
+     Escribe exactamente: `npx wrangler pages deploy . --project-name=veritas-ai`
+     (NO uses `npx wrangler deploy` — eso es para Workers y falla con
+     `Missing entry-point…`).
+   - **API token** (¡la pieza clave!): Cloudflare genera uno automático que **no
+     tiene permiso de Pages** y el build falla con `Authentication error
+     [code: 10000]`. Selecciona **tu propio token** — el que creaste con permiso
+     `Account → Pages → Edit` (Apéndice B). No uses el autogenerado.
+   - **Build variables** (opcional): variables solo para el build; no hacen falta aquí.
+   - **Environment variables**: añade las variables de runtime listadas en la sección 7 (puedes hacerlo después).
 6. Pulsa **Save and Deploy**.
 
 El primer deploy tarda entre 30 s y 2 min. Cuando termine verás una URL tipo `https://veritas-ai.pages.dev`. **Aún no funcionará**: faltan los bindings y los secretos.
@@ -329,7 +330,7 @@ A partir de este momento:
 |---|---|---|
 | Build falla con `Missing entry-point to Worker script or to assets directory` (y el log muestra `Executing user deploy command: npx wrangler deploy`) | Pusiste `npx wrangler deploy` en el **Deploy command** | Settings → Builds & deployments → Build settings → Edit → **borra el Deploy command** (déjalo vacío) → Save → Retry deployment |
 | Al guardar Build configuration el dashboard responde `Invalid request body` | Bug del dashboard guardando campos vacíos (a veces porque **Build output directory** quedó vacío) | Pon **Build output directory = `.`**, luego vacía el Deploy command y guarda. Si sigue fallando: modo incógnito u otro navegador; último recurso: recrear el proyecto (sección 5). |
-| Build falla con `Authentication error [code: 10000]` ejecutando `wrangler pages deploy` | El token del build no tiene permiso **Pages: Edit** | **A)** Vacía el Deploy command (deploy nativo, sin wrangler) — pon antes Build output directory = `.` para que el dashboard te deje guardar. **B)** Si necesitas el Deploy command, crea tu propio token (apéndice B). **C)** Último recurso: recrea el proyecto (sección 5). |
+| Build falla con `Authentication error [code: 10000]` ejecutando `wrangler pages deploy` | El build usa el **API token autogenerado**, que no tiene permiso *Pages: Edit* (tu token en variables de runtime NO llega al build) | En **Build settings** busca el campo **API token** y selecciona tu propio token con `Account → Pages → Edit` (Apéndice B). No uses el autogenerado. |
 | `D1_ERROR: no such table: users` | Schema no aplicado | D1 → `veritas-db` → Console → pega `schema.sql` → Execute |
 | `DB binding is required` | Falta binding D1 | Settings → Bindings → añade `DB` → Retry deployment |
 | `r2_unavailable` (solo al subir/bajar archivos) | No añadiste el binding `BUCKET` | Opcional: crea el bucket (paso 4), añade binding `BUCKET` y redeployea. Si no quieres R2, ignóralo. |
@@ -419,10 +420,13 @@ falla con `Authentication error [code: 10000]` porque no trae permiso
    - **Account Resources**: tu cuenta (`...@gmail.com's Account`).
    - **TTL**: Start Date = hoy; deja End Date vacío (o pon un fin lejano).
 5. **Continue to summary → Create Token**. Copia el token (solo se muestra una vez).
-6. En el proyecto Pages: **Settings → Environment variables** → **Production** → **Add variable**:
-   - Nombre: `CLOUDFLARE_API_TOKEN`
-   - Valor: el token copiado → marca **Encrypt** → guarda.
-7. **Retry deployment**. El build usará tu token y podrá desplegar.
+6. **Dónde ponerlo** — usa el campo del build, NO las variables de runtime:
+   - **Workers & Pages → `veritas-ai` → Settings → Builds & deployments → Build settings → Edit**.
+   - Campo **API token**: elige la opción de usar un token propio / existente y
+     pega (o selecciona) el token `veritas-pages-deploy`.
+   - ⚠️ Si lo pones como variable de runtime `CLOUDFLARE_API_TOKEN`, el build
+     puede ignorarla y seguir usando su token autogenerado (error 10000).
+7. **Save** y luego **Retry deployment**. El build usará tu token y podrá desplegar.
 
 > ⚠️ No pegues ese token en el chat ni en ningún archivo del repo: es una
 > credencial de tu cuenta. Si se filtra, bórralo en la misma pantalla (
