@@ -505,6 +505,11 @@ export async function onRequest(context) {
     // 6.3 — status
     if (path === "/api/status" && method === "GET") return await handleStatus(env, userEmail);
     if (path === "/api/llm/complete" && method === "POST") return await handleLLMComplete(request, env, userEmail);
+    if (path === "/api/debug/trace" && method === "POST") return await handleDebugTrace(request, env, userEmail);
+    if (path === "/api/debug/read" && method === "GET") {
+      const row = await env.DB.prepare("SELECT result_json FROM tool_cache WHERE cache_key = 'debug_trace'").first().catch(() => null);
+      return json({ trace: row ? JSON.parse(row.result_json) : null });
+    }
 
     // 6.4 — keys management (admin)
     if (path === "/api/keys/status" && method === "GET") return await handleKeysStatus(request, env, userEmail);
@@ -1762,7 +1767,9 @@ async function handleChatOpenRouter(request, env, userEmail) {
   respHeaders.set("Content-Type", "application/json");
   respHeaders.set("X-Veritas-Key-Index", String(keyIndexUsed));
   if (degraded) respHeaders.set("X-Veritas-Degraded", "1");
-  const upstreamData = await upstreamResp.json().catch(() => null);
+  const rawNonStream = await upstreamResp.text();
+  let upstreamData = null;
+  try { upstreamData = JSON.parse(rawNonStream); } catch { /* no-JSON */ }
   if (useCache && cacheKey && upstreamData) {
     await llmCacheSet(env, cacheKey, upstreamData.choices && upstreamData.choices[0] && upstreamData.choices[0].message && upstreamData.choices[0].message.content || "", upstreamData, model, userEmail);
   }
@@ -1773,7 +1780,7 @@ async function handleChatOpenRouter(request, env, userEmail) {
     });
   }
   if (upstreamData) return json(upstreamData, 200, { "X-Veritas-Key-Index": String(keyIndexUsed), ...(degraded ? { "X-Veritas-Degraded": "1" } : {}) });
-  return new Response(upstreamResp.body, { status: 200, headers: respHeaders });
+  return new Response(rawNonStream, { status: 200, headers: respHeaders });
 }
 
 // ------------------------------------------------------------------------------
@@ -1841,6 +1848,96 @@ async function logOpenRouterCall(env, userEmail, model, keyIndex, status, startT
 // extracción de memorias, micro-tareas). Sin persistencia ni tools.
 // Prueba Cerebras → Cohere → OpenRouter con rotación de keys por proveedor.
 // ------------------------------------------------------------------------------
+
+// ------------------------------------------------------------------------------
+// TEMPORAL (debug): traza paso a paso el flujo de chat escribiendo a D1,
+// para ver dónde muere el Worker (520) aunque la respuesta se pierda.
+// ------------------------------------------------------------------------------
+async function handleDebugTrace(request, env, userEmail) {
+  const steps = [];
+  const log = async (name) => {
+    steps.push(name);
+    try {
+      await env.DB.prepare(
+        "INSERT INTO tool_cache (cache_key, user_email, tool_name, result_json, status, created_at) VALUES ('debug_trace', ?, 'debug', ?, 200, ?) " +
+        "ON CONFLICT(cache_key) DO UPDATE SET result_json = excluded.result_json, created_at = excluded.created_at"
+      ).bind(userEmail, JSON.stringify(steps), Date.now()).run();
+    } catch {}
+  };
+  const clientBody = await request.json().catch(() => ({}));
+  const { model = "openai/gpt-oss-20b:free", messages = [{ role: "user", content: "di ok" }], stream = false } = clientBody;
+  await log("s0_body");
+  const rl = await rateLimit(env, userEmail, "chat", 30, 60);
+  await log("s1_ratelimit:" + (rl.limited ? "limited" : "ok"));
+  const upstreamBody = { model, messages, stream };
+  const resolvedKey = MODEL_TO_ROLE[model];
+  const systemPrompt = resolvedKey ? SYSTEM_PROMPTS[resolvedKey] : null;
+  if (systemPrompt) upstreamBody.messages = [{ role: "system", content: systemPrompt }, ...messages];
+  await log("s2_sysprompt:" + (systemPrompt ? systemPrompt.length : 0));
+  upstreamBody.messages = injectCacheControl(upstreamBody.messages, false);
+  await log("s3_cachectrl");
+  upstreamBody.messages = truncateToolResults(upstreamBody.messages, 2048);
+  await log("s4_trunc");
+  let upstreamResp = null;
+  try {
+    const result = await withKeyRotation(env, "openrouter", async (key) => {
+      return await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${key}`, "Content-Type": "application/json",
+          "HTTP-Referer": env.PAGES_URL || "https://veritas.pages.dev", "X-Title": "Véritas",
+          "Accept": stream ? "text/event-stream" : "application/json",
+        },
+        body: JSON.stringify(upstreamBody),
+      });
+    });
+    upstreamResp = result.response;
+    await log("s5_upstream:" + upstreamResp.status);
+  } catch (e) {
+    await log("s5_err:" + e.message);
+    return json({ steps, error: e.message });
+  }
+  const mode = clientBody.mode || "instance";
+  if (stream) {
+    const ts = new TransformStream({ transform(c, ctrl) { ctrl.enqueue(c); } });
+    await log("s6_transform_created");
+    if (mode === "plainpair") {
+      const { readable, writable } = ts;
+      return new Response(upstreamResp.body.pipeThrough({ readable, writable }), {
+        status: 200, headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" },
+      });
+    }
+    return new Response(upstreamResp.body.pipeThrough(ts), {
+      status: 200,
+      headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" },
+    });
+  }
+  const raw = await upstreamResp.text();
+  await log("s7_text:" + raw.length);
+  let data = null; try { data = JSON.parse(raw); } catch {}
+  await log("s8_parse:" + (data ? "ok" : "nojson"));
+  if (mode === "jsondata") {
+    return json(data, 200, { "X-Veritas-Key-Index": "1" });
+  }
+  if (mode === "hdr") {
+    return json({ ok: 1 }, 200, { "X-Veritas-Key-Index": "1" });
+  }
+  if (mode === "bigdata") {
+    return json(data, 200, {});
+  }
+  if (mode === "rawstring") {
+    return new Response(raw, { status: 200, headers: { "Content-Type": "application/json" } });
+  }
+  if (data && data.usage) {
+    await logOpenRouterCall(env, userEmail, model, 1, upstreamResp.status, Date.now(), {
+      tokens_in: data.usage.prompt_tokens, tokens_out: data.usage.completion_tokens, cached_tokens: 0,
+    });
+    await log("s9_telemetry");
+  }
+  await log("s10_done");
+  return json({ steps, sample: raw.slice(0, 200) });
+}
+
 async function handleLLMComplete(request, env, userEmail) {
   const body = await request.json().catch(() => ({}));
   const prompt = body.prompt;
