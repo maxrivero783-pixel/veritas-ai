@@ -108,16 +108,18 @@ Recomendado:
 async function checkQuotaAlerts(env) {
   const alerts = [];
   // Consultar con la primera key de cada servicio (endpoints de cuota fiables).
+  // v2.7.3 — headers como función de la key (antes se evaluaba `k` fuera de
+  // scope al construir el array → ReferenceError "k is not defined").
   const simple = [
-    ["firecrawl", (k) => `https://api.firecrawl.dev/v1/key`, { Authorization: `Bearer ${k}` }, (d) => { const u = d.creditsUsed, l = d.maxCredits; return u != null && l ? Math.round(((l - u) / l) * 100) : null; }],
-    ["jina", (k) => `https://api.jina.ai/v1/api-key/info`, { Authorization: `Bearer ${k}` }, (d) => { const u = d.used_credits ?? d.usedCredits, l = d.total_credits ?? d.totalCredits; return u != null && l ? Math.round(((l - u) / l) * 100) : null; }],
-    ["shodan", (k) => `https://api.shodan.io/api-info?key=${k}`, {}, (d) => { const u = d.usage?.query_credits, l = d.usage_limits?.query_credits; return u != null && l ? Math.round(((l - u) / l) * 100) : null; }],
+    ["firecrawl", (k) => `https://api.firecrawl.dev/v1/key`, (k) => ({ Authorization: `Bearer ${k}` }), (d) => { const u = d.creditsUsed, l = d.maxCredits; return u != null && l ? Math.round(((l - u) / l) * 100) : null; }],
+    ["jina", (k) => `https://api.jina.ai/v1/api-key/info`, (k) => ({ Authorization: `Bearer ${k}` }), (d) => { const u = d.used_credits ?? d.usedCredits, l = d.total_credits ?? d.totalCredits; return u != null && l ? Math.round(((l - u) / l) * 100) : null; }],
+    ["shodan", (k) => `https://api.shodan.io/api-info?key=${k}`, () => ({}), (d) => { const u = d.usage?.query_credits, l = d.usage_limits?.query_credits; return u != null && l ? Math.round(((l - u) / l) * 100) : null; }],
   ];
-  for (const [service, endpoint, headers, parse] of simple) {
+  for (const [service, endpoint, headersFor, parse] of simple) {
     try {
       const keys = discoverKeys(env, service);
       if (!keys.length) continue;
-      const resp = await fetch(endpoint(keys[0].value), { headers, signal: AbortSignal.timeout(8000) });
+      const resp = await fetch(endpoint(keys[0].value), { headers: headersFor(keys[0].value), signal: AbortSignal.timeout(8000) });
       if (!resp.ok) continue;
       const data = await resp.json().catch(() => null);
       if (!data) continue;
