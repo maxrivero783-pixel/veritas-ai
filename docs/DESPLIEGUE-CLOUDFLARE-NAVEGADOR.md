@@ -125,29 +125,22 @@ El primer deploy tarda entre 30 s y 2 min. Cuando termine verás una URL tipo `h
 
 ## 6. Configurar los bindings (D1 y R2)
 
-1. Ve a **Workers & Pages → `veritas-ai` → Settings**.
-2. Sección **Bindings** → pulsa **Add binding**.
-3. Añade el binding de D1 (obligatorio) y, si creaste R2, el de R2 (opcional):
+> ⚠️ **Importante**: con el despliegue vía GitHub Actions (`wrangler pages
+> deploy` + `wrangler.toml`), los bindings **se definen en el `wrangler.toml`
+> del repo**, no en el dashboard (el propio dashboard te remitirá al archivo).
 
-### 6.1 D1 (obligatorio)
+El binding de D1 ya viene configurado en el repo:
 
-- Tipo: **D1 database**
-- **Variable name**: `DB`
-- **D1 database**: selecciona `veritas-db` (ID `5733290e-0553-4b78-8ad6-1073fac7ecf2`)
+```toml
+[[d1_databases]]
+binding       = "DB"
+database_name = "veritas-db"
+database_id   = "5733290e-0553-4b78-8ad6-1073fac7ecf2"
+```
 
-### 6.2 R2 (opcional)
-
-- Tipo: **R2 bucket**
-- **Variable name**: `BUCKET`
-- **R2 bucket**: selecciona `veritas-storage`
-
-> Si no creaste el bucket, no añadas este binding. Sin `BUCKET`, Véritas
-> desactiva limpiamente las funciones de archivo y devuelve `r2_unavailable`
-> solo en esas rutas; todo lo demás sigue funcionando.
-
-4. Pulsa **Save**.
-
-> En el plan Pages gratuito, los cambios de binding se aplican al **siguiente deploy**. Más adelante forzaremos un redeploy.
+Si cambias de base de datos, edita esos valores en `wrangler.toml` y vuelve a
+desplegar (Run workflow). R2 sigue desactivado (bloque comentado); Véritas
+funciona sin bucket devolviendo `r2_unavailable` solo en las rutas de archivo.
 
 ---
 
