@@ -228,6 +228,8 @@ Núcleo / proyecto:
 Búsqueda, lectura y crawling:
   web_search           — Búsqueda web (Jina -> Tavily -> Serper)
   scrape_url           — Extracción puntual de URL (Jina -> ScrapingBee)
+  scrapedo_scrape        — Scraping anti-bot con proxies rotativos (Scrape.do)
+  exa_search             — Búsqueda semántica IA con contenido (Exa.ai)
   firecrawl_scrape     — Scraping estructurado de páginas
   firecrawl_crawl      — Crawling multi-página
   jina_reader_search   — Lectura/búsqueda con Jina Reader
@@ -244,6 +246,8 @@ Búsqueda, lectura y crawling:
 OSINT / infraestructura:
   dns_lookup           — Resolución DNS
   shodan_search        — Búsqueda/lookup Shodan
+  courtlistener_search   — Jurisprudencia/dockets/citas de EE.UU. (CourtListener)
+  aviationstack_flights  — Vuelos/aeropuertos/aerolíneas en tiempo real (AviationStack)
   zoomeye_search       — Búsqueda ZoomEye
   intelx_search        — Búsqueda Intelligence X
   apify_google_places  — Google Places/Maps vía Apify
@@ -494,6 +498,8 @@ Núcleo / proyecto:
 Búsqueda, lectura y crawling:
   web_search           — Búsqueda web (Jina -> Tavily -> Serper)
   scrape_url           — Extracción puntual de URL (Jina -> ScrapingBee)
+  scrapedo_scrape        — Scraping anti-bot con proxies rotativos (Scrape.do)
+  exa_search             — Búsqueda semántica IA con contenido (Exa.ai)
   firecrawl_scrape     — Scraping estructurado de páginas
   firecrawl_crawl      — Crawling multi-página
   jina_reader_search   — Lectura/búsqueda con Jina Reader
@@ -510,6 +516,8 @@ Búsqueda, lectura y crawling:
 OSINT / infraestructura:
   dns_lookup           — Resolución DNS
   shodan_search        — Búsqueda/lookup Shodan
+  courtlistener_search   — Jurisprudencia/dockets/citas de EE.UU. (CourtListener)
+  aviationstack_flights  — Vuelos/aeropuertos/aerolíneas en tiempo real (AviationStack)
   zoomeye_search       — Búsqueda ZoomEye
   intelx_search        — Búsqueda Intelligence X
   apify_google_places  — Google Places/Maps vía Apify
@@ -944,6 +952,8 @@ Núcleo / proyecto:
 Búsqueda, lectura y crawling:
   web_search           — Búsqueda web (Jina -> Tavily -> Serper)
   scrape_url           — Extracción puntual de URL (Jina -> ScrapingBee)
+  scrapedo_scrape        — Scraping anti-bot con proxies rotativos (Scrape.do)
+  exa_search             — Búsqueda semántica IA con contenido (Exa.ai)
   firecrawl_scrape     — Scraping estructurado de páginas
   firecrawl_crawl      — Crawling multi-página
   jina_reader_search   — Lectura/búsqueda con Jina Reader
@@ -960,6 +970,8 @@ Búsqueda, lectura y crawling:
 OSINT / infraestructura:
   dns_lookup           — Resolución DNS
   shodan_search        — Búsqueda/lookup Shodan
+  courtlistener_search   — Jurisprudencia/dockets/citas de EE.UU. (CourtListener)
+  aviationstack_flights  — Vuelos/aeropuertos/aerolíneas en tiempo real (AviationStack)
   zoomeye_search       — Búsqueda ZoomEye
   intelx_search        — Búsqueda Intelligence X
   apify_google_places  — Google Places/Maps vía Apify
@@ -1209,6 +1221,8 @@ Núcleo / proyecto:
 Búsqueda, lectura y crawling:
   web_search           — Búsqueda web (Jina -> Tavily -> Serper)
   scrape_url           — Extracción puntual de URL (Jina -> ScrapingBee)
+  scrapedo_scrape        — Scraping anti-bot con proxies rotativos (Scrape.do)
+  exa_search             — Búsqueda semántica IA con contenido (Exa.ai)
   firecrawl_scrape     — Scraping estructurado de páginas
   firecrawl_crawl      — Crawling multi-página
   jina_reader_search   — Lectura/búsqueda con Jina Reader
@@ -1225,6 +1239,8 @@ Búsqueda, lectura y crawling:
 OSINT / infraestructura:
   dns_lookup           — Resolución DNS
   shodan_search        — Búsqueda/lookup Shodan
+  courtlistener_search   — Jurisprudencia/dockets/citas de EE.UU. (CourtListener)
+  aviationstack_flights  — Vuelos/aeropuertos/aerolíneas en tiempo real (AviationStack)
   zoomeye_search       — Búsqueda ZoomEye
   intelx_search        — Búsqueda Intelligence X
   apify_google_places  — Google Places/Maps vía Apify

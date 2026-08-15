@@ -248,7 +248,8 @@ const TOOL_CACHE_ALLOWLIST = new Set([
   "shodan_search", "zoomeye_search", "intelx_search", "gfw_search", "jina_reader_search",
   "jina_github_search", "rover_scrape", "github_list_repos", "github_read_file",
   "search_repository",
-  "read_project_file", "firecrawl_scrape",
+  "read_project_file", "firecrawl_scrape", "exa_search", "scrapedo_scrape",
+  "courtlistener_search", "aviationstack_flights",
 ]);
 
 async function toolCacheGet(env, key) {
