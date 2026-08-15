@@ -58,3 +58,9 @@ playwright-report/
 .veritas-temp/
 *.tmp
 *.bak
+veritas-android/build/
+veritas-android/.gradle/
+veritas-android/local.properties
+veritas-android/.idea/
+veritas-android/*.iml
+veritas-android/gradle/wrapper/dists/
