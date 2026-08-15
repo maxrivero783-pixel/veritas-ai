@@ -1754,7 +1754,7 @@ async function handleChatOpenRouter(request, env, userEmail) {
     headers.set("X-Véritas-Key-Index", String(keyIndexUsed));
     if (degraded) headers.set("X-Véritas-Degraded", "1");
 
-    return new Response(upstreamResp.body.pipeThrough(writable), { status: 200, headers });
+    return new Response(upstreamResp.body.pipeThrough({ readable, writable }), { status: 200, headers });
   }
 
   // Non-streaming: devolver JSON tal cual + header con key_index (+ caché).
@@ -1762,7 +1762,9 @@ async function handleChatOpenRouter(request, env, userEmail) {
   respHeaders.set("Content-Type", "application/json");
   respHeaders.set("X-Véritas-Key-Index", String(keyIndexUsed));
   if (degraded) respHeaders.set("X-Véritas-Degraded", "1");
-  const upstreamData = await upstreamResp.json().catch(() => null);
+  const rawNonStream = await upstreamResp.text();
+  let upstreamData = null;
+  try { upstreamData = JSON.parse(rawNonStream); } catch { /* no-JSON */ }
   if (useCache && cacheKey && upstreamData) {
     await llmCacheSet(env, cacheKey, upstreamData.choices && upstreamData.choices[0] && upstreamData.choices[0].message && upstreamData.choices[0].message.content || "", upstreamData, model, userEmail);
   }
@@ -1773,7 +1775,7 @@ async function handleChatOpenRouter(request, env, userEmail) {
     });
   }
   if (upstreamData) return json(upstreamData, 200, { "X-Véritas-Key-Index": String(keyIndexUsed), ...(degraded ? { "X-Véritas-Degraded": "1" } : {}) });
-  return new Response(upstreamResp.body, { status: 200, headers: respHeaders });
+  return new Response(rawNonStream, { status: 200, headers: respHeaders });
 }
 
 // ------------------------------------------------------------------------------
@@ -3037,7 +3039,7 @@ async function handleAgentOrchestrate(request, env, userEmail) {
     headers.set("X-Véritas-Role", roleKey);
     if (degraded) headers.set("X-Véritas-Degraded", "1");
 
-    return new Response(upstreamResp.body.pipeThrough(writable), { status: 200, headers });
+    return new Response(upstreamResp.body.pipeThrough({ readable, writable }), { status: 200, headers });
   }
 
   // Non-streaming.
