@@ -61,6 +61,7 @@ import {
 } from "../../lib/toolRegistry.server.js";
 
 import { SYSTEM_PROMPTS, ROLE_TO_MODEL, MODEL_TO_ROLE, UI_ROLE_TO_PROMPT_KEY } from "../../prompts.js";
+import { getProvider } from "../../lib/fallbackChains.js";
 
 // ------------------------------------------------------------------------------
 // Whitelist de modelos OpenRouter permitidos (Sección 3.1 del BUILD).
@@ -503,6 +504,7 @@ export async function onRequest(context) {
 
     // 6.3 — status
     if (path === "/api/status" && method === "GET") return await handleStatus(env, userEmail);
+    if (path === "/api/llm/complete" && method === "POST") return await handleLLMComplete(request, env, userEmail);
 
     // 6.4 — keys management (admin)
     if (path === "/api/keys/status" && method === "GET") return await handleKeysStatus(request, env, userEmail);
@@ -1677,21 +1679,29 @@ async function handleChatOpenRouter(request, env, userEmail) {
   let degraded = false;
   let upstreamResp = null;
 
+  // v2.8 — proveedor según el modelo (OpenRouter primario; Cerebras/Cohere fallback).
+  const upstreamProvider = getProvider(model);
   try {
-    const result = await withKeyRotation(env, "openrouter", async (key) => {
-      // Nota: getKey se llama dentro de withKeyRotation; capturamos el índice
-      // para telemetría. Hacemos un getKey previo para conocer el índice.
-      return await fetch("https://openrouter.ai/api/v1/chat/completions", {
-        method: "POST",
-        headers: {
+    const result = await withKeyRotation(env, upstreamProvider, async (key) => {
+      const accept = stream ? "text/event-stream" : "application/json";
+      let url, headers;
+      if (upstreamProvider === "cerebras") {
+        url = "https://api.cerebras.ai/v1/chat/completions";
+        headers = { "Authorization": `Bearer ${key}`, "Content-Type": "application/json", "Accept": accept };
+      } else if (upstreamProvider === "cohere") {
+        url = "https://api.cohere.com/v2/chat";
+        headers = { "Authorization": `Bearer ${key}`, "Content-Type": "application/json", "Accept": accept };
+      } else {
+        url = "https://openrouter.ai/api/v1/chat/completions";
+        headers = {
           "Authorization": `Bearer ${key}`,
           "Content-Type": "application/json",
           "HTTP-Referer": env.PAGES_URL || "https://veritas.pages.dev",
           "X-Title": "Véritas",
-          "Accept": stream ? "text/event-stream" : "application/json",
-        },
-        body: JSON.stringify(upstreamBody),
-      });
+          "Accept": accept,
+        };
+      }
+      return await fetch(url, { method: "POST", headers, body: JSON.stringify(upstreamBody) });
     });
     upstreamResp = result.response;
     keyIndexUsed = result.keyIndex;
@@ -1825,6 +1835,52 @@ async function logOpenRouterCall(env, userEmail, model, keyIndex, status, startT
 // ==============================================================================
 // 6.3 — STATUS (Dashboard)
 // ==============================================================================
+
+// ------------------------------------------------------------------------------
+// v2.8 — /api/llm/complete: completación stateless ligera (Prompt Arquitecto,
+// extracción de memorias, micro-tareas). Sin persistencia ni tools.
+// Prueba Cerebras → Cohere → OpenRouter con rotación de keys por proveedor.
+// ------------------------------------------------------------------------------
+async function handleLLMComplete(request, env, userEmail) {
+  const body = await request.json().catch(() => ({}));
+  const prompt = body.prompt;
+  if (!prompt || typeof prompt !== "string") return errorResponse("missing_prompt", 400);
+  const maxTokens = Math.min(4000, Math.max(64, Number(body.max_tokens) || 1200));
+  const chain = [
+    ["cerebras", "cerebras/llama3.1-8b", "https://api.cerebras.ai/v1/chat/completions"],
+    ["cohere", "cohere/command-r-plus", "https://api.cohere.com/v2/chat"],
+    ["openrouter", "openai/gpt-oss-20b:free", "https://openrouter.ai/api/v1/chat/completions"],
+  ];
+  const messages = [
+    { role: "system", content: body.system || "Eres un asistente útil. Responde solo lo pedido, sin formato extra." },
+    { role: "user", content: prompt },
+  ];
+  let lastErr = null;
+  for (const [provider, modelId, url] of chain) {
+    try {
+      const result = await withKeyRotation(env, provider, async (key) => {
+        const headers = { "Authorization": `Bearer ${key}`, "Content-Type": "application/json" };
+        if (provider === "openrouter") {
+          headers["HTTP-Referer"] = env.PAGES_URL || "https://veritas.pages.dev";
+          headers["X-Title"] = "Véritas";
+        }
+        return await fetch(url, {
+          method: "POST", headers,
+          body: JSON.stringify({ model: modelId, messages, stream: false, max_tokens: maxTokens }),
+        });
+      });
+      const resp = result.response;
+      if (resp.ok) {
+        const data = await resp.json().catch(() => null);
+        const text = data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content || "";
+        if (text) return json({ text, model: modelId, provider });
+      }
+      lastErr = `HTTP ${resp.status}`;
+    } catch (e) { lastErr = e.message; }
+  }
+  return errorResponse("all_providers_failed", 502, { detail: lastErr });
+}
+
 async function handleStatus(env, userEmail) {
   const services = listServices(env);
   const openrouterPool = services.includes("openrouter") ? await getPoolStatus(env, "openrouter") : null;

@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="description" content="Véritas v2.4 — Interfaz de orquestación multi-proveedor de modelos de IA" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self' https: data:; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://js.puter.com https://unpkg.com https://cdn.jsdelivr.net https://esm.sh; style-src 'self' 'unsafe-inline' https:; img-src https: data:; connect-src 'self' https: wss:; font-src https: data:;" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' https: data:; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com https://cdn.jsdelivr.net https://esm.sh; style-src 'self' 'unsafe-inline' https:; img-src https: data:; connect-src 'self' https: wss:; font-src https: data:;" />
   <title>Véritas — IA Orquestadora</title>
 
   <!-- Fuentes (OSINT/sci-fi: JetBrains Mono + Space Grotesk + Inter) -->
@@ -15,8 +15,6 @@
   <!-- Estilos -->
   <link rel="stylesheet" href="./styles.css" />
 
-  <!-- Puter.js (SDK frontend para Estratega y Fast) — cargar con defer -->
-  <script src="https://js.puter.com/v2/" defer></script>
 
   <!-- Dexie.js (IndexedDB para modo offline) -->
   <script src="https://cdn.jsdelivr.net/npm/dexie@3.2.4/dist/dexie.min.js" defer></script>
@@ -85,7 +83,7 @@
         <div class="onboarding-slide" data-step="0">
           <div class="onboarding-icon">🎭</div>
           <h3>Roles de IA</h3>
-          <p>Agente, Estratega, Pensador, Coder y Fast: cada uno con modelos y herramientas dedicadas, con cadenas de fallback automáticas.</p>
+          <p>Agente y Fast con Pensador opcional: cadenas de fallback OpenRouter → Cerebras → Cohere.</p>
         </div>
         <div class="onboarding-slide" data-step="1">
           <div class="onboarding-icon">🧰</div>
@@ -154,13 +152,12 @@
 
       <div class="sidebar-collapsible">
       <h1 class="brand">Véritas</h1>
-      <p class="brand-tagline" data-i18n="app.tagline">Verdad sin filtro</p>
+      <p class="brand-tagline" data-i18n="app.tagline">Información es ventaja. La ventaja es tuya.</p>
 
       <!-- Submenús de chat por categoría -->
       <nav class="chat-nav" aria-label="Chat categories">
-        <button class="nav-tab active" data-category="agent" data-i18n="nav.agent">Agente</button>
-        <button class="nav-tab" data-category="estratega" data-i18n="nav.estratega">Estratega</button>
-        <button class="nav-tab" data-category="fast" data-i18n="nav.fast">Fast</button>
+        <button class="nav-tab active" data-category="agent" data-i18n="nav.agent">🕵️ Agente</button>
+        <button class="nav-tab" data-category="fast" data-i18n="nav.fast">⚡ Fast</button>
       </nav>
 
       <!-- P1-4: Buscador de chats (solo por título) -->
@@ -247,17 +244,6 @@
 
       <!-- Mensajes del chat -->
       <div class="messages-container" id="messagesContainer" role="log" aria-live="polite" aria-atomic="false">
-        <!-- Empty state: welcome con tarjetas de modelo clickeables (P1-extra) -->
-        <div class="empty-state" id="emptyState">
-          <div class="welcome-orb">⬡</div>
-          <h2 class="welcome-title" data-i18n="welcome.title">Véritas</h2>
-          <p class="welcome-motto" data-i18n="welcome.motto">Información es ventaja. La ventaja es tuya.</p>
-          <p class="welcome-subtitle" data-i18n="welcome.subtitle">Selecciona un modelo para empezar</p>
-          <div class="welcome-model-cards" id="welcomeModelCards" role="list">
-            <!-- Tarjetas populadas dinámicamente por app.js según categoría activa -->
-          </div>
-          <p class="welcome-hint" data-i18n="welcome.hint">o escribe tu mensaje abajo ↑</p>
-        </div>
       </div>
 
       <!-- Indicador "X está escribiendo..." (sesión compartida) -->
@@ -268,20 +254,9 @@
       <!-- Barra de entrada -->
       <div class="input-bar" id="inputBar">
         <div class="input-toolbar">
-          <select class="model-selector" id="modelSelector" aria-label="Model selector" data-i18n="aria.modelSelector">
-            <!-- opciones populadas dinámicamente según submenú activo -->
-          </select>
-          <button class="icon-btn" id="attachBtn" aria-label="Attach file" data-i18n="aria.attach">
-            <span class="icon icon-attach"></span>
-          </button>
-          <button class="icon-btn" id="repoAttachBtn" title="Adjuntar documento del repositorio" data-i18n="title.repoAttach">
-            <span class="icon icon-repo-attach">📄</span>
-          </button>
-          <button class="toggle-btn" id="searchToggle" aria-pressed="false" title="Búsqueda Web" data-i18n="title.search">🔍</button>
-          <button class="toggle-btn" id="scrapeToggle" aria-pressed="false" title="Scraping" data-i18n="title.scrape">🌐</button>
-          <button class="toggle-btn" id="thinkingToggle" aria-pressed="false" title="Pensamiento" data-i18n="title.thinking">💭</button>
-          <button class="toggle-btn" id="deepThinkingBtn" aria-pressed="false" title="Pensador (razonamiento profundo)" hidden>🧠</button>
-          <button class="toggle-btn" id="codeFirstToggle" aria-pressed="false" title="Code-first: priorizar programación" data-i18n="title.codeFirst" hidden>💻</button>
+          <button class="icon-btn" id="attachBtn" aria-label="Attach file" title="📎 Adjuntar archivo" data-i18n="aria.attach">📎</button>
+          <button class="toggle-btn" id="searchToggle" aria-pressed="false" title="🔎 Búsqueda + Scraping" data-i18n="title.search">🔎</button>
+          <button class="toggle-btn" id="deepThinkingBtn" aria-pressed="false" title="🧠 Pensador (Nemotron 3 Ultra primero)">🧠</button>
         </div>
 
         <div class="input-wrapper">
@@ -305,23 +280,7 @@
         <!-- Chips de preview para attachments multimedia -->
         <div class="attachment-chips" id="attachmentChips" hidden></div>
 
-        <!-- Chips de documentos del repo adjuntados -->
-        <div class="repo-doc-chips" id="repoDocChips" hidden></div>
 
-        <!-- Popover de selección de docs del repo -->
-        <div class="repo-attach-popover" id="repoAttachPopover" hidden>
-          <div class="repo-attach-header">
-            <span data-i18n="repo.selectDocs">Seleccionar documentos</span>
-            <button class="icon-btn repo-attach-close" id="repoAttachClose">✕</button>
-          </div>
-          <input type="text" class="repo-attach-search" id="repoAttachSearch"
-            placeholder="Filtrar..." data-i18n-placeholder="repo.searchPlaceholder" />
-          <ul class="repo-attach-list" id="repoAttachList"></ul>
-          <div class="repo-attach-footer">
-            <span id="repoAttachCount">0 seleccionados</span>
-            <button class="action-btn primary small" id="repoAttachConfirm" data-i18n="repo.attachConfirm">Adjuntar</button>
-          </div>
-        </div>
 
         <!-- Contador de tokens (v2.4) -->
         <div class="token-counter" id="tokenCounter" title="Tokens usados / disponibles">
@@ -346,7 +305,7 @@
           </span>
           <span class="ticker-item" title="Proveedor de fallback">
             <span class="live-dot"></span>
-            <span id="tickerFallback">Fallback: Estratega</span>
+            <span id="tickerFallback">Fallback: ⚡ Fast</span>
           </span>
         </div>
       </div>
@@ -646,7 +605,7 @@
           <p class="hint">Ajustes pensados para free tier: ventana deslizante, truncado defensivo de tool results, sticky routing por chat y caché de prompt cuando OpenRouter lo soporte.</p>
           <div class="settings-info-grid">
             <div class="settings-info-card"><strong>Agente</strong><span>OpenRouter free pool: Nemotron 3, Gemma 4, GPT-OSS, North Mini Code y Laguna S/XS.</span></div>
-            <div class="settings-info-card"><strong>Estratega/Fast</strong><span>Puter GLM: 4.7 Flash → 4.6V Flash → 4.5 Flash.</span></div>
+            <div class="settings-info-card"><strong>Estratega/Fast</strong><span>Cerebras → Cohere como fallback del plan gratuito.</span></div>
             <div class="settings-info-card"><strong>Tools largas</strong><span>Modo async/pending por defecto para proteger el límite de Cloudflare.</span></div>
           </div>
           <label class="toggle-row">
@@ -745,7 +704,7 @@
         <!-- Chats -->
         <section class="settings-section" id="settings-chats" hidden>
           <h3 data-i18n="settings.chats">Chats</h3>
-          <p class="hint">Tres roles visibles: Agente, Estratega y Fast. En Agente puedes activar Pensador o Code-first con toggles.</p>
+          <p class="hint">Dos roles: Agente y Fast. El botón 🧠 Pensador fuerza Nemotron 3 Ultra como orquestador.</p>
           <label class="toggle-row">
             <span data-i18n="settings.chats.autoTitle">Auto-sugerir título tras primer intercambio</span>
             <input type="checkbox" id="chatsAutoTitle" checked />
@@ -838,7 +797,7 @@
           <h3 data-i18n="settings.about">Acerca de</h3>
           <img src="https://ik.imagekit.io/csdp6gbr6/17815803429593.png" alt="Véritas logo" class="about-logo" />
           <p><strong>Véritas v2.4</strong> — Intelligence OS para IA multi-modelo.</p>
-          <p data-i18n="settings.about.desc">Centro de mando IA con Agente, Estratega, Fast, Prompt Arquitecto, sandbox telemétrico, 77 skills, 43 tools y diseño free-tier-first.</p>
+          <p data-i18n="settings.about.desc">Centro de mando IA con Agente, Fast, 🧠 Pensador, Prompt Arquitecto, sandbox telemétrico y diseño free-tier-first.</p>
           <div class="settings-info-grid">
             <div class="settings-info-card"><strong>Entidad viva</strong><span>Canvas con estados idle, listening, thinking, searching, tooling, coding, error y offline.</span></div>
             <div class="settings-info-card"><strong>Sandbox Pro</strong><span>Snapshots, diff, tests browser-side, console/network capture y reparación con Coder.</span></div>
@@ -932,7 +891,6 @@
         <select id="promptCraftRole">
           <option value="agent">\U0001f50d Agente (OSINT / Investigación)</option>
           <option value="coder">\U0001f4bb Coder (Ingeniería de software)</option>
-          <option value="estratega">\U0001f9e0 Estratega (Análisis profundo)</option>
           <option value="pensador">\U0001f4ad Pensador (Razonamiento)</option>
         </select>
       </div>

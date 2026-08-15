@@ -630,19 +630,10 @@ function setupEventListeners() {
   $("#stopBtn")?.addEventListener("click", () => stopStreaming());
 
   // Toggles (search/scrape/thinking).
-  $("#searchToggle")?.addEventListener("click", () => toggleButton("search"));
-  $("#scrapeToggle")?.addEventListener("click", () => toggleButton("scrape"));
-  $("#thinkingToggle")?.addEventListener("click", () => toggleButton("thinking"));
-  $("#codeFirstToggle")?.addEventListener("click", () => {
-    toggleButton("codeFirst");
-    if (state.currentCategory === "agent" && state.toggles.codeFirst) {
-      state.currentModel = "cohere/north-mini-code:free";
-      state.currentRole = resolveUiRoleForCurrentSelection(state.currentModel);
-      populateModelSelector();
-      renderChatHeader();
-      setEntityState("coding");
-      toast("Code-first activado: prioridad a programación", "info", 2500);
-    }
+  // v2.8: Búsqueda + Scraping unificados en un único toggle 🔎.
+  $("#searchToggle")?.addEventListener("click", () => {
+    toggleButton("search");
+    state.toggles.scrape = state.toggles.search;
   });
 
   // Deep Thinking toggle (solo visible cuando rol === "agent").
@@ -894,9 +885,13 @@ function toggleButton(name) {
   state.toggles[name] = active;
 }
 
+function providerLabel(p) {
+  return p === "cerebras" ? "Cerebras" : p === "cohere" ? "Cohere" : "OpenRouter";
+}
+
 function resolveUiRoleForCurrentSelection(modelId = state.currentModel) {
   if (state.currentCategory === "agent") return "agent";
-  if (state.currentCategory === "estratega") return "estratega";
+  if (state.currentCategory === "estratega") return "agent";
   if (state.currentCategory === "fast") return "fast";
   return getRoleForModel(modelId) || "agent";
 }
@@ -904,11 +899,11 @@ function resolveUiRoleForCurrentSelection(modelId = state.currentModel) {
 function getDefaultModelForCategory(category) {
   return {
     agent: "nvidia/nemotron-3-super-120b-a12b:free",
-    estratega: "z-ai/glm-4.7-flash",
-    fast: "z-ai/glm-4.7-flash",
+    estratega: "cerebras/llama3.1-8b",
+    fast: "cerebras/llama3.1-8b",
     // Compatibilidad con categorías antiguas persistidas.
     coder: "cohere/north-mini-code:free",
-    general: "z-ai/glm-4.7-flash",
+    general: "cerebras/llama3.1-8b",
   }[category] || "nvidia/nemotron-3-super-120b-a12b:free";
 }
 
@@ -1007,8 +1002,8 @@ function renderChatItem(chat) {
   const providerChip = document.createElement("span");
   providerChip.className = "chat-item-provider";
   // Determinar provider por el último mensaje del chat.
-  providerChip.classList.add(provider === "puter" ? "puter" : "openrouter");
-  providerChip.textContent = provider === "puter" ? "Puter" : "OpenRouter";
+  providerChip.classList.add(provider);
+  providerChip.textContent = providerLabel(provider);
   meta.appendChild(providerChip);
   if (chat.is_shared) {
     const shared = document.createElement("span");
@@ -1244,7 +1239,7 @@ function populateModelSelector() {
       "poolside/laguna-s-2.1:free",
       "poolside/laguna-xs-2.1:free",
     ];
-  } else if (state.currentCategory === "estratega") {
+  } else if (false) {
     models = [
       "z-ai/glm-4.7-flash",
       "z-ai/glm-4.6v-flash",
@@ -1254,7 +1249,7 @@ function populateModelSelector() {
       "nvidia/nemotron-3-super-120b-a12b:free",
     ];
   } else if (state.currentCategory === "fast") {
-    models = ["z-ai/glm-4.7-flash", "z-ai/glm-4.6v-flash", "z-ai/glm-4.5-flash"];
+    models = ["cerebras/llama3.1-8b", "cerebras/llama-3.3-70b", "cohere/command-r-plus"];
   } else {
     models = [getDefaultModelForCategory(state.currentCategory)];
   }
@@ -1263,7 +1258,7 @@ function populateModelSelector() {
     const info = getModelDisplayInfo(m);
     const opt = document.createElement("option");
     opt.value = m;
-    opt.textContent = `${info.shortName} — ${info.roleName} (${info.provider === "puter" ? "Puter" : "OpenRouter"})`;
+    opt.textContent = `${info.shortName} — ${info.roleName} (${providerLabel(info.provider)})`;
     if (m === state.currentModel) opt.selected = true;
     sel.appendChild(opt);
   });
@@ -1290,7 +1285,8 @@ function renderChatHeader() {
   const ct2 = $("#chatCrumbTitle");
   if (ct2) ct2.textContent = state.currentChat.title;
   const modelChip = $("#modelChip");
-  modelChip.textContent = state.currentModel || "—";
+  const _info = getModelInfo(state.currentModel);
+  modelChip.textContent = `${_info.roleName || "🤖"} · ${_info.shortName}`;
   modelChip.className = `model-chip ${getProvider(state.currentModel)}`;
 
   // Cached badge.
@@ -1320,17 +1316,8 @@ function renderChatHeader() {
 function renderEmptyState() {
   const container = $("#messagesContainer");
   if (!container) return;
-  container.innerHTML = `
-    <div class="empty-state">
-      <div class="welcome-orb">⬡</div>
-      <h2 class="welcome-title">${escapeHTML(t("welcome.title"))}</h2>
-      <p class="welcome-motto">${escapeHTML(t("welcome.motto"))}</p>
-      <p class="welcome-subtitle">${escapeHTML(t("welcome.subtitle"))}</p>
-      <div class="welcome-model-cards" id="welcomeModelCards" role="list"></div>
-      <p class="welcome-hint">${escapeHTML(t("welcome.hint"))}</p>
-    </div>
-  `;
-  renderWelcomeModelCards();
+  // v2.8: sin tarjetas ni hero — el área de chat queda limpia.
+  container.innerHTML = "";
 }
 
 // P1-extra: renderiza las tarjetas de modelo según la categoría activa.
@@ -1350,10 +1337,10 @@ function renderWelcomeModelCards() {
       "poolside/laguna-s-2.1:free",
       "poolside/laguna-xs-2.1:free",
     ];
-  } else if (state.currentCategory === "estratega") {
+  } else if (false) {
     models = ["z-ai/glm-4.7-flash", "z-ai/glm-4.6v-flash", "z-ai/glm-4.5-flash", "google/gemma-4-31b-it:free", "openai/gpt-oss-20b:free"];
   } else if (state.currentCategory === "fast") {
-    models = ["z-ai/glm-4.7-flash", "z-ai/glm-4.6v-flash", "z-ai/glm-4.5-flash"];
+    models = ["cerebras/llama3.1-8b", "cerebras/llama-3.3-70b", "cohere/command-r-plus"];
   } else {
     models = [getDefaultModelForCategory(state.currentCategory)];
   }
@@ -1368,7 +1355,7 @@ function renderWelcomeModelCards() {
         <div class="welcome-card-icon">${info.icon}</div>
         <div class="welcome-card-name">${escapeHTML(info.shortName)}</div>
         <div class="welcome-card-role">${escapeHTML(info.roleName)}</div>
-        <span class="welcome-card-provider ${info.provider}">${info.provider === "puter" ? "Puter" : "OpenRouter"}</span>
+        <span class="welcome-card-provider ${info.provider}">${providerLabel(info.provider)}</span>
       </div>
     `;
   }).join("");
@@ -1401,7 +1388,7 @@ function renderWelcomeModelCards() {
 
 // P1-extra: helper que devuelve info de display para cada modelo.
 function getModelDisplayInfo(modelId) {
-  const provider = getProvider(modelId) === "puter" ? "puter" : "openrouter";
+  const provider = getProvider(modelId);
   const map = {
     // Stack Nemotron (Agente)
     "nvidia/nemotron-3-ultra-550b-a55b:free": {
@@ -1424,13 +1411,13 @@ function getModelDisplayInfo(modelId) {
     },
     "google/gemma-4-31b-it:free": {
       shortName: "Gemma 4 31B",
-      roleName: state.currentCategory === "estratega" ? t("roles.estratega") : t("roles.agent"),
+      roleName: "🔷 Subagente Analista",
       icon: "🔷",
       provider,
     },
     "openai/gpt-oss-20b:free": {
       shortName: "GPT-OSS 20B",
-      roleName: state.currentCategory === "estratega" ? t("roles.estratega") : t("roles.agent"),
+      roleName: "🔎 Subagente de Investigación",
       icon: "◌",
       provider,
     },
@@ -1449,7 +1436,7 @@ function getModelDisplayInfo(modelId) {
     // Roles standalone
     "cohere/north-mini-code:free": {
       shortName: "North Mini Code",
-      roleName: t("roles.coder"),
+      roleName: "👾 Subagente de Código",
       icon: "⚙",
       provider,
     },
@@ -1465,22 +1452,28 @@ function getModelDisplayInfo(modelId) {
       icon: "🔧",
       provider,
     },
-    "z-ai/glm-4.7-flash": {
-      shortName: "GLM-4.7 Flash",
-      roleName: state.currentCategory === "estratega" ? t("roles.estratega") : t("roles.fast"),
+    "cerebras/llama3.1-8b": {
+      shortName: "Cerebras 8B",
+      roleName: "⚡ Explorador Veloz",
       icon: "⚡",
       provider,
     },
-    "z-ai/glm-4.6v-flash": {
-      shortName: "GLM-4.6V Flash",
-      roleName: state.currentCategory === "estratega" ? t("roles.estratega") : t("roles.fast"),
-      icon: "⚡",
+    "cerebras/llama-3.3-70b": {
+      shortName: "Cerebras 70B",
+      roleName: "🏃 Corredor de Fondo",
+      icon: "🏃",
       provider,
     },
-    "z-ai/glm-4.5-flash": {
-      shortName: "GLM-4.5 Flash",
-      roleName: state.currentCategory === "estratega" ? t("roles.estratega") : t("roles.fast"),
-      icon: "⚡",
+    "cohere/command-r-plus": {
+      shortName: "Command R+",
+      roleName: "🧭 Estratega de Ruta",
+      icon: "🧭",
+      provider,
+    },
+    "cohere/command-a-03-2025": {
+      shortName: "Command A",
+      roleName: "🗂️ Archivista Veloz",
+      icon: "🗂️",
       provider,
     },
   };
@@ -1884,61 +1877,12 @@ async function sendMessage() {
 // Cuando un modelo con restricciones de fabricante (Nemotron, Laguna) emite
 // <fallback_to_uncensored>, se re-enruta la query al Estratega GLM permisivo vía Puter.
 // ==============================================================================
-const UNCENSORED_STRATEGIST_MODEL = "z-ai/glm-4.7-flash";
 
 /**
  * Llama al Estratega GLM directamente con la query original del usuario.
  * Usa Puter.js (no pasa por el Worker) con el system prompt estratégico.
  * Streaming: muestra progreso en tiempo real.
  */
-async function callUncensoredStrategistFallback(originalQuery, prefixText) {
-  if (typeof puter === "undefined" || !puter.ai?.chat) {
-    throw new Error("Puter.js no disponible para fallback a Estratega GLM");
-  }
-
-  const strategistPrompt = SYSTEM_PROMPTS.strategist;
-  const messages = [
-    { role: "system", content: strategistPrompt },
-    { role: "user", content: originalQuery },
-  ];
-
-  toast(t("toast.uncensoredFallback") || "Enrutando a Estratega GLM permisivo...", "info", 4000);
-  showStreamingIndicator(t("stream.processing"), "processing");
-
-  let text = "";
-  try {
-    const response = await puter.ai.chat(messages, {
-      model: UNCENSORED_STRATEGIST_MODEL,
-      stream: true,
-    });
-
-    for await (const chunk of response) {
-      const delta = chunk?.message?.content || chunk?.text || "";
-      if (delta) {
-        text += delta;
-        // Mostrar respuesta del Estratega GLM con prefijo si lo hay.
-        updateStreamingMessage((prefixText || "") + text);
-      }
-    }
-  } finally {
-    hideStreamingIndicator();
-  }
-
-  // Separar razonamiento_interno si lo hubiera.
-  const thinkMatch = text.match(/<razonamiento_interno>([\s\S]*?)<\/razonamiento_interno>/);
-  if (thinkMatch) {
-    text = text.replace(/<razonamiento_interno>[\s\S]*?<\/razonamiento_interno>/, "").trim();
-  }
-
-  return {
-    text,
-    model: UNCENSORED_STRATEGIST_MODEL,
-    tokens_in: 0,
-    tokens_out: 0,
-    cached_tokens: 0,
-  };
-}
-
 // ==============================================================================
 // TOOL CALLER LOOP (máx 5 iteraciones)
 // ==============================================================================
@@ -1990,26 +1934,13 @@ async function runChatWithTools(userContent) {
       // ── Fallback ético: <fallback_to_uncensored> ──
       const uncensoredFallback = parseFallbackToVenice(response.text);
       if (uncensoredFallback) {
-        console.log("[chat] Fallback ético detectado:", uncensoredFallback.reason);
+        // v2.8: sin Estratega/Puter — solo se limpia el marcador y se continúa.
         const strippedText = stripFallbackToVenice(response.text);
-        const prefix = strippedText ? strippedText + "\n\n--- *Fallback a Estratega GLM* ---\n\n" : "";
-        // Re-enrutar al Estratega GLM permisivo con la query original.
-        try {
-          const auxResp = await callUncensoredStrategistFallback(uncensoredFallback.original_query || userContent, prefix);
-          response.text = auxResp.text;
-          response.model = auxResp.model;
-          response.tokens_in = auxResp.tokens_in;
-          response.tokens_out = auxResp.tokens_out;
-          response.cached_tokens = 0;
-          assistantText += prefix + response.text;
-        } catch (auxErr) {
-          console.warn("[chat] Fallback a Estratega GLM falló:", auxErr.message);
-          if (strippedText) {
-            assistantText += strippedText + "\n\n";
-          }
-          assistantText += `[Error: el modelo primario rechazó la query y el fallback a Estratega GLM falló: ${auxErr.message}]`;
+        if (strippedText) {
+          response.text = strippedText;
+          assistantText += strippedText;
         }
-        break; // Terminar el loop — Estratega GLM ya respondió.
+        break;
       }
 
       assistantText += response.text;
@@ -2177,7 +2108,6 @@ async function loadCrossChatMemories() {
 async function extractAndSaveMemories(lastAssistantText) {
   try {
     if (!lastAssistantText || lastAssistantText.length < 50) return;
-    if (typeof puter === "undefined" || !puter.ai || !puter.ai.chat) return;
 
     const prompt = `Analiza este mensaje de un asistente de IA. Identifica si hay datos personales, preferencias, o información contextual del usuario que valga la pena recordar para conversaciones futuras.
 
@@ -2192,11 +2122,13 @@ ${lastAssistantText.slice(-3000)}
 Responde SOLO un JSON array de objetos con formato: [{"content": "...", "category": "personal|tech|preference|fact", "importance": 1-5}]
 No incluyas nada más que el JSON array.`;
 
-    const response = await puter.ai.chat(prompt, {
-      model: "z-ai/glm-4.7-flash",
-      stream: false,
+    const llmResp = await fetch("/api/llm/complete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt, max_tokens: 800 }),
     });
-    const text = (response?.message?.content || response?.text || "").trim();
+    if (!llmResp.ok) return;
+    const text = (((await llmResp.json().catch(() => null)) || {}).text || "").trim();
     if (!text || text === "[]" || !text.startsWith("[")) return;
 
     let memories;
@@ -2353,74 +2285,7 @@ async function callModel(userContent, previousAssistantText, isFollowUp) {
   // Aplicar truncado de tool results.
   const finalContext = ContextManager.truncateToolResults(context);
 
-  if (provider === "puter") {
-    return await callPuter(finalContext);
-  } else {
-    return await callOpenRouterWithRetry(finalContext);
-  }
-}
-
-async function callPuter(messages) {
-  if (typeof puter === "undefined") throw new Error("Puter.js no cargado");
-  setEntityState("processing");
-  showStreamingIndicator(t("stream.processing"), "processing");
-
-  // P0-4: AbortController para cancelar streaming. Puter.js no soporta signal
-  // nativo, así que verificamos signal.aborted dentro del loop y rompemos.
-  state.abortController = new AbortController();
-  const signal = state.abortController.signal;
-
-  let text = "";
-  let thinkingContent = "";
-
-  try {
-    const response = await puter.ai.chat(messages, {
-      model: state.currentModel,
-      stream: true,
-    });
-
-    let firstToken = true;
-    for await (const chunk of response) {
-      if (signal.aborted) break; // P0-4: abort limpio del loop
-      if (firstToken) {
-        firstToken = false;
-        hideStreamingIndicator();
-      }
-      const delta = chunk?.message?.content || chunk?.text || "";
-      if (delta) {
-        // Detectar <razonamiento_interno>.
-        if (delta.includes("<razonamiento_interno>")) {
-          setEntityState("processing");
-          showStreamingIndicator(t("stream.thinking"), "thinking");
-        }
-        text += delta;
-        // Renderizar streaming en el último mensaje assistant.
-        updateStreamingMessage(text);
-      }
-    }
-
-    // P0-4: si fue abortado, devolver lo acumulado hasta el momento.
-    if (signal.aborted) {
-      return { text, thinking_content: thinkingContent, tokens_in: 0, tokens_out: 0, cached_tokens: 0, aborted: true };
-    }
-
-    // Separar razonamiento_interno del texto final.
-    const thinkMatch = text.match(/<razonamiento_interno>([\s\S]*?)<\/razonamiento_interno>/);
-    if (thinkMatch) {
-      thinkingContent = thinkMatch[1].trim();
-      text = text.replace(/<razonamiento_interno>[\s\S]*?<\/razonamiento_interno>/, "").trim();
-    }
-
-    return { text, thinking_content: thinkingContent, tokens_in: 0, tokens_out: 0, cached_tokens: 0 };
-  } catch (e) {
-    // P0-4: si fue abortado durante el await inicial, devolver partial.
-    if (signal.aborted) {
-      return { text, thinking_content: thinkingContent, tokens_in: 0, tokens_out: 0, cached_tokens: 0, aborted: true };
-    }
-    throw { error: "upstream_error", message: e.message };
-  } finally {
-    state.abortController = null;
-  }
+  return await callOpenRouterWithRetry(finalContext);
 }
 
 // v2.5 — Reconexión SSE con backoff (hasta 3 intentos) si el stream se corta.
@@ -3939,10 +3804,9 @@ async function loadDashboard() {
     const grid = $("#dashboardModels");
     grid.innerHTML = "";
 
-    // Puter models (siempre available según Worker).
-    const puterModels = ["z-ai/glm-4.7-flash", "z-ai/glm-4.6v-flash", "z-ai/glm-4.5-flash"];
-    puterModels.forEach((m) => {
-      grid.innerHTML += `<div class="dashboard-card"><div class="dashboard-card-name">${m}</div><div class="dashboard-card-status status-green">🟢 Puter</div></div>`;
+    // v2.8 — Cerebras/Cohere como fallback (tarjetas informativas).
+    ["Cerebras", "Cohere"].forEach((name) => {
+      grid.innerHTML += `<div class="dashboard-card"><div class="dashboard-card-name">${name}</div><div class="dashboard-card-status status-amber">⚡ Fallback</div></div>`;
     });
 
     // OpenRouter.
@@ -4804,26 +4668,14 @@ REGLAS:
 6. Responde SOLO con el prompt generado. Nada más.`;
 
     try {
-      if (typeof puter === "undefined" || !puter.ai || !puter.ai.chat) {
-        throw new Error("Puter.js no disponible");
-      }
-      const glmModels = ["z-ai/glm-4.7-flash", "z-ai/glm-4.6v-flash", "z-ai/glm-4.5-flash"];
-      let text = "";
-      let lastError = null;
-      for (const model of glmModels) {
-        try {
-          const response = await puter.ai.chat(metaPrompt, { model, stream: false });
-          text = (response?.message?.content || response?.text || "").trim();
-          if (text) {
-            if (model !== glmModels[0]) showToast(`Fallback usado: ${model}`);
-            break;
-          }
-          lastError = new Error(`Respuesta vacía de ${model}`);
-        } catch (modelErr) {
-          lastError = modelErr;
-        }
-      }
-      if (!text) throw lastError || new Error("Respuesta vacía de GLM");
+      const llmResp = await fetch("/api/llm/complete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: metaPrompt, max_tokens: 1500 }),
+      });
+      const llmData = await llmResp.json().catch(() => null);
+      const text = ((llmData && llmData.text) || "").trim();
+      if (!text) throw new Error((llmData && (llmData.detail || llmData.error)) || "Respuesta vacía");
 
       lastGeneratedPrompt = text;
       resultEl.textContent = text;
