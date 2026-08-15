@@ -28,10 +28,15 @@ pages_build_output_dir = "."
 # ------------------------------------------------------------------------------
 # Ejecuta /functions/purge/scheduled.js cada 6 horas.
 # Cloudflare free plan soporta 3 crons con frecuencia mínima de 1 hora.
-# Las zonas horosas se evalúan en UTC.
+# Las zonas horarias se evalúan en UTC.
+#
+# ⚠️ El bloque [triggers] NO es válido en configuración de Pages (rompe
+# `wrangler pages deploy` con error de validación). El cron se configura en el
+# DASHBOARD: Workers & Pages → veritas-ai → Settings → Triggers → Cron Triggers
+# → añadir: 0 */6 * * *
 # ------------------------------------------------------------------------------
-[triggers]
-crons = ["0 */6 * * *"]
+# [triggers]
+# crons = ["0 */6 * * *"]
 
 # ------------------------------------------------------------------------------
 # Bindings: D1 (SQLite) y R2 (object storage)
@@ -73,9 +78,13 @@ APP_VERSION = "2.7.1"
 # ~500K eventos/mes). head_sampling_rate=1.0 registra todos los requests
 # (ideal para depuración); en producción con mucho tráfico, bajar a 0.1.
 # ------------------------------------------------------------------------------
-[observability]
-enabled = true
-head_sampling_rate = 0.1
+# ⚠️ El bloque [observability] NO es válido en configuración de Pages (rompe
+# `wrangler pages deploy` con error de validación). En Pages los logs se
+# activan solos desde el dashboard: Workers & Pages → veritas-ai → Logs.
+# ------------------------------------------------------------------------------
+# [observability]
+# enabled = true
+# head_sampling_rate = 0.1
 
 # ------------------------------------------------------------------------------
 # Limits del Worker (defaults de Cloudflare, documentados aquí para referencia)
