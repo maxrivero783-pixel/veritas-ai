@@ -104,9 +104,13 @@ No necesitas crear carpetas ni subir nada; el Worker las crea solas.
    - **Project name**: `veritas-ai` (este nombre define tu URL final).
    - **Production branch**: `main`.
    - **Framework preset**: `None`.
-   - **Build command`: déjalo **vacío**.
+   - **Build command**: déjalo **vacío**.
    - **Build output directory**: escribe `.` (un punto).
    - **Root directory**: déjalo vacío.
+   - **Deploy command**: déjalo **vacío** (muy importante). ⚠️ Si aquí aparece
+     `npx wrangler deploy`, **bórralo**. Este repo se despliega solo como sitio
+     estático + Pages Functions; poner `wrangler deploy` produce el error
+     `Missing entry-point to Worker script or to assets directory`.
    - **Environment variables**: abre la sección y añade las variables listadas en la sección 7.1 (puedes hacerlo después, pero conviene poner las no-secretas ahora).
 6. Pulsa **Save and Deploy**.
 
@@ -124,7 +128,7 @@ El primer deploy tarda entre 30 s y 2 min. Cuando termine verás una URL tipo `h
 
 - Tipo: **D1 database**
 - **Variable name**: `DB`
-- **D1 database**: selecciona `veritas-db`
+- **D1 database**: selecciona `veritas-db` (ID `5733290e-0553-4b78-8ad6-1073fac7ecf2`)
 
 ### 6.2 R2 (opcional)
 
@@ -319,6 +323,7 @@ A partir de este momento:
 
 | Síntoma | Causa | Arreglo en el dashboard |
 |---|---|---|
+| Build falla con `Missing entry-point to Worker script or to assets directory` (y el log muestra `Executing user deploy command: npx wrangler deploy`) | Pusiste `npx wrangler deploy` en el **Deploy command** | Settings → Builds & deployments → Build settings → Edit → **borra el Deploy command** (déjalo vacío) → Save → Retry deployment |
 | `D1_ERROR: no such table: users` | Schema no aplicado | D1 → `veritas-db` → Console → pega `schema.sql` → Execute |
 | `DB binding is required` | Falta binding D1 | Settings → Bindings → añade `DB` → Retry deployment |
 | `r2_unavailable` (solo al subir/bajar archivos) | No añadiste el binding `BUCKET` | Opcional: crea el bucket (paso 4), añade binding `BUCKET` y redeployea. Si no quieres R2, ignóralo. |
