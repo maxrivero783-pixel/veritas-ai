@@ -2579,6 +2579,8 @@ body.is-offline .send-btn { background: var(--text-muted); }
 }
 
 /* --- Panel --- */
+.prompt-craft-panel[hidden] { display: none !important; }
+
 .prompt-craft-panel {
   position: fixed;
   z-index: 9001;
