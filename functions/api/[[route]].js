@@ -1895,9 +1895,16 @@ async function handleDebugTrace(request, env, userEmail) {
     await log("s5_err:" + e.message);
     return json({ steps, error: e.message });
   }
+  const mode = clientBody.mode || "instance";
   if (stream) {
     const ts = new TransformStream({ transform(c, ctrl) { ctrl.enqueue(c); } });
     await log("s6_transform_created");
+    if (mode === "plainpair") {
+      const { readable, writable } = ts;
+      return new Response(upstreamResp.body.pipeThrough({ readable, writable }), {
+        status: 200, headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" },
+      });
+    }
     return new Response(upstreamResp.body.pipeThrough(ts), {
       status: 200,
       headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" },
@@ -1907,6 +1914,9 @@ async function handleDebugTrace(request, env, userEmail) {
   await log("s7_text:" + raw.length);
   let data = null; try { data = JSON.parse(raw); } catch {}
   await log("s8_parse:" + (data ? "ok" : "nojson"));
+  if (mode === "jsondata") {
+    return json(data, 200, { "X-Véritas-Key-Index": "1" });
+  }
   if (data && data.usage) {
     await logOpenRouterCall(env, userEmail, model, 1, upstreamResp.status, Date.now(), {
       tokens_in: data.usage.prompt_tokens, tokens_out: data.usage.completion_tokens, cached_tokens: 0,
