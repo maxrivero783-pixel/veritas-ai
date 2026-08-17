@@ -2084,7 +2084,8 @@ async function runChatWithTools(userContent) {
       // (limpio de markup) como respuesta final única y persistimos.
       if (state.currentRole === "agent") {
         let clean = extractSandboxArtifacts(cleanAgentText(response.text));
-        if (!clean || clean.length < 40) {
+        const looksBroken = /timed out|\[ERROR|^ERROR|API failed/i.test(clean);
+        if (!clean || clean.length < 40 || looksBroken) {
           // v2.8.8: el server no devolvió prosa final; sintetizamos con su crudo
           // (que contiene los tool_result con los datos reales).
           const synth = await synthesizeFinal(userContent, response.text.replace(/<[^>]+>/g, " ").slice(0, 6000));
