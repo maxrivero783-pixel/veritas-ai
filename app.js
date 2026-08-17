@@ -5018,7 +5018,8 @@ function showAppLayout(show) {
   if (chip) {
     chip.hidden = !show;
     const nm = $("#sidebarUserName");
-    if (nm && state.user_email) nm.textContent = state.user_email.split("@")[0];
+    const email = state.user_email || localStorage.getItem("veritas_user") || "";
+    if (nm && email) nm.textContent = email.split("@")[0];
   }
   const layout = document.querySelector(".app-layout");
   if (layout) layout.style.display = show ? "" : "none";
