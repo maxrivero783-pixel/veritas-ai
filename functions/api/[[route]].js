@@ -60,7 +60,7 @@ import {
   importHandler,
 } from "../../lib/toolRegistry.server.js";
 
-import { SYSTEM_PROMPTS, ROLE_TO_MODEL, MODEL_TO_ROLE, UI_ROLE_TO_PROMPT_KEY } from "../../prompts.js";
+import { SYSTEM_PROMPTS, ROLE_TO_MODEL, MODEL_TO_ROLE, UI_ROLE_TO_PROMPT_KEY, LITE_AGENT_PROMPT } from "../../prompts.js";
 import { getProvider } from "../../lib/fallbackChains.js";
 
 // ------------------------------------------------------------------------------
@@ -2924,18 +2924,63 @@ async function handleOfflineBundle(env, userEmail) {
 // Si escalate === "ultra" → Nemotron 3 Ultra (orquestador).
 // Inyecta el system prompt correspondiente (super_executor o ultra_orchestrator).
 // Retorna streaming SSE igual que /api/chat/openrouter.
+
+// v2.9: nucleo de ejecucion de tools reutilizable (loop server-side del agente).
+async function runToolByName(env, userEmail, role, toolName, args, chatId) {
+  if (!TOOL_REGISTRY_SERVER[toolName]) return { status: "error", output: "tool_not_found: " + toolName };
+  if (!isAllowed(toolName, role)) return { status: "forbidden", output: "Tool no permitida para el rol " + role + "." };
+  const validation = validateArgs(toolName, args || {});
+  if (!validation.ok) return { status: "invalid_args", output: validation.error };
+  const meta = TOOL_REGISTRY_SERVER[toolName];
+  if (meta.requiresOauth) {
+    const row = await env.DB.prepare(
+      "SELECT invalid FROM external_connections WHERE user_email = ? AND provider = ?"
+    ).bind(userEmail, meta.requiresOauth).first();
+    if (!row) return { status: "forbidden", output: "Conecta tu cuenta de " + meta.requiresOauth + " en Ajustes." };
+    if (row.invalid === 1) return { status: "forbidden", output: "Conexion " + meta.requiresOauth + " revocada." };
+  }
+  const useToolCache = TOOL_CACHE_ALLOWLIST.has(toolName);
+  let toolCacheKey = null;
+  if (useToolCache) {
+    const _u = TOOL_CACHE_USER_SCOPED.has(toolName) ? userEmail + "|" : "";
+    toolCacheKey = await sha256Hex(toolName + "|" + _u + JSON.stringify(validation.args || {}));
+    const hit = await toolCacheGet(env, toolCacheKey);
+    if (hit) return { status: hit.status || "ok", output: hit.output, from_cache: true };
+  }
+  const startTs = Date.now();
+  try {
+    let result;
+    if (toolName === "create_skill") {
+      const r = await handleInlineCreateSkill(validation.args, env, userEmail);
+      const d = await r.json().catch(() => null);
+      result = { status: d && d.ok ? "ok" : "error", output: (d && d.message) || "skill procesada" };
+    } else {
+      const handler = await importHandler(toolName);
+      const ctx = { env, user_email: userEmail, chat_id: chatId || null, role };
+      result = await Promise.race([
+        handler.run(validation.args, ctx),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("tool_timeout")), 20_000)),
+      ]);
+    }
+    const latency = Date.now() - startTs;
+    persistToolCall(env, userEmail, chatId, toolName, validation.args, result, latency).catch(() => {});
+    if (useToolCache && toolCacheKey && result && result.status === "ok") {
+      await toolCacheSet(env, toolCacheKey, userEmail, toolName, { status: result.status, output: result.output, ...(result.extra || {}) });
+    }
+    return { status: result.status || "ok", output: result.output, latency_ms: latency };
+  } catch (e) {
+    return { status: "error", output: e.message };
+  }
+}
+
 async function handleAgentOrchestrate(request, env, userEmail) {
-  // Rate limiting silencioso (30 req/min).
+  // v2.9: loop de tools SERVER-SIDE (max 2 rondas) + prompt lite.
   const rl = await rateLimit(env, userEmail, "chat", 30, 60);
-  if (rl.limited) return errorResponse("rate_limited", 429, { message: "Límite temporal de peticiones alcanzado.", retry_after_sec: rl.retryAfterSec });
+  if (rl.limited) return errorResponse("rate_limited", 429, { message: "Limite temporal de peticiones alcanzado.", retry_after_sec: rl.retryAfterSec });
   const body = await request.json().catch(() => ({}));
   const { chat_id, messages, model, escalate, stream = true, skills_block, memory_block } = body;
+  if (!Array.isArray(messages) || messages.length === 0) return errorResponse("missing_messages", 400);
 
-  if (!Array.isArray(messages) || messages.length === 0) {
-    return errorResponse("missing_messages", 400);
-  }
-
-  // Caché opt-in (cache:true, solo no-stream): 24h.
   const useCache = body.cache === true && !stream;
   let cacheKey = null;
   if (useCache) {
@@ -2944,154 +2989,104 @@ async function handleAgentOrchestrate(request, env, userEmail) {
     if (hit) return json({ ...(hit.json || { cached_text: hit.text }), cached: true, model, from_cache: true });
   }
 
-  // Decidir modelo y system prompt según modelo solicitado o nivel de escalamiento.
-  let modelId, roleKey, systemPrompt;
-  if (model && OPENROUTER_WHITELIST.has(model)) {
-    modelId = model;
-    roleKey = MODEL_TO_ROLE[modelId] || "super_executor";
-  } else if (escalate === "ultra") {
-    modelId = ROLE_TO_MODEL.ultra_orchestrator; // nvidia/nemotron-3-ultra-550b-a55b:free
-    roleKey = "ultra_orchestrator";
-  } else {
-    modelId = ROLE_TO_MODEL.super_executor; // nvidia/nemotron-3-super-120b-a12b:free
-    roleKey = "super_executor";
-  }
-  if (escalate === "ultra") {
-    modelId = ROLE_TO_MODEL.ultra_orchestrator;
-    roleKey = "ultra_orchestrator";
-  }
+  let modelId, roleKey;
+  if (escalate === "ultra") { modelId = ROLE_TO_MODEL.ultra_orchestrator; roleKey = "ultra_orchestrator"; }
+  else if (model && OPENROUTER_WHITELIST.has(model)) { modelId = model; roleKey = MODEL_TO_ROLE[modelId] || "super_executor"; }
+  else { modelId = ROLE_TO_MODEL.super_executor; roleKey = "super_executor"; }
 
-  // Construir system prompt base del rol.
-  systemPrompt = SYSTEM_PROMPTS[roleKey];
+  let systemPrompt = LITE_AGENT_PROMPT;
+  if (roleKey === "ultra_orchestrator") systemPrompt += "\n\nModo ULTRA: orquesta investigacion profunda; descompone en sub-pasos y verifica cruzado.";
+  if (memory_block) systemPrompt += "\n\n<memorias_cross_chat>\n" + memory_block + "\n</memorias_cross_chat>";
+  if (skills_block) systemPrompt += "\n" + skills_block;
 
-  // Appendear skills y memorias al system prompt si el frontend las envió.
-  // Esto reemplaza el mecanismo roto donde se enviaban como mensajes system
-  // que luego se filtraban con .filter(m => m.role !== 'system').
-  if (memory_block) {
-    systemPrompt += "\n\n<memorias_cross_chat>\n" + memory_block + "\n</memorias_cross_chat>";
-  }
-  if (skills_block) {
-    systemPrompt += "\n" + skills_block;
-  }
+  const msgs = [{ role: "system", content: systemPrompt }, ...messages.filter((m) => m.role !== "system")];
 
-  // Inyectar system prompt como primer mensaje si no existe.
-  const hasSystem = messages.length > 0 && messages[0].role === "system";
-  const finalMessages = hasSystem
-    ? messages
-    : [{ role: "system", content: systemPrompt }, ...messages];
-
-  // Caching defensivo (igual que handleChatOpenRouter).
-  const cachedMessages = injectCacheControl(finalMessages, false);
-  // Tool result truncation.
-  const truncatedMessages = truncateToolResults(cachedMessages, 2048);
-
-  const upstreamBody = {
-    model: modelId,
-    messages: truncatedMessages,
-    stream,
-  };
-
-  // Sticky routing.
-  if (chat_id) {
-    upstreamBody.session_id = chat_id;
-  }
-
-  // Llamar upstream con rotador de claves.
+  const MAX_TOOL_ROUNDS = 2;
+  const MAX_TOOLS_PER_ROUND = 3;
   const startTs = Date.now();
-  let keyIndexUsed = null;
-  let degraded = false;
-  let upstreamResp = null;
+  let lastText = "";
+  const tokens = { in: 0, out: 0, cached: 0 };
 
-  try {
-    const result = await withKeyRotation(env, "openrouter", async (key) => {
-      return await fetch("https://openrouter.ai/api/v1/chat/completions", {
+  const callLLM = async () => {
+    const result = await withKeyRotation(env, "openrouter", async (key) =>
+      fetch("https://openrouter.ai/api/v1/chat/completions", {
         method: "POST",
         headers: {
           "Authorization": `Bearer ${key}`,
           "Content-Type": "application/json",
           "HTTP-Referer": env.PAGES_URL || "https://veritas.pages.dev",
-          "X-Title": "Véritas",
-          "Accept": stream ? "text/event-stream" : "application/json",
+          "X-Title": "Veritas",
         },
-        body: JSON.stringify(upstreamBody),
-      });
-    });
-    upstreamResp = result.response;
-    keyIndexUsed = result.keyIndex;
-    degraded = result.degraded;
+        body: JSON.stringify({ model: modelId, messages: msgs, stream: false, max_tokens: 1600 }),
+      })
+    );
+    const resp = result.response;
+    if (!resp.ok) throw { error: "upstream_error", message: "HTTP " + resp.status };
+    const data = await resp.json().catch(() => null);
+    if (data && data.usage) {
+      tokens.in += data.usage.prompt_tokens || 0;
+      tokens.out += data.usage.completion_tokens || 0;
+      tokens.cached += (data.usage.prompt_tokens_details && data.usage.prompt_tokens_details.cached_tokens) || 0;
+    }
+    return (data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || "";
+  };
+
+  try {
+    for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+      const text = await callLLM();
+      lastText = text;
+      const calls = parseToolCallXML(text).slice(0, MAX_TOOLS_PER_ROUND);
+      if (calls.length === 0) break;
+      const results = [];
+      for (const c of calls) {
+        const r = await runToolByName(env, userEmail, "agent", c.name, c.args, chat_id);
+        results.push({ name: c.name, status: r.status || "ok", output: String(r.output == null ? "" : r.output).slice(0, 3000) });
+      }
+      msgs.push({ role: "assistant", content: text });
+      const resultsXml = results.map((r) => ("<" + "tool_result") + " name=" + T + r.name + T + " status=" + T + r.status + T + ">\n" + r.output + "\n" + TR_CLOSE).join("\n");
+      const tail = round + 1 >= MAX_TOOL_ROUNDS
+        ? "Redacta AHORA tu respuesta final al usuario en su idioma, sin tool_calls."
+        : "Si son suficientes, redacta tu respuesta final; si no, emite otra llamada de herramienta.";
+      msgs.push({ role: "user", content: "<tool_results>\n" + resultsXml + "\n</tool_results>\nProcesa estos resultados. Ronda " + (round + 1) + " de " + MAX_TOOL_ROUNDS + ". " + tail });
+      if (round + 1 >= MAX_TOOL_ROUNDS) { lastText = await callLLM(); break; }
+    }
+    if (!lastText) lastText = await callLLM();
   } catch (e) {
     if (e instanceof AllKeysCooldownError) throw e;
-    return errorResponse("upstream_error", 502, { message: e.message, role: roleKey });
+    if (!lastText) return errorResponse("upstream_error", 502, { message: e.message });
   }
 
-  if (!upstreamResp) {
-    return errorResponse("upstream_no_response", 502, { role: roleKey });
-  }
+  // Limpieza final: nunca markup interno en la respuesta.
+  const stripRe = [
+    new RegExp("<" + "tool_call[\\s\\S]*?(?:" + ("<" + "/tool_call>") + "|$)", "gi"),
+    new RegExp("<" + "/?\\s*tool_call[^>]*>", "gi"),
+    new RegExp("<" + "tool_result[\\s\\S]*?(?:" + ("<" + "/tool_result>") + "|$)", "gi"),
+    new RegExp("<" + "/?\\s*tool_result[^>]*>", "gi"),
+    /^\s*Now (summarize|respond|answer|provide)[^\n]*$/gmi,
+  ];
+  let finalText = lastText || "";
+  for (const re of stripRe) finalText = finalText.replace(re, "");
+  finalText = finalText.trim();
+  if (!finalText) finalText = "No pude completar la respuesta en esta ronda. Reintenta o reformula la pregunta.";
 
-  // Manejo de errores upstream.
-  if (upstreamResp.status === 429 || upstreamResp.status === 503) {
-    return errorResponse("all_keys_rate_limited", 503, {
-      retry_after_ms: SERVICE_REGISTRY.openrouter.cooldownMs,
-      model: modelId,
-      role: roleKey,
-    });
-  }
-  if (upstreamResp.status >= 500) {
-    return errorResponse("upstream_error", upstreamResp.status, { model: modelId, role: roleKey });
-  }
-  if (upstreamResp.status === 401 || upstreamResp.status === 403) {
-    return errorResponse("auth_error", upstreamResp.status, { model: modelId, role: roleKey });
-  }
-  if (upstreamResp.status >= 400) {
-    const errText = await upstreamResp.text();
-    return errorResponse("upstream_error", upstreamResp.status, { model: modelId, role: roleKey, body: errText.slice(0, 1000) });
-  }
+  if (useCache && cacheKey) await llmCacheSet(env, cacheKey, finalText, null, modelId, userEmail);
+  logOpenRouterCall(env, userEmail, modelId, null, 200, startTs, { tokens_in: tokens.in, tokens_out: tokens.out, cached_tokens: tokens.cached }).catch(() => {});
 
-  // Telemetría.
-  logOpenRouterCall(env, userEmail, modelId, keyIndexUsed, upstreamResp.status, startTs).catch(() => {});
-
-  // Stream passthrough (igual que handleChatOpenRouter).
-  if (stream) {
-    const ts = new TransformStream({
-      async transform(chunk, controller) {
-        controller.enqueue(chunk);
-      },
-    });
-    const headers = new Headers(upstreamResp.headers);
-    headers.set("Cache-Control", "no-cache");
-    headers.set("Connection", "keep-alive");
-    headers.set("Content-Type", "text/event-stream");
-    headers.set("X-Veritas-Key-Index", String(keyIndexUsed));
-    headers.set("X-Veritas-Role", roleKey);
-    if (degraded) headers.set("X-Veritas-Degraded", "1");
-
-    return new Response(upstreamResp.body.pipeThrough(ts), { status: 200, headers });
-  }
-
-  // Non-streaming.
-  const respHeaders = new Headers();
-  respHeaders.set("Content-Type", "application/json");
-  respHeaders.set("X-Veritas-Key-Index", String(keyIndexUsed));
-  respHeaders.set("X-Veritas-Role", roleKey);
-  if (degraded) respHeaders.set("X-Veritas-Degraded", "1");
-  // v2.7.3 — poblar la caché opt-in del orquestador (antes solo leía, nunca escribía).
-  const rawUpstream = await upstreamResp.text();
-  if (useCache && cacheKey) {
-    try {
-      const data = JSON.parse(rawUpstream);
-      const text = data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content || "";
-      await llmCacheSet(env, cacheKey, text, data, modelId, userEmail);
-    } catch { /* best-effort */ }
-  }
-  return new Response(rawUpstream, { status: 200, headers: respHeaders });
+  // SSE unica para el cliente (compatible con streamSSE del frontend).
+  const enc = new TextEncoder();
+  const sse = new ReadableStream({
+    start(c) {
+      c.enqueue(enc.encode("data: " + JSON.stringify({ id: "orch", choices: [{ delta: { role: "assistant", content: finalText } }] }) + "\n\n"));
+      c.enqueue(enc.encode("data: [DONE]\n\n"));
+      c.close();
+    },
+  });
+  return new Response(sse, {
+    status: 200,
+    headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "X-Veritas-Role": roleKey },
+  });
 }
 
-// POST /api/chat/perceive
-// Recibe: { attachment_url?, attachment_r2_key?, modality: "image"|"pdf"|"audio"|"video" }
-// Llama al modelo Nano correspondiente (VL para image/pdf, Omni para audio/video).
-// Si se pasa attachment_r2_key, lo lee de R2 y convierte a data URI.
-// Si se pasa attachment_url, lo usa directamente (debe ser URL accesible).
-// Retorna JSON: { description: string, model: string, modality: string }
 async function handlePerceive(request, env, userEmail) {
   const body = await request.json().catch(() => ({}));
   const { attachment_url, attachment_r2_key, modality } = body;
