@@ -2972,3 +2972,14 @@ mark.search-current { background: rgba(80, 200, 120, .6); }
 .message:hover .message-actions { opacity: 1; }
 .msg-action { background: transparent; border: 1px solid var(--border-subtle); border-radius: 6px; color: var(--text-muted); cursor: pointer; font-size: 12px; padding: 2px 7px; }
 .msg-action:hover { color: var(--text-main); border-color: var(--accent); }
+
+/* v2.8.3 — razonamiento colapsado sobre la burbuja + rondas de tools plegadas */
+.reasoning-stream { margin: 4px 0 6px 46px; border: 1px dashed var(--border-subtle); border-radius: 8px; padding: 4px 10px; opacity: .8; max-width: 780px; }
+.reasoning-stream summary { cursor: pointer; color: var(--text-muted); font-size: 12px; font-family: var(--font-mono, monospace); }
+.reasoning-stream[open] summary { margin-bottom: 4px; }
+.reasoning-body { white-space: pre-wrap; font-size: 11px; color: var(--text-muted); max-height: 220px; overflow: auto; margin: 0; }
+.message.intermediate { opacity: .85; }
+.message.intermediate .message-body { background: transparent; border: 1px dashed var(--border-subtle); }
+.tool-round summary { cursor: pointer; color: var(--text-muted); font-size: 12px; font-family: var(--font-mono, monospace); padding: 2px 4px; }
+.tool-round-body { font-size: 11px; color: var(--text-muted); max-height: 260px; overflow: auto; padding: 6px; }
+.message-actions { margin-top: 6px; }

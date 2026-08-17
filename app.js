@@ -983,13 +983,6 @@ async function loadChatList() {
   }
 
   filtered.forEach((c) => renderChatItem(c));
-
-  // v2.8.1: persistencia visible — reabre el último chat activo al entrar.
-  if (!state.currentChat && chats.length > 0) {
-    const lastId = localStorage.getItem("veritas:lastChat");
-    const target = chats.find((c) => c.id === lastId) || chats[0];
-    if (target) await openChat(target);
-  }
 }
 
 function renderChatItem(chat) {
@@ -1087,6 +1080,13 @@ async function createNewChat() {
   await loadChatList();
   openChat(chat);
   $("#messageInput")?.focus();
+
+  // v2.8.1: persistencia visible — reabre el último chat activo al entrar.
+  if (!state.currentChat && chats.length > 0) {
+    const lastId = localStorage.getItem("veritas:lastChat");
+    const target = chats.find((c) => c.id === lastId) || chats[0];
+    if (target) await openChat(target);
+  }
 }
 
 async function openChat(chat) {
@@ -1953,16 +1953,19 @@ async function sendMessage() {
 // ==============================================================================
 async function runChatWithTools(userContent) {
   // v2.6: máx 3 tools encadenadas por request (protege CPU 10ms y duración 30s del free tier).
-  const maxIter = Math.min(state.settings.tokens.maxToolIterations || 3, 3);
+  const maxIter = 2; // v2.8.3: máx 2 rondas de tools; luego síntesis final garantizada.
   let iteration = 0;
   let assistantText = "";
   let finalPersisted = false;
+  let lastHadTools = false;
+  const toolOutputs = [];
   setEntityState("processing");
   showStreamingIndicator(t("stream.processing"), "processing");
   setStreamingMode(true); // P0-4: mostrar Stop, ocultar Send
 
   while (iteration < maxIter) {
     iteration++;
+    lastHadTools = false;
     try {
       const response = await callModel(userContent, assistantText, iteration > 1);
 
@@ -1992,7 +1995,6 @@ async function runChatWithTools(userContent) {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(partialMsg),
           }).catch(() => {});
-          finalPersisted = true;
         }
         toast(t("stream.stopped"), "info");
         break;
@@ -2015,28 +2017,7 @@ async function runChatWithTools(userContent) {
       // Parsear tool calls embebidos.
       const toolCalls = parseToolCallXML(response.text);
       if (toolCalls.length === 0) {
-        // v2.8.2: persistir la respuesta final (antes era solo burbuja efímera).
-        const finalModel = response.model || state.currentModel;
-        const finalMsg = {
-          id: crypto.randomUUID(),
-          chat_id: state.currentChat.id,
-          role: "assistant",
-          content: response.text,
-          model: finalModel,
-          provider: getProvider(finalModel),
-          author_email: state.user_email,
-          tokens_in: response.tokens_in || 0,
-          tokens_out: response.tokens_out || 0,
-          cached_tokens: response.cached_tokens || 0,
-          created_at: new Date().toISOString(),
-        };
-        state.messages.push(finalMsg);
-        fetch("/api/db/message", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(finalMsg),
-        }).catch(() => {});
-        finalPersisted = true;
+        // No hay más tools; terminar.
         break;
       }
 
@@ -2062,7 +2043,8 @@ async function runChatWithTools(userContent) {
       renderMessage(assistantMsg);
       scrollToBottom();
 
-      // Ejecutar tools.
+      // Ejecutar tools (resultados en contexto, ocultos en UI).
+      lastHadTools = true;
       for (const call of toolCalls) {
         if (!isAllowed(call.name, state.currentRole)) {
           const resultMsg = {
@@ -2070,13 +2052,14 @@ async function runChatWithTools(userContent) {
             chat_id: state.currentChat.id,
             role: "tool",
             content: buildToolResultXML(call.name, "forbidden", t("tool.forbidden")),
+            ui_hidden: true,
             created_at: new Date().toISOString(),
           };
           state.messages.push(resultMsg);
-          renderMessage(resultMsg);
           continue;
         }
-        await executeToolCall(call);
+        const collected = await executeToolCall(call);
+        if (collected) toolOutputs.push(collected);
       }
 
       // Si el modelo emitió <file path="...">, actualizar sandbox.
@@ -2096,20 +2079,53 @@ async function runChatWithTools(userContent) {
     }
   }
 
-  if (iteration >= maxIter) {
-    assistantText += `\n\n[${t("tool.iterLimit")}]`;
+  // v2.8.3: Véritas SIEMPRE sintetiza una respuesta final con lo recolectado.
+  if (!finalPersisted && lastHadTools) {
+    const dump = toolOutputs.slice(-4).map((o) => `【${o.name} · ${o.status}】 ${o.output}`).join("\n").slice(0, 6000);
+    const synthPrompt = `Eres Véritas, una única identidad de IA. El usuario preguntó: "${userContent.slice(0, 1500)}".
+Se ejecutaron herramientas y estos son sus resultados:
+${dump || "(sin resultados útiles)"}
+Redacta AHORA la mejor respuesta final posible al usuario, en su idioma, usando esa información aunque sea parcial o haya errores. Si faltan datos, dilo brevemente y da tu mejor aproximación. No emitas tool_calls, ni XML, ni JSON crudo: responde en prosa clara.`;
+    try {
+      const sr = await fetch("/api/llm/complete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: synthPrompt, max_tokens: 1600 }),
+      });
+      const sd = await sr.json().catch(() => null);
+      const synthText = (sd && sd.text || "").trim();
+      if (synthText) {
+        const finalMsg = {
+          id: crypto.randomUUID(),
+          chat_id: state.currentChat.id,
+          role: "assistant",
+          content: synthText,
+          model: state.currentModel,
+          provider: getProvider(state.currentModel),
+          author_email: state.user_email,
+          created_at: new Date().toISOString(),
+        };
+        state.messages.push(finalMsg);
+        fetch("/api/db/message", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(finalMsg),
+        }).catch(() => {});
+        finalPersisted = true;
+        assistantText = synthText;
+      }
+    } catch { /* best-effort */ }
   }
 
   // v2.8.2: si el loop terminó sin persistir (fallback ético, errores), guardar igual.
   if (!finalPersisted && assistantText && assistantText.trim()) {
-    const finalModel = state.currentModel;
     const finalMsg = {
       id: crypto.randomUUID(),
       chat_id: state.currentChat.id,
       role: "assistant",
       content: assistantText,
-      model: finalModel,
-      provider: getProvider(finalModel),
+      model: state.currentModel,
+      provider: getProvider(state.currentModel),
       author_email: state.user_email,
       created_at: new Date().toISOString(),
     };
@@ -2120,8 +2136,8 @@ async function runChatWithTools(userContent) {
       body: JSON.stringify(finalMsg),
     }).catch(() => {});
   }
-  // La burbuja de streaming es efímera: el DOM lo normaliza renderMessages().
   if (_streamingMsgEl) { _streamingMsgEl.remove(); _streamingMsgEl = null; }
+  clearReasoningStream();
   renderMessages();
 
   hideStreamingIndicator();
@@ -2504,7 +2520,7 @@ async function callOpenRouter(messages) {
           }
           if (delta?.reasoning) {
             thinkingContent += delta.reasoning;
-            showStreamingIndicator(t("stream.thinking"), "thinking");
+            updateReasoningStream(thinkingContent);
           }
           if (json.usage) {
             tokens_in = json.usage.prompt_tokens || 0;
@@ -2593,6 +2609,24 @@ function hideStreamingIndicator() {
 }
 
 let _streamingMsgEl = null;
+let _reasoningEl = null;
+// v2.8.3: razonamiento en streaming, colapsado, SOBRE la burbuja de respuesta.
+function updateReasoningStream(thinkingText) {
+  const container = $("#messagesContainer");
+  if (!container) return;
+  if (!_reasoningEl) {
+    _reasoningEl = document.createElement("details");
+    _reasoningEl.className = "reasoning-stream";
+    _reasoningEl.innerHTML = '<summary>🧠 Razonamiento en progreso — análisis (desplegar)</summary><pre class="reasoning-body"></pre>';
+    container.appendChild(_reasoningEl);
+  }
+  _reasoningEl.querySelector(".reasoning-body").textContent = thinkingText.slice(-6000);
+  scrollToBottom();
+}
+function clearReasoningStream() {
+  if (_reasoningEl) { _reasoningEl.remove(); _reasoningEl = null; }
+}
+
 function updateStreamingMessage(text) {
   if (!_streamingMsgEl) {
     const container = $("#messagesContainer");
