@@ -3156,6 +3156,7 @@ async function handleAgentOrchestrate(request, env, userEmail) {
   const freshJobs = [
     ["web_search", { query: userQuery.slice(0, 400), max_results: 6 }],
     ["gdelt_search", { query: userQuery.slice(0, 300), mode: "events", timespan: "1w" }],
+    ["exa_search", { query: userQuery.slice(0, 300) }],
   ];
   for (const [tn, ta] of freshJobs) {
     try {
