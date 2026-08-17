@@ -983,6 +983,13 @@ async function loadChatList() {
   }
 
   filtered.forEach((c) => renderChatItem(c));
+
+  // v2.8.1: persistencia visible — reabre el último chat activo al entrar.
+  if (!state.currentChat && chats.length > 0) {
+    const lastId = localStorage.getItem("veritas:lastChat");
+    const target = chats.find((c) => c.id === lastId) || chats[0];
+    if (target) await openChat(target);
+  }
 }
 
 function renderChatItem(chat) {
@@ -1080,13 +1087,6 @@ async function createNewChat() {
   await loadChatList();
   openChat(chat);
   $("#messageInput")?.focus();
-
-  // v2.8.1: persistencia visible — reabre el último chat activo al entrar.
-  if (!state.currentChat && chats.length > 0) {
-    const lastId = localStorage.getItem("veritas:lastChat");
-    const target = chats.find((c) => c.id === lastId) || chats[0];
-    if (target) await openChat(target);
-  }
 }
 
 async function openChat(chat) {
