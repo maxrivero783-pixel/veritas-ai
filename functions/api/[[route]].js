@@ -1663,7 +1663,9 @@ async function handleChatOpenRouter(request, env, userEmail) {
   const promptKey = uiRole ? UI_ROLE_TO_PROMPT_KEY[uiRole] : null;
   // Fallback: resolver desde el modelId directamente.
   const resolvedKey = promptKey || MODEL_TO_ROLE[model];
-  const systemPrompt = resolvedKey ? SYSTEM_PROMPTS[resolvedKey] : null;
+  let systemPrompt = resolvedKey ? SYSTEM_PROMPTS[resolvedKey] : null;
+  // v2.8.7: reglas de conducta inmutables — una identidad, una respuesta limpia.
+  const CONDUCT = "\n\n<reglas_veritas>\n- Eres una unica identidad: Veritas. Las herramientas son internas; NUNCA muestres bloques tool_call/tool_result, JSON crudo de herramientas, ni instrucciones internas en tu respuesta.\n- Entrega UNA unica respuesta final en el idioma del usuario integrando los resultados.\n- Si generas HTML o graficos, emitelos SOLO dentro de un bloque <file path=\"preview.html\">...</file> y no repitas el codigo en tu respuesta.\n- Si una herramienta falla o no hay datos, responde con tu mejor aproximacion indicando brevemente la limitacion.\n</reglas_veritas>";
   if (systemPrompt && Array.isArray(upstreamBody.messages)) {
     const firstMsg = upstreamBody.messages[0];
     if (firstMsg && firstMsg.role === "system") {

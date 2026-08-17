@@ -1970,6 +1970,47 @@ async function sendMessage() {
 // ==============================================================================
 // TOOL CALLER LOOP (máx 5 iteraciones)
 // ==============================================================================
+// v2.8.7: limpia markup interno de tools e instrucciones eco del modelo.
+function cleanAgentText(text) {
+  if (!text) return "";
+  let s = text
+    .replace(/<tool_call[\s\S]*?(?:<\/tool_call>|$)/gi, "")
+    .replace(/<toolcall[\s\S]*?(?:<\/toolcall>|$)/gi, "")
+    .replace(/<tool_result[\s\S]*?(?:<\/tool_result>|$)/gi, "")
+    .replace(/^\s*Now (summarize|respond|answer|provide)[^\n]*$/gmi, "")
+    .replace(/^\s*preview generated\s*$/gmi, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  return s;
+}
+
+// v2.8.7: bloques ```html completos -> archivo en Sandbox + preview, y se
+// sustituyen por una nota en el texto visible.
+function extractSandboxArtifacts(text) {
+  if (!text || !/```/.test(text)) return text;
+  const re = /```[a-zA-Z]*\n([\s\S]*?)```/g;
+  let m;
+  let out = text;
+  let changed = false;
+  const found = [];
+  while ((m = re.exec(text)) !== null) found.push(m);
+  for (const mm of found) {
+    const code = mm[1];
+    if (/<html[\s>]|<!DOCTYPE/i.test(code)) {
+      state.sandbox.files["index.html"] = code;
+      state.sandbox.files["preview_" + (Date.now() % 100000) + ".html"] = code;
+      out = out.replace(mm[0], "\n\n*📊 Vista previa generada — ábrela en el panel Sandbox.*\n\n");
+      changed = true;
+    }
+  }
+  if (changed) {
+    try { renderSandboxTree(); } catch {}
+    try { refreshPreview(); } catch {}
+    try { showSandbox("sandbox"); } catch {}
+  }
+  return out;
+}
+
 async function runChatWithTools(userContent) {
   // v2.6: máx 3 tools encadenadas por request (protege CPU 10ms y duración 30s del free tier).
   const maxIter = 2; // v2.8.3: máx 2 rondas de tools; luego síntesis final garantizada.
@@ -2016,6 +2057,37 @@ async function runChatWithTools(userContent) {
           }).catch(() => {});
         }
         toast(t("stream.stopped"), "info");
+        break;
+      }
+
+      // v2.8.7: el rol Agente orquestó tools en el servidor; tratamos su texto
+      // (limpio de markup) como respuesta final única y persistimos.
+      if (state.currentRole === "agent") {
+        let clean = cleanAgentText(response.text);
+        clean = extractSandboxArtifacts(clean);
+        const finalModel = response.model || state.currentModel;
+        const finalMsg = {
+          id: crypto.randomUUID(),
+          chat_id: state.currentChat.id,
+          role: "assistant",
+          content: clean || response.text,
+          model: finalModel,
+          provider: getProvider(finalModel),
+          author_email: state.user_email,
+          tokens_in: response.tokens_in || 0,
+          tokens_out: response.tokens_out || 0,
+          cached_tokens: response.cached_tokens || 0,
+          thinking_content: response.thinking_content || null,
+          created_at: new Date().toISOString(),
+        };
+        state.messages.push(finalMsg);
+        fetch("/api/db/message", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(finalMsg),
+        }).catch(() => {});
+        finalPersisted = true;
+        assistantText = clean || response.text;
         break;
       }
 
@@ -2149,6 +2221,11 @@ Redacta AHORA la mejor respuesta final posible al usuario, en su idioma, usando 
         assistantText = synthText;
       }
     } catch { /* best-effort */ }
+  }
+
+  // v2.8.7: roles no-agente también limpian markup y extraen artefactos.
+  if (!finalPersisted && assistantText) {
+    assistantText = extractSandboxArtifacts(cleanAgentText(assistantText));
   }
 
   // v2.8.2: si el loop terminó sin persistir (fallback ético, errores), guardar igual.
@@ -4937,6 +5014,12 @@ if (document.readyState === "loading") {
 // ==============================================================================
 
 function showAppLayout(show) {
+  const chip = $("#sidebarUserChip");
+  if (chip) {
+    chip.hidden = !show;
+    const nm = $("#sidebarUserName");
+    if (nm && state.user_email) nm.textContent = state.user_email.split("@")[0];
+  }
   const layout = document.querySelector(".app-layout");
   if (layout) layout.style.display = show ? "" : "none";
   const auth = $("#authView");
