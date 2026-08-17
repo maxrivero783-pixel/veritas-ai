@@ -4,6 +4,7 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:allowBackup="false"
@@ -27,7 +28,16 @@
                 android:resource="@xml/file_paths" />
         </provider>
 
-        <!-- Splash screen: app entry point -->
+        <!-- FCM Messaging Service -->
+        <service
+            android:name=".fcm.VeritasFirebaseMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+
+        <!-- Splash screen: app entry point (Compose) -->
         <activity
             android:name=".SplashActivity"
             android:exported="true"
@@ -37,26 +47,22 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-
-            <!-- App shortcuts -->
             <meta-data
                 android:name="android.app.shortcuts"
                 android:resource="@xml/shortcuts" />
         </activity>
 
-        <!-- Deep link router: handles veritas:// and https links -->
+        <!-- Deep link router -->
         <activity
             android:name=".RouteActivity"
             android:exported="true"
             android:noHistory="true">
-            <!-- Custom scheme deep links -->
             <intent-filter android:autoVerify="true">
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="veritas" />
             </intent-filter>
-            <!-- HTTPS deep links (verified links) -->
             <intent-filter android:autoVerify="true">
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -65,13 +71,12 @@
             </intent-filter>
         </activity>
 
-        <!-- Share receiver: gets content from other apps -->
+        <!-- Share receiver -->
         <activity
             android:name=".ShareReceiverActivity"
             android:exported="true"
             android:theme="@android:style/Theme.Translucent.NoTitleBar"
             android:excludeFromRecents="true">
-            <!-- Receive shared text -->
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -82,26 +87,16 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="text/html" />
             </intent-filter>
-            <intent-filter>
-                <action android:name="android.intent.action.SEND" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <data android:mimeType="text/x-uri" />
-            </intent-filter>
-            <intent-filter>
-                <action android:name="android.intent.action.SEND_MULTIPLE" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <data android:mimeType="text/plain" />
-            </intent-filter>
         </activity>
 
-        <!-- Login screen -->
+        <!-- Login screen (Compose) -->
         <activity
             android:name=".LoginActivity"
             android:exported="false"
             android:windowSoftInputMode="adjustResize"
             android:screenOrientation="portrait" />
 
-        <!-- Main WebView: requires auth, not launchable directly -->
+        <!-- Main WebView (Views + Compose overlays) -->
         <activity
             android:name=".MainActivity"
             android:exported="false"
@@ -109,13 +104,12 @@
             android:windowSoftInputMode="adjustResize"
             android:launchMode="singleTask" />
 
-        <!-- Settings screen -->
+        <!-- Settings screen (Compose) -->
         <activity
             android:name=".SettingsActivity"
             android:exported="false"
             android:windowSoftInputMode="adjustResize"
-            android:screenOrientation="portrait"
-            android:theme="@style/Theme.VeritasSettings" />
+            android:screenOrientation="portrait" />
 
     </application>
 

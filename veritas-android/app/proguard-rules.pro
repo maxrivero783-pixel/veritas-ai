@@ -5,15 +5,15 @@
 -keepattributes SourceFile,LineNumberTable
 -renamesourcefileattribute SourceFile
 
-# Keep app classes accessed from JNI/Reflection
+# Keep app classes
 -keep class com.veritas.ai.** { *; }
 -keepclassmembers class com.veritas.ai.** { *; }
 
-# Keep Kotlin coroutines (lifecycleScope)
+# Kotlin coroutines
 -dontwarn kotlinx.coroutines.**
 -keep class kotlinx.coroutines.** { *; }
 
-# Keep Kotlin metadata
+# Kotlin metadata
 -keepattributes RuntimeVisibleAnnotations
 -keep class kotlin.Metadata { *; }
 
@@ -22,12 +22,29 @@
     @android.webkit.JavascriptInterface <methods>;
 }
 
-# Keep JSON classes (Org.json)
+# Org.json
 -keep class org.json.** { *; }
 
 # AndroidX
 -dontwarn androidx.**
 -keep class androidx.** { *; }
 
+# Compose
+-keep class androidx.compose.** { *; }
+-dontwarn androidx.compose.**
+
+# Firebase
+-keep class com.google.firebase.** { *; }
+-dontwarn com.google.firebase.**
+-keepattributes Signature
+-keepattributes *Annotation*
+-keepattributes Exceptions
+-keepattributes InnerClasses
+-keepattributes EnclosingMethod
+
 # CameraX
 -dontwarn androidx.camera.**
+
+# Google Play Services
+-keep class com.google.android.gms.** { *; }
+-dontwarn com.google.android.gms.**

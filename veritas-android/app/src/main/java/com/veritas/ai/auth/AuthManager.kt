@@ -146,6 +146,28 @@ class AuthManager private constructor(context: Context) {
     }
 
     /**
+     * Register FCM push notification token with the backend.
+     * The backend stores it in D1 to send targeted push notifications.
+     * This is a best-effort call — failure is logged but not propagated.
+     */
+    suspend fun registerFcmToken(fcmToken: String) = withContext(Dispatchers.IO) {
+        try {
+            val json = JSONObject().apply {
+                put("fcm_token", fcmToken)
+                put("platform", "android")
+            }
+            val (code, _) = httpPost("/api/auth/fcm-token", json)
+            if (code in 200..299) {
+                Log.d(TAG, "FCM token registered")
+            } else {
+                Log.w(TAG, "FCM token registration returned $code")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "FCM token registration failed (non-fatal)", e)
+        }
+    }
+
+    /**
      * Change password via the backend. On success, the current session remains valid.
      */
     suspend fun changePassword(currentPassword: String, newPassword: String): Result<Unit> = withContext(Dispatchers.IO) {

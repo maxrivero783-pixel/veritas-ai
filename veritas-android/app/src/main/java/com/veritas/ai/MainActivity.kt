@@ -402,7 +402,7 @@ class MainActivity : AppCompatActivity() {
         settings.mediaPlaybackRequiresUserGesture = false
         settings.cacheMode = WebSettings.LOAD_DEFAULT
         settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
-        settings.userAgentString = settings.userAgentString + " VeritasAI/2.8.0-Android"
+        settings.userAgentString = settings.userAgentString + " VeritasAI/2.9.0-Android"
         settings.useWideViewPort = true
         settings.loadWithOverviewMode = true
         settings.setSupportZoom(false)
