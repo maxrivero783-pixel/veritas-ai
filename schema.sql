@@ -398,8 +398,10 @@ CREATE TABLE IF NOT EXISTS notification_devices (
 CREATE INDEX IF NOT EXISTS idx_notif_devices_user ON notification_devices(user_email);
 
 -- notifications: queue for polling-based push delivery
+-- Uses AUTOINCREMENT seq for monotonic cursor (UUID v4 is not chronologically ordered).
 CREATE TABLE IF NOT EXISTS notifications (
-  id TEXT PRIMARY KEY,                                -- UUID
+  seq INTEGER PRIMARY KEY AUTOINCREMENT,               -- monotonic cursor for polling (seq > ?)
+  id TEXT NOT NULL UNIQUE,                            -- UUID for external references / deep links
   user_email TEXT NOT NULL,
   title TEXT NOT NULL,
   body TEXT NOT NULL,
@@ -413,5 +415,5 @@ CREATE TABLE IF NOT EXISTS notifications (
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (user_email) REFERENCES users(email) ON DELETE CASCADE
 );
-CREATE INDEX IF NOT EXISTS idx_notif_user_delivered ON notifications(user_email, delivered, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_notif_user_delivered ON notifications(user_email, delivered, seq ASC);
 CREATE INDEX IF NOT EXISTS idx_notif_created ON notifications(created_at DESC);

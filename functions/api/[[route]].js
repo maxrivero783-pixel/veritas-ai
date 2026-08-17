@@ -1728,7 +1728,16 @@ async function handleChatOpenRouter(request, env, userEmail) {
     keyIndexUsed = result.keyIndex;
     degraded = result.degraded;
   } catch (e) {
-    if (e instanceof AllKeysCooldownError) throw e;
+    if (e instanceof AllKeysCooldownError) {
+      // Notificar al usuario que el servicio de LLM no está disponible ahora
+      insertNotification(env, userEmail, {
+        title: "Servicio LLM no disponible",
+        body: "Todas las claves del proveedor están en cooldown. El chat se reanudará automáticamente en unos minutos.",
+        type: "warning",
+        deep_link: clientBody.chat_id ? `veritas://chat/${clientBody.chat_id}` : null,
+      }).catch(() => {});
+      throw e;
+    }
     return errorResponse("upstream_error", 502, { message: e.message });
   }
 
@@ -2205,7 +2214,23 @@ async function handleToolInvoke(request, env, userEmail) {
   } catch (e) {
     const latency = Date.now() - startTs;
     persistToolCall(env, userEmail, body.chat_id, toolName, validation.args, { status: "error", output: e.message }, latency).catch(() => {});
-    return json({ status: "error", output: e.message || String(e), latency_ms: latency });
+
+    // Notificar al usuario si fue un error de timeout o provider agotado
+    const errMsg = e.message || String(e);
+    const isTimeout = /timeout/i.test(errMsg);
+    const isPoolEmpty = e instanceof KeyPoolEmptyError || e instanceof AllKeysCooldownError || /pool.*empty|all.*keys.*cooldown/i.test(errMsg);
+    if (isTimeout || isPoolEmpty) {
+      insertNotification(env, userEmail, {
+        title: isPoolEmpty ? "Servicio temporalmente no disponible" : "Herramienta tardó demasiado",
+        body: isPoolEmpty
+          ? `Todas las claves de ${toolName} están en cooldown. Intenta en unos minutos.`
+          : `La herramienta ${toolName} excedió el tiempo límite (30s). Inténtalo de nuevo.`,
+        type: "error",
+        deep_link: body.chat_id ? `veritas://chat/${body.chat_id}` : null,
+      }).catch(() => {});
+    }
+
+    return json({ status: "error", output: errMsg, latency_ms: latency });
   }
 }
 
@@ -2622,6 +2647,19 @@ async function handleShareJoin(chatId, url, env, userEmail) {
   await env.DB.prepare(
     `INSERT INTO chat_participants (chat_id, user_email, role, joined_at) VALUES (?, ?, 'editor', CURRENT_TIMESTAMP)`
   ).bind(chatId, userEmail).run();
+
+  // Notificar al owner de la sesión compartida (fire-and-forget)
+  const ownerRow = await env.DB.prepare(
+    `SELECT user_email FROM chat_participants WHERE chat_id = ? AND role = 'owner' AND user_email IS NOT NULL`
+  ).bind(chatId).first();
+  if (ownerRow && ownerRow.user_email !== userEmail) {
+    insertNotification(env, ownerRow.user_email, {
+      title: "Sesión compartida: alguien se unió",
+      body: `Un usuario se unió a tu sesión compartida como editor.`,
+      type: "info",
+      deep_link: `veritas://chat/${chatId}`,
+    }).catch(() => {});
+  }
 
   return json({ ok: true, chat_id: chatId, role: "editor" });
 }
@@ -3439,11 +3477,12 @@ async function handleSkillDelete(skillId, request, env, userEmail) {
  */
 async function insertNotification(env, userEmail, { title, body, type = "info", deep_link = null, data = null }) {
   const id = crypto.randomUUID();
-  await env.DB.prepare(
+  const result = await env.DB.prepare(
     `INSERT INTO notifications (id, user_email, title, body, type, deep_link, data_json, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`
   ).bind(id, userEmail, title, body, type, deep_link, data ? JSON.stringify(data) : null).run();
-  return id;
+  // Return both seq (for polling cursor) and id (for ack/deep links)
+  return { id, seq: result.meta.last_row_id };
 }
 
 async function handleNotificationDeviceRegister(request, env, userEmail) {
@@ -3477,7 +3516,8 @@ async function handleNotificationDeviceUnregister(request, env, userEmail) {
 
 async function handleNotificationPoll(request, env, userEmail) {
   const url = new URL(request.url);
-  const sinceId = url.searchParams.get("since") || "0";
+  // Cursor: integer seq (monotonic AUTOINCREMENT), default 0 = fetch all
+  const sinceSeq = parseInt(url.searchParams.get("since") || "0", 10);
   const limit = Math.min(parseInt(url.searchParams.get("limit")) || 20, 50);
 
   // Update device last_poll_at if device_id provided
@@ -3488,25 +3528,26 @@ async function handleNotificationPoll(request, env, userEmail) {
     ).bind(deviceId, userEmail).run().catch(() => {});
   }
 
-  // Fetch unseen notifications (delivered=0) newer than sinceId
+  // Fetch unseen notifications (delivered=0) with seq > sinceSeq
   const rows = await env.DB.prepare(
-    `SELECT id, title, body, type, deep_link, data_json, created_at
+    `SELECT seq, id, title, body, type, deep_link, data_json, created_at
      FROM notifications
-     WHERE user_email = ? AND delivered = 0 AND id > ?
-     ORDER BY created_at ASC LIMIT ?`
-  ).bind(userEmail, sinceId, limit).all();
+     WHERE user_email = ? AND delivered = 0 AND seq > ?
+     ORDER BY seq ASC LIMIT ?`
+  ).bind(userEmail, sinceSeq, limit).all();
 
   // Mark them as delivered
   if (rows.results.length > 0) {
-    const ids = rows.results.map(r => r.id);
-    const placeholders = ids.map(() => "?").join(",");
+    const seqs = rows.results.map(r => r.seq);
+    const placeholders = seqs.map(() => "?").join(",");
     await env.DB.prepare(
       `UPDATE notifications SET delivered = 1, delivered_at = CURRENT_TIMESTAMP
-       WHERE id IN (${placeholders})`
-    ).bind(...ids).run();
+       WHERE seq IN (${placeholders})`
+    ).bind(...seqs).run();
   }
 
   const notifications = rows.results.map(r => ({
+    seq: r.seq,
     id: r.id,
     title: r.title,
     body: r.body,
@@ -3516,7 +3557,10 @@ async function handleNotificationPoll(request, env, userEmail) {
     created_at: r.created_at,
   }));
 
-  return json({ ok: true, notifications });
+  // Return last_seq so the client knows where to resume
+  const lastSeq = notifications.length > 0 ? notifications[notifications.length - 1].seq : sinceSeq;
+
+  return json({ ok: true, notifications, last_seq: lastSeq });
 }
 
 async function handleNotificationsList(request, env, userEmail) {
@@ -3525,13 +3569,14 @@ async function handleNotificationsList(request, env, userEmail) {
   const offset = parseInt(url.searchParams.get("offset")) || 0;
 
   const rows = await env.DB.prepare(
-    `SELECT id, title, body, type, deep_link, data_json, created_at, delivered, read
+    `SELECT seq, id, title, body, type, deep_link, data_json, created_at, delivered, read
      FROM notifications
      WHERE user_email = ?
-     ORDER BY created_at DESC LIMIT ? OFFSET ?`
+     ORDER BY seq DESC LIMIT ? OFFSET ?`
   ).bind(userEmail, limit, offset).all();
 
   const notifications = rows.results.map(r => ({
+    seq: r.seq,
     id: r.id,
     title: r.title,
     body: r.body,
