@@ -476,6 +476,15 @@ export async function onRequest(context) {
       const chatId = path.split("/")[3];
       return await handleChatUpdate(chatId, request, env, userEmail);
     }
+    if (path.match(/^\/api\/chat\/[^/]+\/truncate$/) && method === "POST") {
+      const chatId = path.split("/")[3];
+      const body = await request.json().catch(() => ({}));
+      if (!body.created_at) return errorResponse("missing_created_at", 400);
+      const del = await env.DB.prepare(
+        "DELETE FROM messages WHERE chat_id = ? AND created_at >= ?"
+      ).bind(chatId, body.created_at).run();
+      return json({ ok: true, deleted: del.meta.changes });
+    }
 
     // --- Profile (P0-3) ---
     if (path === "/api/profile" && method === "GET") return await handleProfileGet(env, userEmail);
@@ -1583,11 +1592,14 @@ async function handleDbMessage(request, env, userEmail) {
   if (!chat_id || !role || !content) return errorResponse("missing_fields", 400);
 
   const msgId = message_id || crypto.randomUUID();
+  // v2.8.1: el CHECK de la tabla solo admite puter/openrouter; cualquier otro
+  // proveedor (cerebras, cohere…) se guarda como NULL para no perder el mensaje.
+  const provSafe = provider === "puter" || provider === "openrouter" ? provider : null;
   await env.DB.prepare(
     `INSERT INTO messages (id, chat_id, role, model, provider, content, thinking_content, tools_used, author_email, tokens_in, tokens_out, cached_tokens)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(
-    msgId, chat_id, role, model || null, provider || null, content,
+    msgId, chat_id, role, model || null, provSafe, content,
     thinking_content || null, tools_used ? JSON.stringify(tools_used) : null,
     author_email || userEmail, tokens_in || null, tokens_out || null, cached_tokens || 0
   ).run();
