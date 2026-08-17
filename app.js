@@ -1956,6 +1956,7 @@ async function runChatWithTools(userContent) {
   const maxIter = Math.min(state.settings.tokens.maxToolIterations || 3, 3);
   let iteration = 0;
   let assistantText = "";
+  let finalPersisted = false;
   setEntityState("processing");
   showStreamingIndicator(t("stream.processing"), "processing");
   setStreamingMode(true); // P0-4: mostrar Stop, ocultar Send
@@ -1991,6 +1992,7 @@ async function runChatWithTools(userContent) {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(partialMsg),
           }).catch(() => {});
+          finalPersisted = true;
         }
         toast(t("stream.stopped"), "info");
         break;
@@ -2013,7 +2015,28 @@ async function runChatWithTools(userContent) {
       // Parsear tool calls embebidos.
       const toolCalls = parseToolCallXML(response.text);
       if (toolCalls.length === 0) {
-        // No hay más tools; terminar.
+        // v2.8.2: persistir la respuesta final (antes era solo burbuja efímera).
+        const finalModel = response.model || state.currentModel;
+        const finalMsg = {
+          id: crypto.randomUUID(),
+          chat_id: state.currentChat.id,
+          role: "assistant",
+          content: response.text,
+          model: finalModel,
+          provider: getProvider(finalModel),
+          author_email: state.user_email,
+          tokens_in: response.tokens_in || 0,
+          tokens_out: response.tokens_out || 0,
+          cached_tokens: response.cached_tokens || 0,
+          created_at: new Date().toISOString(),
+        };
+        state.messages.push(finalMsg);
+        fetch("/api/db/message", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(finalMsg),
+        }).catch(() => {});
+        finalPersisted = true;
         break;
       }
 
@@ -2076,6 +2099,30 @@ async function runChatWithTools(userContent) {
   if (iteration >= maxIter) {
     assistantText += `\n\n[${t("tool.iterLimit")}]`;
   }
+
+  // v2.8.2: si el loop terminó sin persistir (fallback ético, errores), guardar igual.
+  if (!finalPersisted && assistantText && assistantText.trim()) {
+    const finalModel = state.currentModel;
+    const finalMsg = {
+      id: crypto.randomUUID(),
+      chat_id: state.currentChat.id,
+      role: "assistant",
+      content: assistantText,
+      model: finalModel,
+      provider: getProvider(finalModel),
+      author_email: state.user_email,
+      created_at: new Date().toISOString(),
+    };
+    state.messages.push(finalMsg);
+    fetch("/api/db/message", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(finalMsg),
+    }).catch(() => {});
+  }
+  // La burbuja de streaming es efímera: el DOM lo normaliza renderMessages().
+  if (_streamingMsgEl) { _streamingMsgEl.remove(); _streamingMsgEl = null; }
+  renderMessages();
 
   hideStreamingIndicator();
   setEntityState("active");
