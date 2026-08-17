@@ -1,6 +1,6 @@
 # VÉRITAS v2.4 — Intelligence OS para IA multi-modelo
 
-> **Una interfaz auto-alojada para investigar, verificar, crear, programar y operar con IA usando Cloudflare, múltiples modelos, skills dinámicas y 43 herramientas integradas.**
+> **Una interfaz auto-alojada para investigar, verificar, crear, programar y operar con IA usando Cloudflare, múltiples modelos, skills dinámicas y 62 herramientas integradas.**
 
 Véritas no es solo un chat. Es un **centro de mando**: combina modelos IA, memoria, herramientas OSINT, conectores OAuth, sandbox de código, documentos, scraping, navegación, skills especializadas y una UI vanilla ultraligera para convertir preguntas complejas en resultados verificables.
 
@@ -10,11 +10,11 @@ Véritas no es solo un chat. Es un **centro de mando**: combina modelos IA, memo
 
 - 🧠 **Orquestación multi-modelo**: 3 roles visibles — Agente, Estratega y Fast — con toggles internos Pensador y Code-first.
 - 🧩 **77 skills built-in** en `prompts/`: verificación, OSINT, análisis, código, escritura, media, negocios, diseño, documentos y educación.
-- 🛠️ **63 tools registradas** con dispatcher único, validación de argumentos y permisos por rol.
+- 🛠️ **62 tools registradas** con dispatcher único, validación de argumentos y permisos por rol.
 - 🔁 **Rotación de API keys** con cooldown, health checks y estado persistido en D1.
 - 🔎 **Investigación y scraping multi-proveedor**: Jina, Tavily, Serper, Firecrawl, ScrapingBee, Spider Cloud, Rover, Browserless, Steel, Browser-use, GDELT y más.
 - 🛰️ **OSINT defensivo**: DNS, Shodan, ZoomEye, Intelligence X, GFW, Apify Social/Places, NER y análisis coordinado.
-- 🧾 **Document intelligence**: LlamaParse, AssemblyAI, análisis multimodal y repositorio documental en R2.
+- 🧾 **Document intelligence**: LlamaParse, AssemblyAI y análisis multimodal. (R2 opcional: sin bucket, los endpoints de storage devuelven 503 claro.)
 - 🔐 **OAuth real**: GitHub con tokens cifrados, refresh, auditoría y rate-limit handling.
 - 💻 **Sandbox web pro**: previews HTML, 14 plantillas, snapshots, diff, test runner browser-side, error overlay, consola/network capture, export y push a GitHub.
 - 🧠 **Memoria cross-chat**: memorias categorizadas con importancia, expiración y deduplicación.
@@ -171,7 +171,7 @@ Modelos IA + APIs externas autorizadas
 │   ├── toolRegistry.js
 │   ├── toolRegistry.server.js
 │   ├── services/                # 24 adaptadores HTTP + OAuth
-│   └── tools/                   # 43 handlers ejecutables
+│   └── tools/                   # 62 handlers ejecutables
 ├── prompts/
 │   ├── *.md                     # 77 prompts de skills
 │   ├── references/*.md          # Referencias de apoyo
@@ -198,7 +198,7 @@ Los modelos se centralizan en `prompts.js` y `lib/fallbackChains.js`.
 | Code-first dentro de Agente | `cohere/north-mini-code:free` → `poolside/laguna-s-2.1:free` → `poolside/laguna-xs-2.1:free` | OpenRouter |
 | Fast / Prompt Arquitecto | `z-ai/glm-4.7-flash` → `z-ai/glm-4.6v-flash` → `z-ai/glm-4.5-flash` | Puter |
 
-> Nota: Véritas ya no asume proveedores “uncensored free” como dependencia estable. El rol Estratega usa GLM con un system prompt permisivo, directo y contextualizado; los modelos externos free rotan demasiado rápido para prometer ausencia de censura.
+> Nota (v2.9): roles activos **Agente** y **Fast** (Pensador como toggle). Sin Puter/GLM/Estratega: el Agente orquesta tools en el server (máx. 2 rondas) con prompt lite y síntesis final garantizada vía OpenRouter → Cerebras → Cohere.
 
 Fallbacks adicionales permitidos:
 
@@ -209,7 +209,7 @@ Fallbacks adicionales permitidos:
 
 ---
 
-## 🛠️ Tools disponibles: 63
+## 🛠️ Tools disponibles: 62
 
 ### Núcleo / proyecto
 
@@ -488,8 +488,8 @@ Todos los correos se firman con: **- Remitido por Véritas, la IA especializada 
 > **Nota de fusión v2.4:** este proyecto integra la selección de modelos y las
 > herramientas públicas del artefacto de rescate (`V-ritas-main.zip`) con los
 > fixes de consistencia de la sesión: versión 2.4.0 unificada, sin placeholders,
-> OAuth documentado (GITHUB_OAUTH_CLIENT_ID / DROPBOX_OAUTH_APP_KEY), adiós a
-> Dolphin (Estratega = GLM-4.7 Flash), mini-diálogos rotativos OSINT y lema
+> OAuth de GitHub documentado (GITHUB_OAUTH_CLIENT_ID); Dropbox eliminado en v2.8; adiós a
+> mini-diálogos rotativos OSINT y lema
 > "Información es ventaja. La ventaja es tuya."
 
 ---
