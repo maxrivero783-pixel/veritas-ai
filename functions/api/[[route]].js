@@ -3044,6 +3044,37 @@ async function handleOfflineBundle(env, userEmail) {
 // Inyecta el system prompt correspondiente (super_executor o ultra_orchestrator).
 // Retorna streaming SSE igual que /api/chat/openrouter.
 
+
+// v2.9.2: síntesis final multi-proveedor (OpenRouter -> Cerebras -> Cohere).
+async function callFallbackLLM(env, prompt) {
+  const chain = [
+    ["openrouter", "openai/gpt-oss-20b:free", "https://openrouter.ai/api/v1/chat/completions"],
+    ["cerebras", "cerebras/llama3.1-8b", "https://api.cerebras.ai/v1/chat/completions"],
+    ["cohere", "cohere/command-r-plus", "https://api.cohere.com/v2/chat"],
+  ];
+  for (const [prov, mid, url] of chain) {
+    try {
+      const result = await withKeyRotation(env, prov, async (key) => {
+        const headers = { "Authorization": `Bearer ${key}`, "Content-Type": "application/json" };
+        if (prov === "openrouter") {
+          headers["HTTP-Referer"] = env.PAGES_URL || "https://veritas.pages.dev";
+          headers["X-Title"] = "Veritas";
+        }
+        return await fetch(url, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ model: mid, messages: [{ role: "user", content: prompt }], stream: false, max_tokens: 1400 }),
+        });
+      });
+      if (!result.response.ok) continue;
+      const data = await result.response.json().catch(() => null);
+      const text = (data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || "";
+      if (text) return text;
+    } catch { /* siguiente proveedor */ }
+  }
+  return "";
+}
+
 // v2.9: nucleo de ejecucion de tools reutilizable (loop server-side del agente).
 async function runToolByName(env, userEmail, role, toolName, args, chatId) {
   if (!TOOL_REGISTRY_SERVER[toolName]) return { status: "error", output: "tool_not_found: " + toolName };
@@ -3124,6 +3155,7 @@ async function handleAgentOrchestrate(request, env, userEmail) {
   const MAX_TOOLS_PER_ROUND = 3;
   const startTs = Date.now();
   let lastText = "";
+  let lastResultsXml = "";
   const tokens = { in: 0, out: 0, cached: 0 };
 
   const callLLM = async () => {
@@ -3162,7 +3194,8 @@ async function handleAgentOrchestrate(request, env, userEmail) {
         results.push({ name: c.name, status: r.status || "ok", output: String(r.output == null ? "" : r.output).slice(0, 3000) });
       }
       msgs.push({ role: "assistant", content: text });
-      const resultsXml = results.map((r) => ("<" + "tool_result") + " name=" + T + r.name + T + " status=" + T + r.status + T + ">\n" + r.output + "\n" + TR_CLOSE).join("\n");
+      lastResultsXml = results.map((r) => ("<" + "tool_result") + " name=" + T + r.name + T + " status=" + T + r.status + T + ">\n" + r.output + "\n" + TR_CLOSE).join("\n");
+      const resultsXml = lastResultsXml;
       const tail = round + 1 >= MAX_TOOL_ROUNDS
         ? "Redacta AHORA tu respuesta final al usuario en su idioma, sin tool_calls."
         : "Si son suficientes, redacta tu respuesta final; si no, emite otra llamada de herramienta.";
@@ -3195,6 +3228,16 @@ async function handleAgentOrchestrate(request, env, userEmail) {
       const cleanProse = stripRe.reduce((s, re) => s.replace(re, ""), prose).trim();
       if (cleanProse && !/^[\s]*[\[{]/.test(cleanProse)) finalText = cleanProse;
     } catch { /* best-effort */ }
+  }
+  if (!finalText && lastResultsXml) {
+    const prose = await callFallbackLLM(env,
+      "Eres Veritas. El usuario hizo una pregunta y estas son las respuestas de las herramientas ejecutadas:\n" +
+      lastResultsXml.slice(0, 5000) +
+      "\nRedacta la respuesta final al usuario en prosa y markdown, en su idioma, integrando esos datos. Sin JSON crudo ni tool_calls.");
+    if (prose) {
+      const cleanProse = stripRe.reduce((s, re) => s.replace(re, ""), prose).trim();
+      if (cleanProse) finalText = cleanProse;
+    }
   }
   if (!finalText) finalText = "No pude completar la respuesta en esta ronda. Reintenta o reformula la pregunta.";
 
