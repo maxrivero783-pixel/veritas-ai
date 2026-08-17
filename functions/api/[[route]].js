@@ -1616,6 +1616,50 @@ async function handleDbMessage(request, env, userEmail) {
     `UPDATE chats SET updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_email = ?`
   ).bind(chat_id, userEmail).run();
 
+  // --- Notificación push al otro participante en sesiones compartidas ---
+  // Solo para mensajes de rol 'user' (la respuesta del modelo la verá al abrir el chat).
+  // Fire-and-forget: no penaliza la latencia del autoguardado.
+  if (role === 'user') {
+    (async () => {
+      try {
+        const chatRow = await env.DB.prepare(
+          `SELECT is_shared FROM chats WHERE id = ?`
+        ).bind(chat_id).first();
+        if (!chatRow || chatRow.is_shared !== 1) return;
+
+        const senderEmail = author_email || userEmail;
+        const otherParticipant = await env.DB.prepare(
+          `SELECT cp.user_email
+           FROM chat_participants cp
+           WHERE cp.chat_id = ? AND cp.user_email IS NOT NULL AND cp.user_email != ?
+           LIMIT 1`
+        ).bind(chat_id, senderEmail).first();
+        if (!otherParticipant) return;
+
+        // Construir nombre del remitente para el cuerpo de la notificación.
+        let senderName = 'Un participante';
+        try {
+          const senderRow = await env.DB.prepare(
+            `SELECT profile_json FROM users WHERE email = ?`
+          ).bind(senderEmail).first();
+          if (senderRow?.profile_json) {
+            const p = JSON.parse(senderRow.profile_json);
+            senderName = p?.name || senderEmail.split('@')[0];
+          }
+        } catch {}
+
+        const preview = content.length > 120 ? content.slice(0, 120) + '…' : content;
+
+        insertNotification(env, otherParticipant.user_email, {
+          title: 'Nuevo mensaje en sesión compartida',
+          body: `${senderName}: ${preview}`,
+          type: 'info',
+          deep_link: `veritas://chat/${chat_id}`,
+        }).catch(() => {});
+      } catch {}
+    })();
+  }
+
   return json({ ok: true, message_id: msgId });
 }
 
@@ -2670,12 +2714,28 @@ async function handleShareClose(chatId, env, userEmail) {
   ).bind(chatId).first();
   if (!owner || owner.user_email !== userEmail) return errorResponse("not_owner", 403);
 
+  // Antes de borrar participantes, notificar al editor (si hay uno activo).
+  const editorRow = await env.DB.prepare(
+    `SELECT user_email FROM chat_participants WHERE chat_id = ? AND role = 'editor' AND user_email IS NOT NULL`
+  ).bind(chatId).first();
+
   await env.DB.prepare(`DELETE FROM chat_participants WHERE chat_id = ?`).bind(chatId).run();
   await env.DB.prepare(`DELETE FROM chat_turn_lock WHERE chat_id = ?`).bind(chatId).run();
   await env.DB.prepare(`DELETE FROM chat_presence WHERE chat_id = ?`).bind(chatId).run();
   await env.DB.prepare(
     `UPDATE chats SET is_shared = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
   ).bind(chatId).run();
+
+  // Notificar al editor que la sesión fue cerrada (fire-and-forget).
+  if (editorRow) {
+    insertNotification(env, editorRow.user_email, {
+      title: 'Sesión compartida cerrada',
+      body: 'El owner cerró la sesión compartida. Ya no puedes acceder al chat.',
+      type: 'warning',
+      deep_link: null,
+    }).catch(() => {});
+  }
+
   return json({ ok: true });
 }
 
@@ -2807,6 +2867,11 @@ async function handleTurnRelease(chatId, env, userEmail) {
 }
 
 async function handleLeave(chatId, env, userEmail) {
+  // Antes de borrar, verificar si quien sale es el editor para notificar al owner.
+  const participant = await env.DB.prepare(
+    `SELECT role FROM chat_participants WHERE chat_id = ? AND user_email = ?`
+  ).bind(chatId, userEmail).first();
+
   await env.DB.prepare(
     `DELETE FROM chat_participants WHERE chat_id = ? AND user_email = ?`
   ).bind(chatId, userEmail).run();
@@ -2817,6 +2882,22 @@ async function handleLeave(chatId, env, userEmail) {
   await env.DB.prepare(
     `DELETE FROM chat_turn_lock WHERE chat_id = ? AND held_by_user_email = ?`
   ).bind(chatId, userEmail).run();
+
+  // Notificar al owner si quien salió fue el editor (fire-and-forget).
+  if (participant?.role === 'editor') {
+    const ownerRow = await env.DB.prepare(
+      `SELECT user_email FROM chat_participants WHERE chat_id = ? AND role = 'owner' AND user_email IS NOT NULL`
+    ).bind(chatId).first();
+    if (ownerRow) {
+      insertNotification(env, ownerRow.user_email, {
+        title: 'El editor abandonó la sesión',
+        body: 'El colaborador ha salido de la sesión compartida. Ya eres el único participante.',
+        type: 'info',
+        deep_link: `veritas://chat/${chatId}`,
+      }).catch(() => {});
+    }
+  }
+
   return json({ ok: true });
 }
 
