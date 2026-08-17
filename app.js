@@ -624,6 +624,8 @@ function setupEventListeners() {
     }
   });
 
+  initMessageActions();
+
   // Send button.
   $("#sendBtn")?.addEventListener("click", () => sendMessage());
   // P0-4: Stop button — aborta el streaming en curso.
@@ -1078,9 +1080,17 @@ async function createNewChat() {
   await loadChatList();
   openChat(chat);
   $("#messageInput")?.focus();
+
+  // v2.8.1: persistencia visible — reabre el último chat activo al entrar.
+  if (!state.currentChat && chats.length > 0) {
+    const lastId = localStorage.getItem("veritas:lastChat");
+    const target = chats.find((c) => c.id === lastId) || chats[0];
+    if (target) await openChat(target);
+  }
 }
 
 async function openChat(chat) {
+  try { localStorage.setItem("veritas:lastChat", chat.id); } catch { /* privado */ }
   state.currentChat = chat;
   state.messages = [];
   state.chatSummary = chat.summary_json ? JSON.parse(chat.summary_json) : null;
@@ -1285,7 +1295,7 @@ function renderChatHeader() {
   const ct2 = $("#chatCrumbTitle");
   if (ct2) ct2.textContent = state.currentChat.title;
   const modelChip = $("#modelChip");
-  const _info = getModelInfo(state.currentModel);
+  const _info = getModelDisplayInfo(state.currentModel);
   modelChip.textContent = `${_info.roleName || "🤖"} · ${_info.shortName}`;
   modelChip.className = `model-chip ${getProvider(state.currentModel)}`;
 
@@ -1480,6 +1490,51 @@ function getModelDisplayInfo(modelId) {
   return map[modelId] || { shortName: modelId, roleName: "", icon: "🤖", provider };
 }
 
+// v2.8.1: regenera la última respuesta (trunca servidor y re-envía el user previo).
+async function regenerateLastAssistant() {
+  let i = state.messages.length - 1;
+  while (i >= 0 && state.messages[i].role !== "assistant") i--;
+  if (i < 0) return;
+  let u = i - 1;
+  while (u >= 0 && state.messages[u].role !== "user") u--;
+  if (u < 0) return;
+  const userMsg = state.messages[u];
+  try {
+    await fetch(`/api/chat/${encodeURIComponent(state.currentChat.id)}/truncate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ created_at: userMsg.created_at }),
+    });
+  } catch { /* best-effort */ }
+  state.messages = state.messages.slice(0, u);
+  renderMessages();
+  const input = $("#messageInput");
+  input.value = userMsg.content;
+  await sendMessage();
+}
+
+function initMessageActions() {
+  const container = $("#messagesContainer");
+  if (!container) return;
+  container.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-action]");
+    if (!btn) return;
+    const msgEl = btn.closest(".message");
+    const idx = [...container.querySelectorAll(".message")].indexOf(msgEl);
+    const m = state.messages[idx];
+    if (!m) return;
+    if (btn.dataset.action === "copy-msg") {
+      const text = (m.content || "").replace(/<[^>]+>/g, "").trim();
+      (navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject()).then(
+        () => toast("📋 Respuesta copiada", "success", 1500),
+        () => toast("No se pudo copiar", "warning", 1500)
+      );
+    } else if (btn.dataset.action === "regen-msg") {
+      regenerateLastAssistant();
+    }
+  });
+}
+
 function renderMessages() {
   const container = $("#messagesContainer");
   container.innerHTML = "";
@@ -1533,6 +1588,16 @@ function renderMessage(m) {
   if (m.tools_used && Array.isArray(m.tools_used) && m.tools_used.length > 0) {
     tools.innerHTML = m.tools_used.map((name) => `<span class="tool-chip">🔧 ${name}</span>`).join("");
     tools.hidden = false;
+  }
+
+  // v2.8.1: acciones por respuesta (copiar / regenerar).
+  if (m.role === "assistant") {
+    const actions = document.createElement("div");
+    actions.className = "message-actions";
+    actions.innerHTML =
+      '<button class="msg-action" data-action="copy-msg" title="Copiar respuesta">📋</button>' +
+      '<button class="msg-action" data-action="regen-msg" title="Regenerar respuesta">🔄</button>';
+    msg.appendChild(actions);
   }
 
   // Cached chip.
@@ -2515,18 +2580,8 @@ function entityStateForTool(toolName) {
 }
 
 async function executeToolCall(call) {
-  // Mostrar chip "Ejecutando: <tool>".
-  const toolMsg = {
-    id: crypto.randomUUID(),
-    chat_id: state.currentChat.id,
-    role: "tool",
-    content: `<div class="tool-executing">🔧 ${t("tool.executing", { tool: call.name })}</div>`,
-    created_at: new Date().toISOString(),
-  };
-  state.messages.push(toolMsg);
-  renderMessage(toolMsg);
-  scrollToBottom();
-
+  // v2.8.1: las tools NO renderizan burbuja propia; el canvas de entidad y
+  // los chips 🔧 dentro del mensaje del agente son el único indicador visible.
   const startTs = Date.now();
   setEntityState(entityStateForTool(call.name));
   try {
@@ -2537,10 +2592,6 @@ async function executeToolCall(call) {
     });
     const data = await resp.json();
     const latency = Date.now() - startTs;
-
-    // Reemplazar el chip por el resultado real.
-    toolMsg.content = buildToolResultXML(call.name, data.status, data.output);
-    renderMessages(); // re-render para actualizar el tool result.
 
     // Detectar marcadores especiales en el output.
     if (data.output && data.output.includes("[[VERITAS_PREVIEW_HTML:")) {
@@ -2566,8 +2617,6 @@ async function executeToolCall(call) {
     }
   } catch (e) {
     setEntityState("error");
-    toolMsg.content = buildToolResultXML(call.name, "error", e.message);
-    renderMessages();
   }
 }
 
@@ -2581,25 +2630,12 @@ async function tryFallback(error) {
     return;
   }
 
-  if (state.settings.fallbackMode === "automatic") {
-    state.currentModel = next;
-    state.currentRole = resolveUiRoleForCurrentSelection(next);
-    populateModelSelector();
-    renderChatHeader();
-    toast(t("model.changed", { model: next, old: state.currentModel }), "info");
-    // Reintentar.
-    await runChatWithTools(state.messages[state.messages.length - 1].content);
-  } else {
-    // Manual: pedir confirmación.
-    const ok = await showConfirm(t("model.unavailable", { model: state.currentModel, fallback: next }), { title: "Modelo no disponible", okLabel: "Usar fallback" });
-    if (ok) {
-      state.currentModel = next;
-      state.currentRole = resolveUiRoleForCurrentSelection(next);
-      populateModelSelector();
-      renderChatHeader();
-      await runChatWithTools(state.messages[state.messages.length - 1].content);
-    }
-  }
+  // v2.8.1: fallback siempre automático y silencioso — sin molestar al usuario.
+  state.currentModel = next;
+  state.currentRole = resolveUiRoleForCurrentSelection(next);
+  populateModelSelector();
+  renderChatHeader();
+  await runChatWithTools(state.messages[state.messages.length - 1].content);
 }
 
 // ==============================================================================
