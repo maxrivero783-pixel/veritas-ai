@@ -3105,6 +3105,16 @@ async function handleAgentOrchestrate(request, env, userEmail) {
   let finalText = lastText || "";
   for (const re of stripRe) finalText = finalText.replace(re, "");
   finalText = finalText.trim();
+  // v2.9.1: si el modelo devolvio JSON crudo como respuesta, pedir prosa.
+  if (/^[\s]*[\[{]/.test(finalText)) {
+    msgs.push({ role: "assistant", content: finalText.slice(0, 2500) });
+    msgs.push({ role: "user", content: "El dato anterior es JSON crudo de una herramienta. Redacta AHORA la respuesta final al usuario en prosa y markdown, en su idioma, integrando esos datos. No incluyas JSON crudo ni tool_calls." });
+    try {
+      const prose = (await callLLM()) || "";
+      const cleanProse = stripRe.reduce((s, re) => s.replace(re, ""), prose).trim();
+      if (cleanProse && !/^[\s]*[\[{]/.test(cleanProse)) finalText = cleanProse;
+    } catch { /* best-effort */ }
+  }
   if (!finalText) finalText = "No pude completar la respuesta en esta ronda. Reintenta o reformula la pregunta.";
 
   if (useCache && cacheKey) await llmCacheSet(env, cacheKey, finalText, null, modelId, userEmail);
