@@ -2966,3 +2966,9 @@ mark.search-current { background: rgba(80, 200, 120, .6); }
   line-height: 1.5;
 }
 .quota-hint { color: var(--text-muted, #94a3b8); font-size: 12px; }
+
+/* v2.8.1 — acciones por respuesta (copiar / regenerar) */
+.message-actions { display: flex; gap: 6px; margin-top: 6px; opacity: 0.55; transition: opacity .15s ease; }
+.message:hover .message-actions { opacity: 1; }
+.msg-action { background: transparent; border: 1px solid var(--border-subtle); border-radius: 6px; color: var(--text-muted); cursor: pointer; font-size: 12px; padding: 2px 7px; }
+.msg-action:hover { color: var(--text-main); border-color: var(--accent); }
