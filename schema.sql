@@ -382,3 +382,36 @@ CREATE INDEX IF NOT EXISTS idx_llm_cache_created ON llm_cache(created_at);
 CREATE TABLE IF NOT EXISTS async_jobs (id TEXT PRIMARY KEY, user_email TEXT NOT NULL, chat_id TEXT, tool_name TEXT NOT NULL, provider_job_id TEXT, status TEXT NOT NULL DEFAULT 'pending', args_json TEXT, result_json TEXT, notify_email INTEGER DEFAULT 0, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP);
 CREATE INDEX IF NOT EXISTS idx_async_jobs_user ON async_jobs(user_email, created_at DESC);
 
+
+-- ------------------------------------------------------------------------------
+-- notification_devices: devices registered for polling-based push (v3.0)
+-- Replaces FCM — pure Cloudflare Workers + D1, zero Google dependency.
+-- ------------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS notification_devices (
+  device_id TEXT PRIMARY KEY,                         -- UUID generated on device first launch
+  user_email TEXT NOT NULL,
+  device_name TEXT DEFAULT 'Android',
+  last_poll_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  registered_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_email) REFERENCES users(email) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_notif_devices_user ON notification_devices(user_email);
+
+-- notifications: queue for polling-based push delivery
+CREATE TABLE IF NOT EXISTS notifications (
+  id TEXT PRIMARY KEY,                                -- UUID
+  user_email TEXT NOT NULL,
+  title TEXT NOT NULL,
+  body TEXT NOT NULL,
+  type TEXT NOT NULL DEFAULT 'info' CHECK(type IN ('info','warning','success','error','osint')),
+  deep_link TEXT,                                   -- optional: veritas://chat/... to open on tap
+  data_json TEXT,                                   -- optional: extra JSON payload
+  delivered INTEGER NOT NULL DEFAULT 0,              -- 1 = sent to at least one device
+  delivered_at DATETIME,
+  read INTEGER NOT NULL DEFAULT 0,                   -- 1 = user opened / dismissed
+  read_at DATETIME,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_email) REFERENCES users(email) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_notif_user_delivered ON notifications(user_email, delivered, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_notif_created ON notifications(created_at DESC);

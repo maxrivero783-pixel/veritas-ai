@@ -607,6 +607,13 @@ export async function onRequest(context) {
       if (method === "DELETE") return await handleSkillDelete(skillIdMatch[1], env, userEmail);
     }
 
+    // 6.12 — Notifications (polling-based, no FCM/Google dependency)
+    if (path === "/api/notifications/register" && method === "POST") return await handleNotificationDeviceRegister(request, env, userEmail);
+    if (path === "/api/notifications/unregister" && method === "POST") return await handleNotificationDeviceUnregister(request, env, userEmail);
+    if (path === "/api/notifications/poll" && method === "GET") return await handleNotificationPoll(request, env, userEmail);
+    if (path === "/api/notifications" && method === "GET") return await handleNotificationsList(request, env, userEmail);
+    if (path === "/api/notifications/ack" && method === "POST") return await handleNotificationAck(request, env, userEmail);
+
     // 404
     return errorResponse("not_found", 404, { path, method });
   } catch (e) {
@@ -3411,6 +3418,144 @@ async function handleSkillDelete(skillId, request, env, userEmail) {
   if (!result.meta.changes) return errorResponse("not_found", 404, { message: `Skill "${skillId}" not found or already deleted` });
 
   return json({ deleted: skillId });
+}
+
+// ==============================================================================
+// 6.12 — Notifications (polling-based push, zero Google/FCM dependency)
+// ==============================================================================
+// Architecture:
+//   - Android app registers a unique device_id via /api/notifications/register
+//   - App polls /api/notifications/poll?since=<last_id> every ~15 min via WorkManager
+//   - Backend stores notifications in D1; poll returns unseen ones + marks them delivered
+//   - Any backend code can enqueue notifications via insertNotification()
+//   - No external push service needed — pure Cloudflare Workers + D1.
+// ==============================================================================
+
+/**
+ * Insert a notification for a user. Call this from any handler that needs to
+ * notify the user (e.g. long-running tool completion, shared session activity).
+ */
+async function insertNotification(env, userEmail, { title, body, type = "info", deep_link = null, data = null }) {
+  const id = crypto.randomUUID();
+  await env.DB.prepare(
+    `INSERT INTO notifications (id, user_email, title, body, type, deep_link, data_json, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`
+  ).bind(id, userEmail, title, body, type, deep_link, data ? JSON.stringify(data) : null).run();
+  return id;
+}
+
+async function handleNotificationDeviceRegister(request, env, userEmail) {
+  const body = await request.json().catch(() => ({}));
+  const { device_id, device_name } = body;
+  if (!device_id) return errorResponse("missing_device_id", 400, { message: "device_id is required" });
+
+  await env.DB.prepare(
+    `INSERT INTO notification_devices (device_id, user_email, device_name, last_poll_at)
+     VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+     ON CONFLICT(device_id) DO UPDATE SET
+       user_email = excluded.user_email,
+       device_name = COALESCE(excluded.device_name, notification_devices.device_name),
+       last_poll_at = CURRENT_TIMESTAMP`
+  ).bind(device_id, userEmail, device_name || "Android", ).run();
+
+  return json({ ok: true, device_id });
+}
+
+async function handleNotificationDeviceUnregister(request, env, userEmail) {
+  const body = await request.json().catch(() => ({}));
+  const { device_id } = body;
+  if (!device_id) return errorResponse("missing_device_id", 400);
+
+  await env.DB.prepare(
+    "DELETE FROM notification_devices WHERE device_id = ? AND user_email = ?"
+  ).bind(device_id, userEmail).run();
+
+  return json({ ok: true });
+}
+
+async function handleNotificationPoll(request, env, userEmail) {
+  const url = new URL(request.url);
+  const sinceId = url.searchParams.get("since") || "0";
+  const limit = Math.min(parseInt(url.searchParams.get("limit")) || 20, 50);
+
+  // Update device last_poll_at if device_id provided
+  const deviceId = request.headers.get("x-veritas-device-id");
+  if (deviceId) {
+    env.DB.prepare(
+      "UPDATE notification_devices SET last_poll_at = CURRENT_TIMESTAMP WHERE device_id = ? AND user_email = ?"
+    ).bind(deviceId, userEmail).run().catch(() => {});
+  }
+
+  // Fetch unseen notifications (delivered=0) newer than sinceId
+  const rows = await env.DB.prepare(
+    `SELECT id, title, body, type, deep_link, data_json, created_at
+     FROM notifications
+     WHERE user_email = ? AND delivered = 0 AND id > ?
+     ORDER BY created_at ASC LIMIT ?`
+  ).bind(userEmail, sinceId, limit).all();
+
+  // Mark them as delivered
+  if (rows.results.length > 0) {
+    const ids = rows.results.map(r => r.id);
+    const placeholders = ids.map(() => "?").join(",");
+    await env.DB.prepare(
+      `UPDATE notifications SET delivered = 1, delivered_at = CURRENT_TIMESTAMP
+       WHERE id IN (${placeholders})`
+    ).bind(...ids).run();
+  }
+
+  const notifications = rows.results.map(r => ({
+    id: r.id,
+    title: r.title,
+    body: r.body,
+    type: r.type,
+    deep_link: r.deep_link,
+    data: r.data_json ? JSON.parse(r.data_json) : null,
+    created_at: r.created_at,
+  }));
+
+  return json({ ok: true, notifications });
+}
+
+async function handleNotificationsList(request, env, userEmail) {
+  const url = new URL(request.url);
+  const limit = Math.min(parseInt(url.searchParams.get("limit")) || 50, 100);
+  const offset = parseInt(url.searchParams.get("offset")) || 0;
+
+  const rows = await env.DB.prepare(
+    `SELECT id, title, body, type, deep_link, data_json, created_at, delivered, read
+     FROM notifications
+     WHERE user_email = ?
+     ORDER BY created_at DESC LIMIT ? OFFSET ?`
+  ).bind(userEmail, limit, offset).all();
+
+  const notifications = rows.results.map(r => ({
+    id: r.id,
+    title: r.title,
+    body: r.body,
+    type: r.type,
+    deep_link: r.deep_link,
+    data: r.data_json ? JSON.parse(r.data_json) : null,
+    created_at: r.created_at,
+    delivered: !!r.delivered,
+    read: !!r.read,
+  }));
+
+  return json({ ok: true, notifications });
+}
+
+async function handleNotificationAck(request, env, userEmail) {
+  const body = await request.json().catch(() => ({}));
+  const { ids } = body;
+  if (!Array.isArray(ids) || ids.length === 0) return errorResponse("missing_ids", 400);
+
+  const placeholders = ids.map(() => "?").join(",");
+  await env.DB.prepare(
+    `UPDATE notifications SET read = 1, read_at = CURRENT_TIMESTAMP
+     WHERE id IN (${placeholders}) AND user_email = ?`
+  ).bind(...ids, userEmail).run();
+
+  return json({ ok: true, marked_read: ids.length });
 }
 
 // ==============================================================================
