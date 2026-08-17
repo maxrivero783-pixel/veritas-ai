@@ -1970,6 +1970,24 @@ async function sendMessage() {
 // ==============================================================================
 // TOOL CALLER LOOP (máx 5 iteraciones)
 // ==============================================================================
+// v2.8.8: síntesis final reutilizable: redacta la respuesta al usuario con el
+// dump de herramientas que se le pase. Devuelve "" si falla.
+async function synthesizeFinal(userContent, dump) {
+  const synthPrompt = `Eres Véritas, una única identidad de IA. El usuario preguntó: "${(userContent || "").slice(0, 1500)}".
+Se ejecutaron herramientas y estos son sus resultados:
+${dump || "(sin resultados útiles)"}
+Redacta AHORA la mejor respuesta final posible al usuario, en su idioma, usando esa información aunque sea parcial o haya errores. Si faltan datos, dilo brevemente y da tu mejor aproximación. No emitas tool_calls, ni XML, ni JSON crudo: responde en prosa clara.`;
+  try {
+    const sr = await fetch("/api/llm/complete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: synthPrompt, max_tokens: 1600 }),
+    });
+    const sd = await sr.json().catch(() => null);
+    return ((sd && sd.text) || "").trim();
+  } catch { return ""; }
+}
+
 // v2.8.7: limpia markup interno de tools e instrucciones eco del modelo.
 function cleanAgentText(text) {
   if (!text) return "";
@@ -2063,8 +2081,14 @@ async function runChatWithTools(userContent) {
       // v2.8.7: el rol Agente orquestó tools en el servidor; tratamos su texto
       // (limpio de markup) como respuesta final única y persistimos.
       if (state.currentRole === "agent") {
-        let clean = cleanAgentText(response.text);
-        clean = extractSandboxArtifacts(clean);
+        let clean = extractSandboxArtifacts(cleanAgentText(response.text));
+        if (!clean || clean.length < 40) {
+          // v2.8.8: el server no devolvió prosa final; sintetizamos con su crudo
+          // (que contiene los tool_result con los datos reales).
+          const synth = await synthesizeFinal(userContent, response.text.replace(/<[^>]+>/g, " ").slice(0, 6000));
+          if (synth) clean = synth;
+        }
+        if (!clean) clean = "No pude completar la respuesta en esta ronda. Reintenta o reformula la pregunta.";
         const finalModel = response.model || state.currentModel;
         const finalMsg = {
           id: crypto.randomUUID(),
@@ -2188,39 +2212,27 @@ async function runChatWithTools(userContent) {
   // v2.8.3: Véritas SIEMPRE sintetiza una respuesta final con lo recolectado.
   if (!finalPersisted && lastHadTools) {
     const dump = toolOutputs.slice(-4).map((o) => `【${o.name} · ${o.status}】 ${o.output}`).join("\n").slice(0, 6000);
-    const synthPrompt = `Eres Véritas, una única identidad de IA. El usuario preguntó: "${userContent.slice(0, 1500)}".
-Se ejecutaron herramientas y estos son sus resultados:
-${dump || "(sin resultados útiles)"}
-Redacta AHORA la mejor respuesta final posible al usuario, en su idioma, usando esa información aunque sea parcial o haya errores. Si faltan datos, dilo brevemente y da tu mejor aproximación. No emitas tool_calls, ni XML, ni JSON crudo: responde en prosa clara.`;
-    try {
-      const sr = await fetch("/api/llm/complete", {
+    const synthText = await synthesizeFinal(userContent, dump);
+    if (synthText) {
+      const finalMsg = {
+        id: crypto.randomUUID(),
+        chat_id: state.currentChat.id,
+        role: "assistant",
+        content: synthText,
+        model: state.currentModel,
+        provider: getProvider(state.currentModel),
+        author_email: state.user_email,
+        created_at: new Date().toISOString(),
+      };
+      state.messages.push(finalMsg);
+      fetch("/api/db/message", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: synthPrompt, max_tokens: 1600 }),
-      });
-      const sd = await sr.json().catch(() => null);
-      const synthText = (sd && sd.text || "").trim();
-      if (synthText) {
-        const finalMsg = {
-          id: crypto.randomUUID(),
-          chat_id: state.currentChat.id,
-          role: "assistant",
-          content: synthText,
-          model: state.currentModel,
-          provider: getProvider(state.currentModel),
-          author_email: state.user_email,
-          created_at: new Date().toISOString(),
-        };
-        state.messages.push(finalMsg);
-        fetch("/api/db/message", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(finalMsg),
-        }).catch(() => {});
-        finalPersisted = true;
-        assistantText = synthText;
-      }
-    } catch { /* best-effort */ }
+        body: JSON.stringify(finalMsg),
+      }).catch(() => {});
+      finalPersisted = true;
+      assistantText = synthText;
+    }
   }
 
   // v2.8.7: roles no-agente también limpian markup y extraen artefactos.
