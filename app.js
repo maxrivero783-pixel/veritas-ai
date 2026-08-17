@@ -26,7 +26,7 @@
 
 import { t, applyI18n, detectInitialLang, getCurrentLang, formatDate } from "./lib/i18n.js";
 import { FALLBACK_CHAINS, MODEL_PROVIDER, getNextFallback, isFallbackExhausted, getProvider, getContextLimit, getRoleForModel } from "./lib/fallbackChains.js";
-import { TOOL_REGISTRY, isAllowed, parseToolCallXML, parseFallbackToVenice, stripFallbackToVenice, buildToolResultXML, escapeXML, fetchAndHydrate, getTool } from "./lib/toolRegistry.js";
+import { TOOL_REGISTRY, isAllowed, parseToolCallXML, buildToolResultXML, escapeXML, fetchAndHydrate, getTool } from "./lib/toolRegistry.js";
 import * as ContextManager from "./lib/contextManager.js";
 import { runAgentLoop } from "./lib/agentOrchestrator.js";
 import { SharedSessionManager, createShare, revokeShare, joinSession, isRoleShareable } from "./lib/sharedSession.js";
@@ -2118,24 +2118,17 @@ async function runChatWithTools(userContent) {
         break;
       }
 
-      // ── Fallback ético: <fallback_to_uncensored> ──
-      const uncensoredFallback = parseFallbackToVenice(response.text);
-      if (uncensoredFallback) {
-        // v2.8: sin Estratega/Puter — solo se limpia el marcador y se continúa.
-        const strippedText = stripFallbackToVenice(response.text);
-        if (strippedText) {
-          response.text = strippedText;
-          assistantText += strippedText;
-        }
-        break;
+      // v2.11: sin fallback "uncensored"; solo limpia marcadores internos.
+      if (/<fallback_to_uncensored>/i.test(response.text)) {
+        response.text = cleanAgentText(response.text);
       }
 
       assistantText += response.text;
 
       // Parsear tool calls embebidos.
       const toolCalls = parseToolCallXML(response.text);
-      // v2.8.5: resultados de tools sin tool_call parseable: al contexto
-      // y el modelo los procesa en la siguiente ronda (o sintesis final).
+      // v2.8.5: el server puede devolver <tool_result> ya ejecutados sin
+      // tool_call parseable: pasan al contexto y el modelo los procesa.
       if (toolCalls.length === 0 && /<tool_result|<tool_call|<toolcall/i.test(response.text)) {
         state.messages.push({
           id: crypto.randomUUID(),

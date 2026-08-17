@@ -172,7 +172,7 @@ CREATE INDEX IF NOT EXISTS idx_toolcalls_tool ON tool_calls(tool_name, ts DESC);
 CREATE TABLE IF NOT EXISTS oauth_pending (
   state TEXT PRIMARY KEY,                             -- 32 bytes hex
   user_email TEXT NOT NULL,
-  provider TEXT NOT NULL,                             -- 'github' | 'dropbox'
+  provider TEXT NOT NULL,                             -- 'github'
   code_verifier TEXT NOT NULL,                        -- PKCE code_verifier (43-128 chars)
   redirect_after TEXT,                                -- path del frontend al que volver tras callback
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -187,7 +187,7 @@ CREATE INDEX IF NOT EXISTS idx_oauth_pending_user ON oauth_pending(user_email, c
 -- ------------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS external_connections (
   user_email TEXT NOT NULL,
-  provider TEXT NOT NULL,                             -- 'github' | 'dropbox'
+  provider TEXT NOT NULL,                             -- 'github'
   access_token_encrypted TEXT NOT NULL,               -- base64(iv || ciphertext)
   refresh_token_encrypted TEXT,                       -- base64(iv || ciphertext); NULL si no aplica (GitHub)
   scopes TEXT,                                        -- CSV de scopes autorizados

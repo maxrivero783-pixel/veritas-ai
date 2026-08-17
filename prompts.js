@@ -1543,9 +1543,7 @@ const ADAPTATIONS = {
   super_executor:     SUPER_EXECUTOR_ADAPTATION,
   nano_vl:            NANO_VL_ADAPTATION,
   nano_omni:          NANO_OMNI_ADAPTATION,
-  strategist:         STRATEGIST_ADAPTATION,
   laguna:             LAGUNA_ADAPTATION,
-  glm_flash:          GLM_FLASH_ADAPTATION,
 };
 
 // ------------------------------------------------------------------------------
@@ -1558,9 +1556,7 @@ export const SYSTEM_PROMPTS = {
   super_executor:     buildSystemPrompt("super_executor"),
   nano_vl:            buildSystemPrompt("nano_vl"),
   nano_omni:          buildSystemPrompt("nano_omni"),
-  strategist:         buildSystemPrompt("strategist"),
   laguna:             buildSystemPrompt("laguna"),
-  glm_flash:          buildSystemPrompt("glm_flash"),
 };
 
 // ------------------------------------------------------------------------------
@@ -1599,12 +1595,7 @@ export const ROLE_TO_MODEL = {
   laguna:         "cohere/north-mini-code:free", // key legacy del prompt Coder
   laguna_s:       "poolside/laguna-s-2.1:free",
   laguna_xs:      "poolside/laguna-xs-2.1:free",
-  // Estratega: GLM permisivo vía Puter
-  strategist:     "z-ai/glm-4.7-flash", // Estratega (GLM-4.7, el más permisivo del stack free)
   // Fast / Prompt Arquitecto
-  glm_flash:      "z-ai/glm-4.7-flash",
-  glm_46v_flash:  "z-ai/glm-4.6v-flash",
-  glm_45_flash:   "z-ai/glm-4.5-flash",
 };
 
 // Mapeo modelId → roleKey (reverse lookup).
@@ -1613,11 +1604,13 @@ export const MODEL_TO_ROLE = {
   "cohere/north-mini-code:free": "laguna",
   "poolside/laguna-s-2.1:free": "laguna",
   "poolside/laguna-xs-2.1:free": "laguna",
+  "cerebras/llama3.1-8b": "super_executor",
+  "cerebras/llama-3.3-70b": "super_executor",
+  "cohere/command-r-plus": "super_executor",
+  "cohere/command-a-03-2025": "super_executor",
   "nvidia/nemotron-3-nano-30b-a3b:free": "super_executor",
   "google/gemma-4-31b-it:free": "super_executor",
   "openai/gpt-oss-20b:free": "super_executor",
-  "z-ai/glm-4.6v-flash": "glm_flash",
-  "z-ai/glm-4.5-flash": "glm_flash",
 };
 
 // ------------------------------------------------------------------------------
@@ -1628,9 +1621,8 @@ export const MODEL_TO_ROLE = {
 export const UI_ROLE_TO_PROMPT_KEY = {
   agent:    "super_executor",       // default del agente (ultra se decide en el Worker por escalate)
   coder:    "laguna",
-  estratega: "strategist",
   pensador: "super_executor",
-  fast:     "glm_flash",
+  fast:     "super_executor",
 };
 
 // Mapeo inverso: SYSTEM_PROMPTS key → UI role (para el Worker).
