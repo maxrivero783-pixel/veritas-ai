@@ -3118,6 +3118,27 @@ async function handleAgentOrchestrate(request, env, userEmail) {
   if (memory_block) systemPrompt += "\n\n<memorias_cross_chat>\n" + memory_block + "\n</memorias_cross_chat>";
   if (skills_block) systemPrompt += "\n" + skills_block;
 
+  // v2.10 TOOL-FIRST: búsqueda fresca obligatoria antes del primer LLM,
+  // + fecha actual inyectada (evita respuestas con corte de conocimiento).
+  const userQuery = (messages.filter((m) => m.role === "user").pop() || {}).content || "";
+  const fresh = [];
+  const freshJobs = [
+    ["web_search", { query: userQuery.slice(0, 400), max_results: 6 }],
+    ["gdelt_search", { query: userQuery.slice(0, 300), mode: "events", timespan: "1w" }],
+  ];
+  for (const [tn, ta] of freshJobs) {
+    try {
+      const r = await runToolByName(env, userEmail, "agent", tn, ta, chat_id);
+      if (r && r.status === "ok" && r.output) fresh.push("### " + tn + "\n" + String(r.output).slice(0, 4000));
+    } catch { /* best-effort */ }
+  }
+  systemPrompt += "\n\nFecha actual (UTC): " + new Date().toISOString() + ". NUNCA asumas que una fecha reciente es futura; usa los resultados de búsqueda.";
+  if (fresh.length) {
+    systemPrompt += "\n\n<busqueda_actual>\n" + fresh.join("\n\n") + "\n</busqueda_actual>\nUsa estos resultados frescos como base factual. Si no contienen el dato pedido, dilo sin inventar nada.";
+  } else {
+    systemPrompt += "\n\nNo se obtuvieron resultados de búsqueda automática; usa tus herramientas si el usuario necesita datos actuales y NO inventes datos.";
+  }
+
   const msgs = [{ role: "system", content: systemPrompt }, ...messages.filter((m) => m.role !== "system")];
 
   const MAX_TOOL_ROUNDS = 2;
