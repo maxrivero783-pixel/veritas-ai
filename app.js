@@ -1675,6 +1675,7 @@ function formatMessageContent(content) {
   // Los tool_calls ya ejecutados nunca se muestran crudos al usuario.
   s = s.replace(/<tool_call[\s\S]*?(?:<\/tool_call>|$)/gi, "");
   s = s.replace(/<tool_result[\s\S]*?(?:<\/tool_result>|$)/gi, "");
+  s = s.replace(/<\/?\s*(?:tool_call|toolcall|tool_result|tool-result|function_call)[^>]*>/gi, "");
 
   // 2. Extraer code blocks fenced ```lang\n...```.
   const codeBlocks = [];
@@ -1977,6 +1978,7 @@ function cleanAgentText(text) {
     .replace(/<tool_call[\s\S]*?(?:<\/tool_call>|$)/gi, "")
     .replace(/<toolcall[\s\S]*?(?:<\/toolcall>|$)/gi, "")
     .replace(/<tool_result[\s\S]*?(?:<\/tool_result>|$)/gi, "")
+    .replace(/<\/?\s*(?:tool_call|toolcall|tool_result|tool-result|function_call)[^>]*>/gi, "")
     .replace(/^\s*Now (summarize|respond|answer|provide)[^\n]*$/gmi, "")
     .replace(/^\s*preview generated\s*$/gmi, "")
     .replace(/\n{3,}/g, "\n\n")
