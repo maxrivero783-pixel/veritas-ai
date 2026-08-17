@@ -2016,6 +2016,21 @@ async function runChatWithTools(userContent) {
 
       // Parsear tool calls embebidos.
       const toolCalls = parseToolCallXML(response.text);
+      // v2.8.5: resultados de tools sin tool_call parseable: al contexto
+      // y el modelo los procesa en la siguiente ronda (o sintesis final).
+      if (toolCalls.length === 0 && /<tool_result|<tool_call|<toolcall/i.test(response.text)) {
+        state.messages.push({
+          id: crypto.randomUUID(),
+          chat_id: state.currentChat.id,
+          role: "tool",
+          content: response.text,
+          ui_hidden: true,
+          created_at: new Date().toISOString(),
+        });
+        toolOutputs.push({ name: "server_tools", status: "ok", output: response.text.replace(/<[^>]+>/g, " ").slice(0, 4000) });
+        lastHadTools = true;
+        continue;
+      }
       if (toolCalls.length === 0) {
         // No hay más tools; terminar.
         break;
