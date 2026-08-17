@@ -1057,15 +1057,9 @@ async function createNewChat() {
     is_shared: 0,
     updated_at: new Date().toISOString(),
   };
-  if (!state.isOffline) {
-    try {
-      await fetch("/api/chats", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: chatId, title, category }),
-      });
-    } catch (e) { /* best-effort: el chat existe en memoria */ }
-  }
+  // v2.8.6: el chat solo se persiste al enviar el primer mensaje
+  // (evita listas llenas de chats vacíos "Select or create a chat").
+  chat._persisted = false;
   state.currentChat = chat;
   state.messages = [];
   state.chatSummary = null;
@@ -1219,7 +1213,10 @@ async function suggestTitle() {
     if (resp.ok) {
       const data = await resp.json();
       if (data.suggested_title) {
-        state.currentChat.title = data.suggested_title;
+        const st = String(data.suggested_title).trim();
+        const leaked = /user wants|wants a|respond|responde|genera|generate|title:|the user/i.test(st) || st.length > 60 || st.length < 3;
+        if (leaked) return;
+        state.currentChat.title = st;
         state.currentChat._autoRenamed = true;
         renderChatHeader();
         await loadChatList();
@@ -1597,7 +1594,8 @@ function renderMessage(m) {
     actions.innerHTML =
       '<button class="msg-action" data-action="copy-msg" title="Copiar respuesta">📋</button>' +
       '<button class="msg-action" data-action="regen-msg" title="Regenerar respuesta">🔄</button>';
-    msg.appendChild(actions);
+    const wrapper = node.querySelector(".message-content-wrapper") || msg;
+    wrapper.appendChild(actions);
   }
 
   // Cached chip.
@@ -1892,6 +1890,18 @@ async function sendMessage() {
     // Limpiar chips de docs del repo.
     state.repoDocAttachments = [];
     renderRepoDocChips();
+  }
+
+  // v2.8.6: persistir el chat la primera vez que se envía un mensaje.
+  if (state.currentChat && !state.currentChat._persisted && !state.isOffline) {
+    try {
+      await fetch("/api/chats", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: state.currentChat.id, title: state.currentChat.title, category: state.currentChat.category }),
+      });
+      state.currentChat._persisted = true;
+    } catch { /* best-effort */ }
   }
 
   // Guardar mensaje user (con contenido enriquecido si hubo attachments).

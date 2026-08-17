@@ -2839,7 +2839,11 @@ async function handleSuggestTitle(chatId, env, userEmail) {
     });
     if (resp.ok) {
       const data = await resp.json();
-      const title = (data.choices?.[0]?.message?.content || "").trim().slice(0, 100);
+      let title = (data.choices?.[0]?.message?.content || "").trim().split("\n")[0].replace(/^["'«»]+|["'«»,.;]+$/g, "").trim();
+      // v2.8.6: rechazar ecos del prompt; fallback = inicio del mensaje del usuario.
+      if (/user wants|wants a|respond|responde|genera|generate|title:|the user|título:/i.test(title) || title.length > 60 || title.length < 3) {
+        title = (userMsg.content || "").replace(/\s+/g, " ").trim().slice(0, 48);
+      }
       if (title) {
         await env.DB.prepare(
           `UPDATE chats SET title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_email = ?`
