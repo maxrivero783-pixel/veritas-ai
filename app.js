@@ -901,11 +901,11 @@ function resolveUiRoleForCurrentSelection(modelId = state.currentModel) {
 function getDefaultModelForCategory(category) {
   return {
     agent: "nvidia/nemotron-3-super-120b-a12b:free",
-    estratega: "cerebras/llama3.1-8b",
-    fast: "cerebras/llama3.1-8b",
+    estratega: "cerebras/gpt-oss-120b",
+    fast: "cerebras/gpt-oss-120b",
     // Compatibilidad con categorías antiguas persistidas.
-    coder: "cohere/north-mini-code:free",
-    general: "cerebras/llama3.1-8b",
+    coder: "cohere/north-mini-code",
+    general: "cerebras/gpt-oss-120b",
   }[category] || "nvidia/nemotron-3-super-120b-a12b:free";
 }
 
