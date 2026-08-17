@@ -2983,3 +2983,6 @@ mark.search-current { background: rgba(80, 200, 120, .6); }
 .tool-round summary { cursor: pointer; color: var(--text-muted); font-size: 12px; font-family: var(--font-mono, monospace); padding: 2px 4px; }
 .tool-round-body { font-size: 11px; color: var(--text-muted); max-height: 260px; overflow: auto; padding: 6px; }
 .message-actions { margin-top: 6px; }
+
+/* v2.8.7 — identidad del usuario bajo los botones de acción */
+.sidebar-user { margin: 10px 12px 0; padding: 6px 10px; border: 1px solid var(--border-subtle); border-radius: 8px; color: var(--text-muted); font-size: 12px; font-family: var(--font-mono, monospace); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
