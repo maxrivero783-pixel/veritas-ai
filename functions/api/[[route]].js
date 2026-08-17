@@ -61,7 +61,7 @@ import {
 } from "../../lib/toolRegistry.server.js";
 
 import { SYSTEM_PROMPTS, ROLE_TO_MODEL, MODEL_TO_ROLE, UI_ROLE_TO_PROMPT_KEY, LITE_AGENT_PROMPT } from "../../prompts.js";
-import { getProvider } from "../../lib/fallbackChains.js";
+import { getProvider, MODEL_PROVIDER } from "../../lib/fallbackChains.js";
 
 // ------------------------------------------------------------------------------
 // Whitelist de modelos OpenRouter permitidos (Sección 3.1 del BUILD).
@@ -1670,7 +1670,7 @@ async function handleChatOpenRouter(request, env, userEmail) {
   const clientBody = await request.json().catch(() => ({}));
   const { model, messages, stream = true, tools, reasoning, chat_id, is_shared, settings = {} } = clientBody;
 
-  if (!model || !OPENROUTER_WHITELIST.has(model)) {
+  if (!model || (!OPENROUTER_WHITELIST.has(model) && !MODEL_PROVIDER[model])) {
     return errorResponse("model_not_allowed", 400, { model, whitelist: [...OPENROUTER_WHITELIST] });
   }
   if (!Array.isArray(messages) || messages.length === 0) {
@@ -1753,9 +1753,11 @@ async function handleChatOpenRouter(request, env, userEmail) {
       if (upstreamProvider === "cerebras") {
         url = "https://api.cerebras.ai/v1/chat/completions";
         headers = { "Authorization": `Bearer ${key}`, "Content-Type": "application/json", "Accept": accept };
+        modelId = modelId.replace(/^cerebras\//, "");
       } else if (upstreamProvider === "cohere") {
         url = "https://api.cohere.com/v2/chat";
         headers = { "Authorization": `Bearer ${key}`, "Content-Type": "application/json", "Accept": accept };
+        modelId = modelId.replace(/^cohere\//, "");
       } else {
         url = "https://openrouter.ai/api/v1/chat/completions";
         headers = {
@@ -1766,6 +1768,7 @@ async function handleChatOpenRouter(request, env, userEmail) {
           "Accept": accept,
         };
       }
+      upstreamBody.model = modelId;
       return await fetch(url, { method: "POST", headers, body: JSON.stringify(upstreamBody) });
     });
     upstreamResp = result.response;
@@ -1924,8 +1927,8 @@ async function handleLLMComplete(request, env, userEmail) {
   if (!prompt || typeof prompt !== "string") return errorResponse("missing_prompt", 400);
   const maxTokens = Math.min(4000, Math.max(64, Number(body.max_tokens) || 1200));
   const chain = [
-    ["cerebras", "cerebras/llama3.1-8b", "https://api.cerebras.ai/v1/chat/completions"],
-    ["cohere", "cohere/command-r-plus", "https://api.cohere.com/v2/chat"],
+    ["cerebras", "gpt-oss-120b", "https://api.cerebras.ai/v1/chat/completions"],
+    ["cohere", "command-a-plus-05-2026", "https://api.cohere.com/v2/chat"],
     ["openrouter", "openai/gpt-oss-20b:free", "https://openrouter.ai/api/v1/chat/completions"],
   ];
   const messages = [
@@ -3049,8 +3052,8 @@ async function handleOfflineBundle(env, userEmail) {
 async function callFallbackLLM(env, prompt) {
   const chain = [
     ["openrouter", "openai/gpt-oss-20b:free", "https://openrouter.ai/api/v1/chat/completions"],
-    ["cerebras", "cerebras/llama3.1-8b", "https://api.cerebras.ai/v1/chat/completions"],
-    ["cohere", "cohere/command-r-plus", "https://api.cohere.com/v2/chat"],
+    ["cerebras", "gpt-oss-120b", "https://api.cerebras.ai/v1/chat/completions"],
+    ["cohere", "command-a-plus-05-2026", "https://api.cohere.com/v2/chat"],
   ];
   for (const [prov, mid, url] of chain) {
     try {
@@ -3141,7 +3144,7 @@ async function handleAgentOrchestrate(request, env, userEmail) {
 
   let modelId, roleKey;
   if (escalate === "ultra") { modelId = ROLE_TO_MODEL.ultra_orchestrator; roleKey = "ultra_orchestrator"; }
-  else if (model && OPENROUTER_WHITELIST.has(model)) { modelId = model; roleKey = MODEL_TO_ROLE[modelId] || "super_executor"; }
+  else if (model && (OPENROUTER_WHITELIST.has(model) || MODEL_PROVIDER[model])) { modelId = model; roleKey = MODEL_TO_ROLE[modelId] || "super_executor"; }
   else { modelId = ROLE_TO_MODEL.super_executor; roleKey = "super_executor"; }
 
   let systemPrompt = LITE_AGENT_PROMPT;
