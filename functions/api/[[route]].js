@@ -58,6 +58,8 @@ import {
   validateArgs,
   publicRegistry,
   importHandler,
+  parseToolCallXML,
+  buildToolResultXML,
 } from "../../lib/toolRegistry.server.js";
 
 import { SYSTEM_PROMPTS, ROLE_TO_MODEL, MODEL_TO_ROLE, UI_ROLE_TO_PROMPT_KEY, LITE_AGENT_PROMPT } from "../../prompts.js";
@@ -1722,13 +1724,19 @@ async function handleChatOpenRouter(request, env, userEmail) {
     }
   }
 
-  // Sticky routing (Sección 1.4.1).
-  if (settings.stickyRouting !== false && chat_id) {
+  // v2.8/v2.11 — proveedor según el modelo (OpenRouter primario; Cerebras/Cohere directo).
+  const upstreamProvider = getProvider(model);
+
+  // ID del modelo que se envía upstream (sin prefijo de proveedor).
+  let modelId = model.replace(/^cerebras\//, "").replace(/^cohere\//, "");
+
+  // Sticky routing (Sección 1.4.1) — solo OpenRouter lo entiende.
+  if (upstreamProvider === "openrouter" && settings.stickyRouting !== false && chat_id) {
     upstreamBody.session_id = chat_id;
   }
 
-  // Caching defensivo (Sección 1.4.2).
-  if (settings.promptCaching !== false) {
+  // Caching defensivo (Sección 1.4.2) — cache_control es específico de OpenRouter/Anthropic.
+  if (upstreamProvider === "openrouter" && settings.promptCaching !== false) {
     upstreamBody.messages = injectCacheControl(upstreamBody.messages, is_shared);
   }
 
@@ -1738,14 +1746,30 @@ async function handleChatOpenRouter(request, env, userEmail) {
     upstreamBody.messages = truncateToolResults(upstreamBody.messages, limitKB * 1024);
   }
 
+  // Sanear el body para proveedores no-OpenRouter: eliminar campos propietarios
+  // (cache, session_id, reasoning) que Cerebras/Cohere rechazarían con 400.
+  delete upstreamBody.cache;
+  if (upstreamProvider !== "openrouter") {
+    delete upstreamBody.session_id;
+    delete upstreamBody.reasoning;
+    // Contenido de mensajes como string plano (sin bloques cache_control).
+    if (Array.isArray(upstreamBody.messages)) {
+      upstreamBody.messages = upstreamBody.messages.map((m) => {
+        if (Array.isArray(m.content)) {
+          return { ...m, content: m.content.map((b) => b.text || "").join("\n") };
+        }
+        return m;
+      });
+    }
+  }
+
   // --- Llamar upstream con rotador de claves ---
   const startTs = Date.now();
   let keyIndexUsed = null;
   let degraded = false;
   let upstreamResp = null;
 
-  // v2.8 — proveedor según el modelo (OpenRouter primario; Cerebras/Cohere fallback).
-  const upstreamProvider = getProvider(model);
+  upstreamBody.model = modelId;
   try {
     const result = await withKeyRotation(env, upstreamProvider, async (key) => {
       const accept = stream ? "text/event-stream" : "application/json";
@@ -1753,11 +1777,9 @@ async function handleChatOpenRouter(request, env, userEmail) {
       if (upstreamProvider === "cerebras") {
         url = "https://api.cerebras.ai/v1/chat/completions";
         headers = { "Authorization": `Bearer ${key}`, "Content-Type": "application/json", "Accept": accept };
-        modelId = modelId.replace(/^cerebras\//, "");
       } else if (upstreamProvider === "cohere") {
         url = "https://api.cohere.com/v2/chat";
         headers = { "Authorization": `Bearer ${key}`, "Content-Type": "application/json", "Accept": accept };
-        modelId = modelId.replace(/^cohere\//, "");
       } else {
         url = "https://openrouter.ai/api/v1/chat/completions";
         headers = {
@@ -1768,7 +1790,6 @@ async function handleChatOpenRouter(request, env, userEmail) {
           "Accept": accept,
         };
       }
-      upstreamBody.model = modelId;
       return await fetch(url, { method: "POST", headers, body: JSON.stringify(upstreamBody) });
     });
     upstreamResp = result.response;
@@ -1979,7 +2000,13 @@ async function handleStatus(env, userEmail) {
     }
   }
 
-  // Puter no se puede ping desde Worker (corre en cliente). El frontend hace el ping.
+  // v2.11: sin Puter. Estado de pools LLM (OpenRouter/Cerebras/Cohere) + servicios.
+  const llmPools = {};
+  for (const svc of ["openrouter", "cerebras", "cohere"]) {
+    if (services.includes(svc)) {
+      try { llmPools[svc] = await getPoolStatus(env, svc); } catch { llmPools[svc] = { error: "pool_status_failed" }; }
+    }
+  }
   return json({
     storage: {
       provider: "r2",
@@ -1988,7 +2015,7 @@ async function handleStatus(env, userEmail) {
     },
     openrouter: openrouterAvailable,
     openrouter_pool_degraded: openrouterPool ? openrouterPool.degraded : null,
-    puter: { provider: "puter", available: true, note: "Ping is done client-side; Worker always returns available=true." },
+    llm_pools: llmPools,
     services: services.map((s) => ({ name: s, registered: true })),
     ts: new Date().toISOString(),
   });
@@ -2952,7 +2979,7 @@ async function handleSuggestTitle(chatId, env, userEmail) {
     return json({ suggested_title: null, reason: "openrouter_pool_empty" });
   }
   try {
-    const { key } = await getKey(env, "openrouter");
+    const { key, index: _keyIdx } = await getKey(env, "openrouter");
     const prompt = `Genera un título corto (máximo 8 palabras) que resuma el siguiente intercambio. Responde SOLO con el título, sin comillas ni puntuación final. Idioma: el mismo del primer mensaje del usuario.\n\nUsuario: ${userMsg.content.slice(0, 1000)}\n\nAsistente: ${assistantMsg.content.slice(0, 500)}`;
     const resp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
@@ -2982,7 +3009,7 @@ async function handleSuggestTitle(chatId, env, userEmail) {
         return json({ suggested_title: title });
       }
     }
-    await markCooldown(env, "openrouter", (await getKey(env, "openrouter")).index, 30_000, `suggest-title ${resp.status}`);
+    await markCooldown(env, "openrouter", _keyIdx, 30_000, `suggest-title ${resp.status}`);
   } catch (e) { /* fall through */ }
   return json({ suggested_title: null, reason: "generation_failed" });
 }
@@ -3106,7 +3133,7 @@ async function runToolByName(env, userEmail, role, toolName, args, chatId) {
     if (toolName === "create_skill") {
       const r = await handleInlineCreateSkill(validation.args, env, userEmail);
       const d = await r.json().catch(() => null);
-      result = { status: d && d.ok ? "ok" : "error", output: (d && d.message) || "skill procesada" };
+      result = { status: (d && d.status) || "error", output: (d && d.output) || "skill procesada" };
     } else {
       const handler = await importHandler(toolName);
       const ctx = { env, user_email: userEmail, chat_id: chatId || null, role };
@@ -3161,11 +3188,14 @@ async function handleAgentOrchestrate(request, env, userEmail) {
     ["gdelt_search", { query: userQuery.slice(0, 300), mode: "events", timespan: "1w" }],
     ["exa_search", { query: userQuery.slice(0, 300) }],
   ];
-  for (const [tn, ta] of freshJobs) {
+  // v2.11: en paralelo (antes secuencial: hasta 60s de latencia pre-LLM).
+  const freshResults = await Promise.all(freshJobs.map(async ([tn, ta]) => {
     try {
-      const r = await runToolByName(env, userEmail, "agent", tn, ta, chat_id);
-      if (r && r.status === "ok" && r.output) fresh.push("### " + tn + "\n" + String(r.output).slice(0, 4000));
-    } catch { /* best-effort */ }
+      return { tn, r: await runToolByName(env, userEmail, "agent", tn, ta, chat_id) };
+    } catch { return { tn, r: null }; }
+  }));
+  for (const { tn, r } of freshResults) {
+    if (r && r.status === "ok" && r.output) fresh.push("### " + tn + "\n" + String(r.output).slice(0, 4000));
   }
   systemPrompt += "\n\nFecha actual (UTC): " + new Date().toISOString() + ". NUNCA asumas que una fecha reciente es futura; usa los resultados de búsqueda.";
   if (fresh.length) {
@@ -3183,19 +3213,34 @@ async function handleAgentOrchestrate(request, env, userEmail) {
   let lastResultsXml = "";
   const tokens = { in: 0, out: 0, cached: 0 };
 
+  // Proveedor real del modelo elegido (no siempre OpenRouter).
+  const orchProvider = getProvider(modelId);
+  const orchModelSent = modelId.replace(/^cerebras\//, "").replace(/^cohere\//, "");
+
   const callLLM = async () => {
-    const result = await withKeyRotation(env, "openrouter", async (key) =>
-      fetch("https://openrouter.ai/api/v1/chat/completions", {
-        method: "POST",
-        headers: {
+    const result = await withKeyRotation(env, orchProvider, async (key) => {
+      let url, headers;
+      if (orchProvider === "cerebras") {
+        url = "https://api.cerebras.ai/v1/chat/completions";
+        headers = { "Authorization": `Bearer ${key}`, "Content-Type": "application/json" };
+      } else if (orchProvider === "cohere") {
+        url = "https://api.cohere.com/v2/chat";
+        headers = { "Authorization": `Bearer ${key}`, "Content-Type": "application/json" };
+      } else {
+        url = "https://openrouter.ai/api/v1/chat/completions";
+        headers = {
           "Authorization": `Bearer ${key}`,
           "Content-Type": "application/json",
           "HTTP-Referer": env.PAGES_URL || "https://veritas.pages.dev",
           "X-Title": "Veritas",
-        },
-        body: JSON.stringify({ model: modelId, messages: msgs, stream: false, max_tokens: 1600 }),
-      })
-    );
+        };
+      }
+      return fetch(url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ model: orchModelSent, messages: msgs, stream: false, max_tokens: 1600 }),
+      });
+    });
     const resp = result.response;
     if (!resp.ok) throw { error: "upstream_error", message: "HTTP " + resp.status };
     const data = await resp.json().catch(() => null);
@@ -3219,7 +3264,7 @@ async function handleAgentOrchestrate(request, env, userEmail) {
         results.push({ name: c.name, status: r.status || "ok", output: String(r.output == null ? "" : r.output).slice(0, 3000) });
       }
       msgs.push({ role: "assistant", content: text });
-      lastResultsXml = results.map((r) => ("<" + "tool_result") + " name=" + T + r.name + T + " status=" + T + r.status + T + ">\n" + r.output + "\n" + TR_CLOSE).join("\n");
+      lastResultsXml = results.map((r) => buildToolResultXML(r.name, r.status, r.output)).join("\n");
       const resultsXml = lastResultsXml;
       const tail = round + 1 >= MAX_TOOL_ROUNDS
         ? "Redacta AHORA tu respuesta final al usuario en su idioma, sin tool_calls."
