@@ -1653,6 +1653,12 @@ function sanitizeHTML(html) {
 
 function formatMessageContent(content) {
   if (!content) return "";
+  // v2.8.4: normalizar variantes de markup de tools.
+  content = content
+    .replace(/<toolcall\b/gi, "<tool_call")
+    .replace(/<\/toolcall\s*>/gi, "<\/tool_call>")
+    .replace(/<tool-result\b/gi, "<tool_result")
+    .replace(/<\/tool-result\s*>/gi, "</tool_result>");
   // P1-1: Markdown rendering completo (vanilla JS, sin libs externas).
   // Estrategia: extraer primero los bloques de código fenced (```...```) y
   // protegerlos de cualquier transformación posterior. Luego procesar el resto
@@ -1668,6 +1674,8 @@ function formatMessageContent(content) {
     toolResults.push({ name, status, output });
     return `\x00TR${idx}\x00`;
   });
+  // Los tool_calls ya ejecutados nunca se muestran crudos al usuario.
+  s = s.replace(/<tool_call[\s\S]*?(?:<\/tool_call>|$)/gi, "");
 
   // 2. Extraer code blocks fenced ```lang\n...```.
   const codeBlocks = [];
