@@ -1669,13 +1669,14 @@ function formatMessageContent(content) {
   // Usamos placeholders SIN underscores para evitar colisión con el regex de
   // cursiva _texto_ en renderInline.
   const toolResults = [];
-  let s = content.replace(/<tool_result\s+name="([^"]+)"\s+status="([^"]+)">([\s\S]*?)<\/tool_result>/g, (_, name, status, output) => {
+  let s = content.replace(/<tool_result(?:\s+name="([^"]*)")?(?:\s+status="([^"]*)")?\s*>([\s\S]*?)<\/tool_result>/g, (_, name, status, output) => {
     const idx = toolResults.length;
     toolResults.push({ name, status, output });
     return `\x00TR${idx}\x00`;
   });
   // Los tool_calls ya ejecutados nunca se muestran crudos al usuario.
   s = s.replace(/<tool_call[\s\S]*?(?:<\/tool_call>|$)/gi, "");
+  s = s.replace(/<tool_result[\s\S]*?(?:<\/tool_result>|$)/gi, "");
 
   // 2. Extraer code blocks fenced ```lang\n...```.
   const codeBlocks = [];
