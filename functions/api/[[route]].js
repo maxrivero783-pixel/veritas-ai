@@ -3250,6 +3250,12 @@ async function handleAgentOrchestrate(request, env, userEmail) {
       if (cleanProse && !/^[\s]*[\[{]/.test(cleanProse)) finalText = cleanProse;
     } catch { /* best-effort */ }
   }
+  // v2.10.2: si ningun LLM pudo sintetizar pero hay busqueda fresca,
+  // entregar los resultados frescos como respuesta (mejor que "no pude").
+  if (!finalText && fresh.length) {
+    finalText = "**Resultados de busqueda actual** (sintesis LLM no disponible por limite de proveedores):\n\n" + fresh.join("\n\n");
+  }
+
   if (!finalText && lastResultsXml) {
     const prose = await callFallbackLLM(env,
       "Eres Veritas. El usuario hizo una pregunta y estas son las respuestas de las herramientas ejecutadas:\n" +
