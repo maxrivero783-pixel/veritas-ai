@@ -62,6 +62,12 @@ import {
   buildToolResultXML,
 } from "../../lib/toolRegistry.server.js";
 
+// v2.12 — Tool Intelligence: routing por categoría/palabras clave, JSON Schema
+// para function-calling nativo, y metadatos enriquecidos (when_to_use/tags).
+import { routeTools } from "../../lib/toolRouter.js";
+import { buildToolsArray } from "../../lib/toolSchema.js";
+import { describeTool, getToolCategory, TOOL_CATEGORIES } from "../../lib/toolMeta.js";
+
 import { SYSTEM_PROMPTS, ROLE_TO_MODEL, MODEL_TO_ROLE, UI_ROLE_TO_PROMPT_KEY, LITE_AGENT_PROMPT } from "../../prompts.js";
 import { getProvider, MODEL_PROVIDER } from "../../lib/fallbackChains.js";
 
@@ -524,6 +530,7 @@ export async function onRequest(context) {
     if (path === "/api/keys/health" && method === "POST") return await handleKeysHealth(request, env, userEmail);
     if (path === "/api/keys/cooldown/reset" && method === "POST") return await handleKeysCooldownReset(request, env, userEmail);
     if (path === "/api/keys/services" && method === "GET") return await handleKeysServices(env, userEmail);
+    if (path === "/api/keys/diagnose" && method === "GET") return await handleKeysDiagnose(env, userEmail);
 
     // 6.5 — tool invoke + tools registry
     if (path === "/api/tool/invoke" && method === "POST") return await handleToolInvoke(request, env, userEmail);
@@ -2225,6 +2232,28 @@ async function handleKeysServices(env, userEmail) {
   return json({ services: Object.keys(SERVICE_REGISTRY) });
 }
 
+// v2.12i — Diagnóstico de claves (admin). Responde qué variables de entorno ve
+// el Worker (solo NOMBRE/tipo/longitud, NUNCA el valor) y si cada servicio del
+// registro las detecta. Sirve para detectar claves mal nombradas (p. ej.
+// CEREBRAS_API_KEY sin el sufijo _1) o configuradas en el entorno equivocado.
+async function handleKeysDiagnose(env, userEmail) {
+  if (!isAdmin(userEmail, env)) return errorResponse("admin_required", 403);
+  const keyNames = Object.keys(env).filter((k) => /API_KEY|API_TOKEN|_KEY$|_TOKEN$/i.test(k));
+  const env_keys = keyNames.map((k) => ({
+    name: k,
+    type: typeof env[k],
+    len: typeof env[k] === "string" ? env[k].length : null,
+  })).sort((a, b) => a.name.localeCompare(b.name));
+  const registry = {};
+  for (const [svc, cfg] of Object.entries(SERVICE_REGISTRY)) {
+    const prefix = cfg.secretPrefix;
+    const discovered = discoverKeys(env, svc).map((k) => k.index);
+    const matching = keyNames.filter((k) => k === prefix || k.startsWith(prefix + "_"));
+    registry[svc] = { prefix, discovered_indexes: discovered, matching_env_names: matching };
+  }
+  return json({ env_keys, registry });
+}
+
 // ==============================================================================
 // 6.5 — TOOL INVOKE (dispatcher único)
 // ==============================================================================
@@ -3208,8 +3237,66 @@ async function runToolByName(env, userEmail, role, toolName, args, chatId) {
   }
 }
 
+// ------------------------------------------------------------------------------
+// v2.12 — INSTRUMENTACIÓN (punto 6): registra qué subconjunto de tools se
+// ruteó/inyectó por request (y el modo), para detectar la cola larga de tools
+// apenas usadas. Best-effort: nunca rompe el flujo.
+// ------------------------------------------------------------------------------
+function logToolSelection(env, userEmail, chatId, query, selectedNames, mode) {
+  if (!env.DB) return Promise.resolve();
+  return env.DB.prepare(
+    `INSERT INTO tool_selections (user_email, chat_id, query_preview, selected_tools, mode, total_available)
+     VALUES (?, ?, ?, ?, ?, ?)`
+  ).bind(
+    userEmail, chatId || null, String(query || "").slice(0, 200),
+    JSON.stringify(selectedNames || []), mode || "xml",
+    Object.keys(TOOL_REGISTRY_SERVER).length
+  ).run().catch(() => {});
+}
+
+// ------------------------------------------------------------------------------
+// v2.12 — RAW + SUMMARY (punto 5): formatea el resultado de una tool como JSON
+// con summary (lo que lee el modelo) y raw (datos estructurados si el handler
+// los expone en extra.raw), truncados para no inflar el contexto.
+// ------------------------------------------------------------------------------
+function formatToolResultPayload(r) {
+  const summary = String(r.output == null ? "" : r.output).slice(0, 3000);
+  const payload = { summary, status: r.status || "ok" };
+  if (r.extra && r.extra.raw != null) {
+    let raw = r.extra.raw;
+    if (typeof raw !== "string") { try { raw = JSON.stringify(raw); } catch { raw = String(raw); } }
+    payload.raw = String(raw).slice(0, 4000);
+  }
+  return JSON.stringify(payload);
+}
+
+// ------------------------------------------------------------------------------
+// v2.12 — Catálogo enriquecido para el subconjunto ruteado (ruta XML fallback).
+// Agrupa por categoría y usa descripciones estilo prompt.
+// ------------------------------------------------------------------------------
+function buildRoutedCatalog(routed) {
+  const byCat = {};
+  for (const s of routed) {
+    const cat = getToolCategory(s.name);
+    (byCat[cat] = byCat[cat] || []).push(s.name);
+  }
+  const lines = ["CATÁLOGO DE TOOLS DISPONIBLES (elige solo las mínimas y más relevantes):", ""];
+  for (const [cat, names] of Object.entries(byCat)) {
+    const label = (TOOL_CATEGORIES[cat] && TOOL_CATEGORIES[cat].label) || cat;
+    lines.push(`[${label}]`);
+    for (const n of names) {
+      const t = TOOL_REGISTRY_SERVER[n];
+      lines.push(`  ${n} — ${describeTool(n, t ? t.description : "")}`);
+    }
+    lines.push("");
+  }
+  lines.push("Criterio: identifica la categoría de la necesidad y elige 1-2 tools de esa categoría; no combines tools que devuelven lo mismo.");
+  return lines.join("\n");
+}
+
 async function handleAgentOrchestrate(request, env, userEmail) {
-  // v2.9: loop de tools SERVER-SIDE (max 2 rondas) + prompt lite.
+  // v2.12: Tool Intelligence — routing por categoría + function-calling NATIVO
+  // (JSON Schema) cuando el proveedor lo soporta, con fallback al protocolo XML.
   const rl = await rateLimit(env, userEmail, "chat", 30, 60);
   if (rl.limited) return errorResponse("rate_limited", 429, { message: "Limite temporal de peticiones alcanzado.", retry_after_sec: rl.retryAfterSec });
   const body = await request.json().catch(() => ({}));
@@ -3259,6 +3346,19 @@ async function handleAgentOrchestrate(request, env, userEmail) {
     systemPrompt += "\n\nNo se obtuvieron resultados de búsqueda automática; usa tus herramientas si el usuario necesita datos actuales y NO inventes datos.";
   }
 
+  // v2.12 — TOOL ROUTING: inyectar solo el subconjunto relevante (5-15) según la
+  // consulta, no las 62 (la precisión de selección cae con catálogos grandes).
+  const orchProvider0 = getProvider(modelId);
+  const useNative = orchProvider0 === "openrouter" && body.native_tools !== false;
+  const routed = routeTools(userQuery, "agent", { maxTools: 12 });
+  const routedNames = routed.map((r) => r.name);
+  logToolSelection(env, userEmail, chat_id, userQuery, routedNames, useNative ? "native" : "xml");
+  if (useNative) {
+    systemPrompt += "\n\nTienes tools a tu disposición vía function-calling. Úsalas si necesitas datos externos; si no las necesitas, responde directamente. No inventes datos.";
+  } else {
+    systemPrompt += "\n\n" + buildRoutedCatalog(routed);
+  }
+
   const msgs = [{ role: "system", content: systemPrompt }, ...messages.filter((m) => m.role !== "system")];
 
   const MAX_TOOL_ROUNDS = 2;
@@ -3272,7 +3372,8 @@ async function handleAgentOrchestrate(request, env, userEmail) {
   const orchProvider = getProvider(modelId);
   const orchModelSent = modelId.replace(/^cerebras\//, "").replace(/^cohere\//, "");
 
-  const callLLM = async () => {
+  // Fetch compartido (ambos protocolos). extraBody inyecta `tools` en nativo.
+  const doLLMRequest = async (extraBody = {}) => {
     const result = await withKeyRotation(env, orchProvider, async (key) => {
       let url, headers;
       if (orchProvider === "cerebras") {
@@ -3293,7 +3394,7 @@ async function handleAgentOrchestrate(request, env, userEmail) {
       return fetch(url, {
         method: "POST",
         headers,
-        body: JSON.stringify({ model: orchModelSent, messages: msgs, stream: false, max_tokens: 1600 }),
+        body: JSON.stringify({ model: orchModelSent, messages: msgs, stream: false, max_tokens: 1600, ...extraBody }),
       });
     });
     const resp = result.response;
@@ -3304,30 +3405,68 @@ async function handleAgentOrchestrate(request, env, userEmail) {
       tokens.out += data.usage.completion_tokens || 0;
       tokens.cached += (data.usage.prompt_tokens_details && data.usage.prompt_tokens_details.cached_tokens) || 0;
     }
+    return data;
+  };
+
+  // Protocolo XML (fallback): devuelve solo el texto.
+  const callLLM = async () => {
+    const data = await doLLMRequest();
     return (data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || "";
   };
 
+  // Function-calling NATIVO (punto 1): devuelve el mensaje completo con tool_calls.
+  const toolsArray = buildToolsArray(routedNames, TOOL_REGISTRY_SERVER);
+  const callLLMWithTools = async () => {
+    const data = await doLLMRequest({ tools: toolsArray, tool_choice: "auto" });
+    return (data && data.choices && data.choices[0] && data.choices[0].message) || { content: "" };
+  };
+
   try {
-    for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-      const text = await callLLM();
-      lastText = text;
-      const calls = parseToolCallXML(text).slice(0, MAX_TOOLS_PER_ROUND);
-      if (calls.length === 0) break;
-      const results = [];
-      for (const c of calls) {
-        const r = await runToolByName(env, userEmail, "agent", c.name, c.args, chat_id);
-        results.push({ name: c.name, status: r.status || "ok", output: String(r.output == null ? "" : r.output).slice(0, 3000) });
+    if (useNative) {
+      // Loop nativo: tool_calls estructurados (JSON Schema), sin parseo XML.
+      for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+        const message = await callLLMWithTools();
+        const toolCalls = (message.tool_calls || []).slice(0, MAX_TOOLS_PER_ROUND);
+        if (toolCalls.length === 0) { lastText = message.content || ""; break; }
+        msgs.push({ role: "assistant", content: message.content || null, tool_calls: message.tool_calls });
+        for (const tc of toolCalls) {
+          let args = {};
+          try { args = JSON.parse(tc.function.arguments || "{}"); } catch { args = {}; }
+          const r = await runToolByName(env, userEmail, "agent", tc.function.name, args, chat_id);
+          // RAW + SUMMARY (punto 5): payload JSON con summary y raw si existe.
+          msgs.push({ role: "tool", tool_call_id: tc.id, name: tc.function.name, content: formatToolResultPayload(r) });
+          lastResultsXml += (lastResultsXml ? "\n" : "") + buildToolResultXML(tc.function.name, r.status || "ok", String(r.output == null ? "" : r.output).slice(0, 3000));
+        }
+        if (round + 1 >= MAX_TOOL_ROUNDS) {
+          const final = await callLLMWithTools();
+          lastText = final.content || "";
+          break;
+        }
       }
-      msgs.push({ role: "assistant", content: text });
-      lastResultsXml = results.map((r) => buildToolResultXML(r.name, r.status, r.output)).join("\n");
-      const resultsXml = lastResultsXml;
-      const tail = round + 1 >= MAX_TOOL_ROUNDS
-        ? "Redacta AHORA tu respuesta final al usuario en su idioma, sin tool_calls."
-        : "Si son suficientes, redacta tu respuesta final; si no, emite otra llamada de herramienta.";
-      msgs.push({ role: "user", content: "<tool_results>\n" + resultsXml + "\n</tool_results>\nProcesa estos resultados. Ronda " + (round + 1) + " de " + MAX_TOOL_ROUNDS + ". " + tail });
-      if (round + 1 >= MAX_TOOL_ROUNDS) { lastText = await callLLM(); break; }
+      if (!lastText) { const final = await callLLMWithTools(); lastText = final.content || ""; }
+    } else {
+      // Loop XML (protocolo embebido histórico).
+      for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+        const text = await callLLM();
+        lastText = text;
+        const calls = parseToolCallXML(text).slice(0, MAX_TOOLS_PER_ROUND);
+        if (calls.length === 0) break;
+        const results = [];
+        for (const c of calls) {
+          const r = await runToolByName(env, userEmail, "agent", c.name, c.args, chat_id);
+          results.push({ name: c.name, status: r.status || "ok", output: String(r.output == null ? "" : r.output).slice(0, 3000) });
+        }
+        msgs.push({ role: "assistant", content: text });
+        lastResultsXml = results.map((r) => buildToolResultXML(r.name, r.status, r.output)).join("\n");
+        const resultsXml = lastResultsXml;
+        const tail = round + 1 >= MAX_TOOL_ROUNDS
+          ? "Redacta AHORA tu respuesta final al usuario en su idioma, sin tool_calls."
+          : "Si son suficientes, redacta tu respuesta final; si no, emite otra llamada de herramienta.";
+        msgs.push({ role: "user", content: "<tool_results>\n" + resultsXml + "\n</tool_results>\nProcesa estos resultados. Ronda " + (round + 1) + " de " + MAX_TOOL_ROUNDS + ". " + tail });
+        if (round + 1 >= MAX_TOOL_ROUNDS) { lastText = await callLLM(); break; }
+      }
+      if (!lastText) lastText = await callLLM();
     }
-    if (!lastText) lastText = await callLLM();
   } catch (e) {
     if (e instanceof AllKeysCooldownError || e instanceof KeyPoolEmptyError) throw e;
     if (!lastText) return errorResponse("upstream_error", 502, { message: e.message });
