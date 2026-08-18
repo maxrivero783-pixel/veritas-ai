@@ -1910,9 +1910,10 @@ async function handleChatOpenRouter(request, env, userEmail) {
                 if (t === "content-delta") {
                   const c = ev.delta && ev.delta.message && ev.delta.message.content;
                   if (!c) continue;
-                  if (c.type === "text" && typeof c.text === "string" && c.text) {
+                  // Cohere manda {text:"..."} / {thinking:"..."} sin campo "type".
+                  if (typeof c.text === "string" && c.text) {
                     emit({ choices: [{ delta: { content: c.text } }] });
-                  } else if (c.type === "thinking" && typeof c.thinking === "string" && c.thinking) {
+                  } else if (typeof c.thinking === "string" && c.thinking) {
                     emit({ choices: [{ delta: { reasoning: c.thinking } }] });
                   }
                 } else if (t === "message-end") {
