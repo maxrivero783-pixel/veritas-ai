@@ -33,7 +33,7 @@ import { SharedSessionManager, createShare, revokeShare, joinSession, isRoleShar
 import { getNotificationManager } from "./lib/notifications.js";
 import { getOfflineCacheManager } from "./lib/offlineCache.js";
 import { getTemplate, listTemplates } from "./lib/sandboxTemplates.js";
-import { SKILLS, SKILLS_CATEGORIES, getAllSkills, getActiveSkills, buildSkillsPromptBlock, loadSkillMdContent, loadCustomSkills, mergeCustomSkill, removeCustomSkill, getSkillsForRole } from "./lib/skillsRegistry.js";
+import { SKILLS, SKILLS_CATEGORIES, getAllSkills, getActiveSkills, getSkillById, buildSkillsPromptBlock, loadSkillMdContent, loadCustomSkills, mergeCustomSkill, removeCustomSkill, getSkillsForRole } from "./lib/skillsRegistry.js";
 import { SYSTEM_PROMPTS, UI_ROLE_TO_PROMPT_KEY } from "./prompts.js";
 
 // ==============================================================================
@@ -48,6 +48,7 @@ const state = {
   messages: [],                // array de mensajes del chat actual (en memoria)
   chatSummary: null,           // { text, lastSummarizedIndex, generatedAt }
   chatCachedTotal: 0,          // acumulado de cached_tokens en este chat
+  pendingSkillId: null,        // v2.12: skill seleccionada en el menú ✨ (fuerza próximo mensaje)
   sharedSession: null,         // instancia de SharedSessionManager
   settings: {
     ui_lang: null,
@@ -666,6 +667,12 @@ function setupEventListeners() {
   $("#attachBtn")?.addEventListener("click", () => $("#fileInput").click());
   $("#fileInput")?.addEventListener("change", handleFileAttach);
 
+  // v2.12: Skills dropdown (skills activadas en Ajustes).
+  $("#skillsBtn")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    toggleSkillsMenu();
+  });
+
   // Sandbox buttons.
   $("#sbNew")?.addEventListener("click", () => clearSandbox());
   $("#sbTemplatesBtn")?.addEventListener("click", () => toggleDropdown("#sbTemplatesMenu"));
@@ -1246,17 +1253,10 @@ function populateModelSelector() {
       "poolside/laguna-s-2.1:free",
       "poolside/laguna-xs-2.1:free",
     ];
-  } else if (false) {
-    models = [
-      "z-ai/glm-4.7-flash",
-      "z-ai/glm-4.6v-flash",
-      "z-ai/glm-4.5-flash",
-      "google/gemma-4-31b-it:free",
-      "openai/gpt-oss-20b:free",
-      "nvidia/nemotron-3-super-120b-a12b:free",
-    ];
   } else if (state.currentCategory === "fast") {
-    models = ["cerebras/llama3.1-8b", "cerebras/llama-3.3-70b", "cohere/command-r-plus"];
+    // v2.12: modelos 2026 de la cadena Fast (antes: modelos obsoletos que el
+    // Worker rechazaba con model_not_allowed — la categoría Fast estaba rota).
+    models = ["cerebras/gpt-oss-120b", "cohere/command-a-plus-05-2026", "cohere/north-mini-code"];
   } else {
     models = [getDefaultModelForCategory(state.currentCategory)];
   }
@@ -1274,6 +1274,9 @@ function populateModelSelector() {
     state.currentModel = models[0];
     state.currentRole = resolveUiRoleForCurrentSelection(state.currentModel);
   }
+
+  // v2.12: el pool de skills visibles depende del rol → refrescar el botón ✨.
+  updateSkillsBtnState();
 }
 
 // ==============================================================================
@@ -1344,10 +1347,9 @@ function renderWelcomeModelCards() {
       "poolside/laguna-s-2.1:free",
       "poolside/laguna-xs-2.1:free",
     ];
-  } else if (false) {
-    models = ["z-ai/glm-4.7-flash", "z-ai/glm-4.6v-flash", "z-ai/glm-4.5-flash", "google/gemma-4-31b-it:free", "openai/gpt-oss-20b:free"];
   } else if (state.currentCategory === "fast") {
-    models = ["cerebras/llama3.1-8b", "cerebras/llama-3.3-70b", "cohere/command-r-plus"];
+    // v2.12: modelos 2026 de la cadena Fast.
+    models = ["cerebras/gpt-oss-120b", "cohere/command-a-plus-05-2026", "cohere/north-mini-code"];
   } else {
     models = [getDefaultModelForCategory(state.currentCategory)];
   }
@@ -1937,7 +1939,14 @@ async function sendMessage() {
   }
 
   // Tool Caller loop (pasar contenido enriquecido con attachments).
-  await runChatWithTools(enrichedContent);
+  const runResult = await runChatWithTools(enrichedContent);
+
+  // v2.12: la skill seleccionada en ✨ aplica a UN solo mensaje; se limpia tras
+  // un envío completado. Si el usuario abortó, se conserva para reintentar.
+  if (!runResult?.aborted && state.pendingSkillId) {
+    state.pendingSkillId = null;
+    updateSkillsBtnState();
+  }
 
   // Limpiar attachments pendientes tras el loop (el agente los usa vía runAgentLoop).
   if (state.pendingAttachments.length > 0) {
@@ -2038,6 +2047,7 @@ async function runChatWithTools(userContent) {
   let assistantText = "";
   let finalPersisted = false;
   let lastHadTools = false;
+  let wasAborted = false; // v2.12: para conservar la skill seleccionada si el usuario detuvo el envío.
   const toolOutputs = [];
   setEntityState("processing");
   showStreamingIndicator(t("stream.processing"), "processing");
@@ -2051,6 +2061,7 @@ async function runChatWithTools(userContent) {
 
       // P0-4: si el streaming fue abortado por el usuario, guardar partial y salir.
       if (response.aborted) {
+        wasAborted = true;
         if (response.text && response.text.trim()) {
           assistantText += response.text;
           // Persistir el mensaje partial como assistant.
@@ -2291,6 +2302,8 @@ async function runChatWithTools(userContent) {
   if (assistantText && assistantText.length > 100) {
     extractAndSaveMemories(assistantText).catch(() => {});
   }
+
+  return { aborted: wasAborted };
 }
 
 // ==============================================================================
@@ -2443,9 +2456,12 @@ async function callModel(userContent, previousAssistantText, isFollowUp) {
     // Cargar memorias cross-chat y skills.
     const memoryText = await getMemoryContextText();
     const skillMode = getSkillMode(state.currentRole); // "auto" para agente
-    const skillsBlock = skillMode
+    let skillsBlock = skillMode
       ? await buildSkillsPromptBlock(state.settings, state.currentRole, skillMode)
       : "";
+    // v2.12: skill seleccionada en el menú ✨ se fuerza sobre el modo auto.
+    const forcedBlock = await buildForcedSkillBlock();
+    if (forcedBlock) skillsBlock = skillsBlock ? skillsBlock + "\n" + forcedBlock : forcedBlock;
 
     // Construir contexto SIN system prompt — el Worker lo inyecta.
     // Skills y memorias se pasan como campos separados al Worker,
@@ -3622,8 +3638,10 @@ async function getSystemPrompt() {
   const realPrompt = promptKey ? SYSTEM_PROMPTS[promptKey] : null;
   const base = realPrompt || `[System prompt no disponible para el rol ${state.currentRole}.]`;
   const mode = getSkillMode(state.currentRole);
-  if (!mode) return base; // fast: sin skills
-  const skillsBlock = await buildSkillsPromptBlock(state.settings, state.currentRole, mode);
+  let skillsBlock = mode ? await buildSkillsPromptBlock(state.settings, state.currentRole, mode) : "";
+  // v2.12: skill seleccionada en el menú ✨ se fuerza (incluso en Fast).
+  const forcedBlock = await buildForcedSkillBlock();
+  if (forcedBlock) skillsBlock = skillsBlock ? skillsBlock + "\n" + forcedBlock : forcedBlock;
   return skillsBlock ? base + "\n\n" + skillsBlock : base;
 }
 
@@ -4510,6 +4528,134 @@ function updateSkillsIndicator() {
   } else {
     badge.hidden = true;
   }
+  // v2.12: sincronizar también el botón ✨ de la barra de entrada.
+  updateSkillsBtnState();
+}
+
+// =============================================================================
+// SKILLS DROPDOWN (v2.12) — botón ✨ junto a attach/search
+// =============================================================================
+// Presenta las skills activadas en Ajustes (para el rol actual) en un menú
+// desplegable. Click en una skill => queda "seleccionada" y se fuerza su uso
+// en el próximo mensaje (bloque <veritas_skill_solicitada> en el prompt).
+// =============================================================================
+function getRoleActiveSkills() {
+  return getActiveSkills(state.settings, state.currentRole);
+}
+
+function updateSkillsBtnState() {
+  const btn = $("#skillsBtn");
+  if (!btn) return;
+  const active = getRoleActiveSkills();
+  const countEl = $("#skillsBtnCount");
+  if (countEl) {
+    countEl.textContent = String(active.length);
+    countEl.hidden = active.length === 0;
+  }
+  const isSelected = !!state.pendingSkillId && active.some((s) => s.id === state.pendingSkillId);
+  btn.classList.toggle("skill-selected", isSelected);
+  btn.setAttribute("aria-pressed", String(isSelected));
+}
+
+function renderSkillsMenu() {
+  const menu = $("#skillsMenu");
+  if (!menu) return;
+  const active = getRoleActiveSkills();
+  menu.innerHTML = "";
+
+  const header = document.createElement("div");
+  header.className = "skills-menu-header";
+  header.innerHTML = `<span>Skills activas</span><span>${active.length}</span>`;
+  menu.appendChild(header);
+
+  if (active.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "skills-menu-empty";
+    empty.textContent = "Sin skills activas para este rol. Actívalas en Ajustes → Skills.";
+    menu.appendChild(empty);
+  } else {
+    for (const skill of active) {
+      const item = document.createElement("button");
+      item.type = "button";
+      item.className = "skill-item" + (state.pendingSkillId === skill.id ? " selected" : "");
+      item.title = skill.description || "";
+      item.setAttribute("role", "menuitem");
+      const check = state.pendingSkillId === skill.id ? '<span class="skill-item-check">✓</span>' : "";
+      const iconHtml = `<span class="skill-item-icon"${skill.color ? ` style="color:${skill.color}"` : ""}>${skill.icon || "✨"}</span>`;
+      item.innerHTML = `${iconHtml}<span class="skill-item-name"></span>${check}`;
+      item.querySelector(".skill-item-name").textContent = skill.name;
+      item.addEventListener("click", () => toggleSelectedSkill(skill.id));
+      menu.appendChild(item);
+    }
+  }
+
+  const footer = document.createElement("button");
+  footer.type = "button";
+  footer.className = "skills-menu-footer";
+  footer.textContent = "⚙️ Gestionar en Ajustes";
+  footer.addEventListener("click", () => openSkillsSettings());
+  menu.appendChild(footer);
+}
+
+function toggleSkillsMenu() {
+  const menu = $("#skillsMenu");
+  if (!menu) return;
+  const willOpen = menu.hidden;
+  $$(".dropdown-menu").forEach((m) => { if (m !== menu) m.hidden = true; });
+  if (willOpen) renderSkillsMenu();
+  menu.hidden = !willOpen;
+}
+
+function toggleSelectedSkill(skillId) {
+  state.pendingSkillId = (state.pendingSkillId === skillId) ? null : skillId;
+  const menu = $("#skillsMenu");
+  if (menu) menu.hidden = true;
+  updateSkillsBtnState();
+  if (state.pendingSkillId) {
+    const skill = getSkillById(skillId);
+    toast(`Skill «${skill ? skill.name : skillId}» lista: se aplicará a tu próximo mensaje.`, "info", 3200);
+  }
+}
+
+function openSkillsSettings() {
+  const menu = $("#skillsMenu");
+  if (menu) menu.hidden = true;
+  // Abrir Ajustes directo en la pestaña Skills.
+  $$(".settings-tab").forEach((t) => t.classList.remove("active"));
+  const skillsTab = document.querySelector('.settings-tab[data-section="skills"]');
+  if (skillsTab) skillsTab.classList.add("active");
+  $$(".settings-section").forEach((s) => hide(s));
+  show($("#settings-skills"));
+  show($("#settingsModal"));
+  renderSkillsList();
+}
+
+// Construye el bloque de prompt cuando hay una skill seleccionada (forzada).
+async function buildForcedSkillBlock() {
+  if (!state.pendingSkillId) return "";
+  const skill = getSkillById(state.pendingSkillId);
+  if (!skill) return "";
+  await loadSkillMdContent(skill);
+  const lines = [
+    "",
+    "<veritas_skill_solicitada>",
+    `El usuario seleccionó EXPLÍCITAMENTE la skill "${skill.name}" (id: ${skill.id}) para este mensaje desde el menú de skills.`,
+    "Debes aplicar esta skill: sigue su directiva y estructura de output al pie de la letra.",
+    "",
+  ];
+  if (skill._promptContent) {
+    lines.push(`  <skill id="${skill.id}">`);
+    lines.push(`    Nombre: ${skill.name}`);
+    lines.push(`    Descripción: ${skill.description}`);
+    lines.push(`    Directiva:`);
+    for (const pLine of skill._promptContent.split("\n")) lines.push(`      ${pLine}`);
+    lines.push(`  </skill>`);
+  } else {
+    lines.push(`  <skill id="${skill.id}">${skill.name}: ${skill.description}</skill>`);
+  }
+  lines.push("</veritas_skill_solicitada>");
+  lines.push("");
+  return lines.join("\n");
 }
 
 
