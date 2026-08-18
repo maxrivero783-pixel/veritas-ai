@@ -1982,7 +1982,7 @@ async function handleLLMComplete(request, env, userEmail) {
   const body = await request.json().catch(() => ({}));
   const prompt = body.prompt;
   if (!prompt || typeof prompt !== "string") return errorResponse("missing_prompt", 400);
-  const maxTokens = Math.min(4000, Math.max(64, Number(body.max_tokens) || 1200));
+  const maxTokens = Math.min(4000, Math.max(64, Number(body.max_tokens) || 2000)); // v2.12k: 2000 default (thinking models)
   const chain = [
     ["cohere", "command-a-plus-05-2026", "https://api.cohere.com/v2/chat"],
     ["openrouter", "openai/gpt-oss-20b:free", "https://openrouter.ai/api/v1/chat/completions"],
