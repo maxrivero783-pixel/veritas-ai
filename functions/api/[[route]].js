@@ -3671,8 +3671,11 @@ async function handleSkillUpdate(skillId, request, env, userEmail) {
 
 /**
  * DELETE /api/skills/:id — Elimina (soft delete) una skill personalizada.
+ * v2.12b: firma corregida — el dispatcher pasa (skillId, env, userEmail);
+ * antes recibía (skillId, request=env, env=userEmail, userEmail=undefined)
+ * y TODOS los borrados caían con 500 "Cannot read properties of undefined".
  */
-async function handleSkillDelete(skillId, request, env, userEmail) {
+async function handleSkillDelete(skillId, env, userEmail) {
   // Soft delete: is_active = 0.
   const result = await env.DB.prepare(
     `UPDATE user_skills SET is_active = 0, updated_at = CURRENT_TIMESTAMP
