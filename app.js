@@ -1,5 +1,5 @@
 // ==============================================================================
-// Véritas v2.4 — /app.js
+// Véritas v2.12 — /app.js
 // ==============================================================================
 // Cerebro del frontend. Orquesta TODO:
 //   - Inicialización: i18n, fallback chains, tool registry, sandbox templates.
@@ -1981,17 +1981,12 @@ async function sendMessage() {
 }
 
 // ==============================================================================
-// FALLBACK ÉTICO A DOLPHIN
+// MARCADORES INTERNOS DEL MODELO
 // ==============================================================================
-// Cuando un modelo con restricciones de fabricante (Nemotron, Laguna) emite
-// <fallback_to_uncensored>, se re-enruta la query al Estratega GLM permisivo vía Puter.
+// v2.12: si un modelo emite marcadores residuales (<fallback_to_uncensored>,
+// tool markup, ecos de instrucción), cleanAgentText los elimina de la
+// respuesta visible. Ya no existe re-enrutamiento a ningún modelo externo.
 // ==============================================================================
-
-/**
- * Llama al Estratega GLM directamente con la query original del usuario.
- * Usa Puter.js (no pasa por el Worker) con el system prompt estratégico.
- * Streaming: muestra progreso en tiempo real.
- */
 // ==============================================================================
 // TOOL CALLER LOOP (máx 5 iteraciones)
 // ==============================================================================

@@ -1,4 +1,4 @@
-# VÉRITAS v2.4 — Intelligence OS para IA multi-modelo
+# VÉRITAS v2.12 — Asistente OSINT con IA multi-modelo
 
 > **Una interfaz auto-alojada para investigar, verificar, crear, programar y operar con IA usando Cloudflare, múltiples modelos, skills dinámicas y 62 herramientas integradas.**
 
@@ -8,7 +8,7 @@ Véritas no es solo un chat. Es un **centro de mando**: combina modelos IA, memo
 
 ## ✨ Lo que hace que Véritas sea WOOOW
 
-- 🧠 **Orquestación multi-modelo**: 3 roles visibles — Agente, Estratega y Fast — con toggles internos Pensador y Code-first.
+- 🧠 **Orquestación multi-modelo**: 2 roles visibles — **Agente** y **Fast** — con toggle 🧠 Pensador (Nemotron Ultra) y Code-first.
 - 🧩 **77 skills built-in** en `prompts/`: verificación, OSINT, análisis, código, escritura, media, negocios, diseño, documentos y educación.
 - 🛠️ **62 tools registradas** con dispatcher único, validación de argumentos y permisos por rol.
 - 🔁 **Rotación de API keys** con cooldown, health checks y estado persistido en D1.
@@ -32,12 +32,11 @@ Véritas no es solo un chat. Es un **centro de mando**: combina modelos IA, memo
 
 ### Chat multi-rol
 
-- Selector de rol/categoría: **Agente**, **Estratega** y **Fast**. En Agente existen toggles para **Pensador** y **Code-first**.
+- Selector de rol/categoría: **Agente** y **Fast**. En Agente existen toggles para **🧠 Pensador** y **Code-first**.
 - Streaming de respuestas con cancelación mediante `AbortController`.
 - Parser de razonamiento interno y parser XML de tools (`<tool_call>` / `<tool_result>`).
 - Loop de tools con límite defensivo y persistencia de cada llamada.
-- Fallback manual o automático entre modelos según rol.
-- Fallback experimental a Estratega permisivo cuando un modelo primario no puede completar una tarea.
+- Fallback automático entre modelos según rol (OpenRouter → Cerebras → Cohere).
 - Contadores de tokens, tokens cacheados, truncado configurable y resumen de contexto.
 - Auto-título de chats y renombrado manual.
 - Búsqueda/filtrado de chats por categoría.
@@ -46,9 +45,9 @@ Véritas no es solo un chat. Es un **centro de mando**: combina modelos IA, memo
 
 - Botón flotante pequeño, arrastrable y siempre accesible.
 - Panel compacto para generar prompts optimizados por rol.
-- Usa `z-ai/glm-4.7-flash` vía Puter para convertir una intención breve en un prompt listo para copiar.
+- Usa `/api/llm/complete` (cadena Cerebras → Cohere → OpenRouter) para convertir una intención breve en un prompt listo para copiar.
 - Permite seleccionar rol objetivo, generar, copiar, limpiar y volver a iterar.
-- Pensado para sacar máximo provecho de Agente, Estratega, Fast y los modos internos Pensador/Code-first.
+- Pensado para sacar máximo provecho de Agente y Fast, y los modos internos Pensador/Code-first.
 
 ### Skills
 
@@ -96,7 +95,7 @@ Véritas no es solo un chat. Es un **centro de mando**: combina modelos IA, memo
 ### Memoria y contexto
 
 - Memorias cross-chat por usuario.
-- Categorías: personal, tech, preference, fact, etc.
+- Categorías: `personal`, `tech`, `preference`, `fact`.
 - Importancia, expiración, deduplicación y exclusión del chat actual para evitar feedback loops.
 - Inyección de memorias relevantes al system prompt.
 - Sliding window, resúmenes y truncado de tool results.
@@ -190,13 +189,12 @@ Los modelos se centralizan en `prompts.js` y `lib/fallbackChains.js`.
 
 | Rol | Modelo primario | Provider |
 |---|---|---|
-| Agente | `nvidia/nemotron-3-super-120b-a12b:free` + `google/gemma-4-31b-it:free` + `openai/gpt-oss-20b:free` | OpenRouter |
-| Agente Ultra | `nvidia/nemotron-3-ultra-550b-a55b:free` | OpenRouter |
+| Agente | `nvidia/nemotron-3-super-120b-a12b:free` | OpenRouter |
+| Agente 🧠 Pensador (Ultra) | `nvidia/nemotron-3-ultra-550b-a55b:free` | OpenRouter |
 | Percepción visual | `nvidia/nemotron-nano-12b-v2-vl:free` | OpenRouter |
 | Percepción audio/video | `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free` | OpenRouter |
-| Estratega | `z-ai/glm-4.7-flash` → `z-ai/glm-4.6v-flash` → `z-ai/glm-4.5-flash` | Puter |
 | Code-first dentro de Agente | `cohere/north-mini-code:free` → `poolside/laguna-s-2.1:free` → `poolside/laguna-xs-2.1:free` | OpenRouter |
-| Fast / Prompt Arquitecto | `z-ai/glm-4.7-flash` → `z-ai/glm-4.6v-flash` → `z-ai/glm-4.5-flash` | Puter |
+| Fast | `cerebras/gpt-oss-120b` → `cohere/command-a-plus-05-2026` → `cohere/north-mini-code` | Cerebras → Cohere |
 
 > Nota (v2.9): roles activos **Agente** y **Fast** (Pensador como toggle). Sin Puter/GLM/Estratega: el Agente orquesta tools en el server (máx. 2 rondas) con prompt lite y síntesis final garantizada vía OpenRouter → Cerebras → Cohere.
 
@@ -466,7 +464,7 @@ Ver `LICENSE`.
 
 ---
 
-**Véritas v2.4** — IA con herramientas, memoria, criterio y trazabilidad.  
+**Véritas v2.12** — IA con herramientas, memoria, criterio y trazabilidad.  
 **Menos humo. Más evidencia. Más poder.**
 
 
@@ -485,12 +483,11 @@ La tool `email_report` envía informes/respuestas/documentos al **correo del usu
 
 Todos los correos se firman con: **- Remitido por Véritas, la IA especializada en OSINT -**
 
-> **Nota de fusión v2.4:** este proyecto integra la selección de modelos y las
+> **Nota histórica de fusión (v2.4):** este proyecto integró la selección de modelos y las
 > herramientas públicas del artefacto de rescate (`V-ritas-main.zip`) con los
-> fixes de consistencia de la sesión: versión 2.4.0 unificada, sin placeholders,
-> OAuth de GitHub documentado (GITHUB_OAUTH_CLIENT_ID); Dropbox eliminado en v2.8; adiós a
-> mini-diálogos rotativos OSINT y lema
-> "Información es ventaja. La ventaja es tuya."
+> fixes de consistencia de la sesión. Evolución posterior: Dropbox eliminado en v2.8;
+> Puter/GLM/Estratega eliminados en v2.9+; stack 2026 (Cerebras/Cohere) en v2.11–v2.12.
+> Lema: "Información es ventaja. La ventaja es tuya."
 
 ---
 
