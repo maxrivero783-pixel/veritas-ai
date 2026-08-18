@@ -1614,23 +1614,27 @@ async function handleDbMessage(request, env, userEmail) {
   // v2.12: persistir el provider REAL (openrouter, cerebras, cohere…).
   // En DBs antiguas el CHECK solo admite puter/openrouter: si el INSERT falla
   // por constraint, reintentar con NULL para no perder el mensaje.
+  // v2.12g: INSERT OR IGNORE hace la inserción IDEMPOTENTE por message_id: el
+  // cliente puede reintentar sin miedo a duplicar (fortalece la persistencia).
   const insertMessage = (prov) => env.DB.prepare(
-    `INSERT INTO messages (id, chat_id, role, model, provider, content, thinking_content, tools_used, author_email, tokens_in, tokens_out, cached_tokens)
+    `INSERT OR IGNORE INTO messages (id, chat_id, role, model, provider, content, thinking_content, tools_used, author_email, tokens_in, tokens_out, cached_tokens)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(
     msgId, chat_id, role, model || null, prov, content,
     thinking_content || null, tools_used ? JSON.stringify(tools_used) : null,
     author_email || userEmail, tokens_in || null, tokens_out || null, cached_tokens || 0
   ).run();
+  let insertResult;
   try {
-    await insertMessage(provider || null);
+    insertResult = await insertMessage(provider || null);
   } catch (e) {
     if (provider && /constraint|check/i.test(String(e.message || e))) {
-      await insertMessage(null); // DB sin migrar: sacrificar trazabilidad, no el mensaje.
+      insertResult = await insertMessage(null); // DB sin migrar: sacrificar trazabilidad, no el mensaje.
     } else {
       throw e;
     }
   }
+  const created = (insertResult?.meta?.changes ?? 0) > 0;
 
   // Touch chat updated_at.
   await env.DB.prepare(
@@ -1681,7 +1685,7 @@ async function handleDbMessage(request, env, userEmail) {
     })();
   }
 
-  return json({ ok: true, message_id: msgId });
+  return json({ ok: true, message_id: msgId, created });
 }
 
 // ==============================================================================

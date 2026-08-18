@@ -161,6 +161,9 @@ async function init() {
   await offline.init();
   if (state.settings.offline.enable) await offline.syncBundle();
 
+  // v2.12g: persistencia robusta de mensajes (reintentos + outbox durable).
+  initMessagePersistence();
+
   // Cargar lista de chats del submenú activo.
   await loadChatList();
 
@@ -1846,6 +1849,109 @@ function isUserTyping() {
 }
 
 // ==============================================================================
+// PERSISTENCIA ROBUSTA DE MENSAJES (v2.12g)
+// ==============================================================================
+// Antes: fetch(...).catch(() => {}) — un fallo transitorio perdía el mensaje
+// para siempre. Ahora:
+//   1. persistMessage() reintenta con backoff exponencial (3 intentos).
+//   2. Si todo falla, el mensaje va a un OUTBOX durable (localStorage) que se
+//      reenvía al arrancar, al volver la conexión y periódicamente.
+//   3. El servidor hace INSERT OR IGNORE por message_id ⇒ reintentar es seguro
+//      (nunca duplica).
+// ==============================================================================
+const MSG_OUTBOX_KEY = "veritas:msg_outbox";
+const PERSIST_MAX_ATTEMPTS = 3;
+const PERSIST_BASE_DELAY_MS = 500;
+
+function readOutbox() {
+  try { return JSON.parse(localStorage.getItem(MSG_OUTBOX_KEY) || "[]"); }
+  catch { return []; }
+}
+function writeOutbox(list) {
+  try { localStorage.setItem(MSG_OUTBOX_KEY, JSON.stringify(list)); }
+  catch (e) { console.warn("[persist] outbox no escribible:", e.message); }
+}
+function pushOutbox(msg) {
+  const box = readOutbox();
+  if (box.some((m) => m.id === msg.id)) return; // ya encolado
+  box.push(msg);
+  writeOutbox(box);
+}
+
+async function postMessageOnce(msg) {
+  const resp = await fetch("/api/db/message", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(msg),
+  });
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({}));
+    const e = new Error(err.message || `HTTP ${resp.status}`);
+    e.status = resp.status;
+    throw e;
+  }
+  return resp.json().catch(() => ({}));
+}
+
+// Persiste un mensaje con reintentos; si falla del todo, lo deja en el outbox.
+// Nunca lanza: la UI no debe romperse por persistencia.
+async function persistMessage(msg) {
+  if (!msg || !msg.chat_id || !msg.content) return;
+  if (!msg.id) msg.id = crypto.randomUUID();
+  for (let attempt = 1; attempt <= PERSIST_MAX_ATTEMPTS; attempt++) {
+    try {
+      await postMessageOnce(msg);
+      return; // OK
+    } catch (e) {
+      // 4xx (salvo 429) = error permanente; no tiene sentido reintentar.
+      const permanent = e.status && e.status >= 400 && e.status < 500 && e.status !== 429;
+      if (permanent) {
+        console.warn("[persist] error permanente, descartando:", e.message);
+        return;
+      }
+      if (attempt < PERSIST_MAX_ATTEMPTS) {
+        const delay = PERSIST_BASE_DELAY_MS * Math.pow(3, attempt - 1); // 500, 1500, 4500ms
+        await new Promise((r) => setTimeout(r, delay));
+      }
+    }
+  }
+  // Agotado → outbox durable para reenviar después.
+  pushOutbox(msg);
+  console.warn("[persist] mensaje al outbox tras", PERSIST_MAX_ATTEMPTS, "intentos:", msg.id);
+}
+
+let _outboxFlushing = false;
+async function flushMessageOutbox() {
+  if (_outboxFlushing) return;
+  const box = readOutbox();
+  if (box.length === 0) return;
+  _outboxFlushing = true;
+  const remaining = [];
+  let sent = 0;
+  for (const msg of box) {
+    try {
+      await postMessageOnce(msg);
+      sent++;
+    } catch (e) {
+      const permanent = e.status && e.status >= 400 && e.status < 500 && e.status !== 429;
+      if (!permanent) remaining.push(msg);
+    }
+  }
+  writeOutbox(remaining);
+  _outboxFlushing = false;
+  if (sent > 0) console.info(`[persist] outbox: ${sent} mensaje(s) reenviados, ${remaining.length} pendientes`);
+}
+
+function initMessagePersistence() {
+  // Reenviar pendientes al volver la conexión.
+  window.addEventListener("online", () => flushMessageOutbox());
+  // Intento inicial (por si se cerró la pestaña con mensajes en cola).
+  flushMessageOutbox();
+  // Barrido periódico mientras la pestaña esté abierta.
+  setInterval(() => { if (navigator.onLine) flushMessageOutbox(); }, 60_000);
+}
+
+// ==============================================================================
 // ENVIAR MENSAJE + CHAT CON MODELO
 // ==============================================================================
 async function sendMessage() {
@@ -1946,11 +2052,7 @@ async function sendMessage() {
       role: "user",
     });
   } else {
-    fetch("/api/db/message", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(userMsg),
-    }).catch(() => {});
+    persistMessage(userMsg);
   }
 
   // Tool Caller loop (pasar contenido enriquecido con attachments).
@@ -2090,12 +2192,8 @@ async function runChatWithTools(userContent) {
             created_at: new Date().toISOString(),
           };
           state.messages.push(partialMsg);
-          // best-effort persist
-          fetch("/api/db/message", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(partialMsg),
-          }).catch(() => {});
+          // v2.12g: persistencia con reintentos + outbox
+          persistMessage(partialMsg);
         }
         toast(t("stream.stopped"), "info");
         break;
@@ -2129,11 +2227,7 @@ async function runChatWithTools(userContent) {
           created_at: new Date().toISOString(),
         };
         state.messages.push(finalMsg);
-        fetch("/api/db/message", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(finalMsg),
-        }).catch(() => {});
+        persistMessage(finalMsg);
         finalPersisted = true;
         assistantText = clean || response.text;
         break;
@@ -2242,11 +2336,7 @@ async function runChatWithTools(userContent) {
         created_at: new Date().toISOString(),
       };
       state.messages.push(finalMsg);
-      fetch("/api/db/message", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(finalMsg),
-      }).catch(() => {});
+      persistMessage(finalMsg);
       finalPersisted = true;
       assistantText = synthText;
     }
@@ -2270,11 +2360,7 @@ async function runChatWithTools(userContent) {
       created_at: new Date().toISOString(),
     };
     state.messages.push(finalMsg);
-    fetch("/api/db/message", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(finalMsg),
-    }).catch(() => {});
+    persistMessage(finalMsg);
   }
   if (_streamingMsgEl) { _streamingMsgEl.remove(); _streamingMsgEl = null; }
   clearReasoningStream();
