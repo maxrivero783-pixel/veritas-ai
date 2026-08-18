@@ -1751,8 +1751,11 @@ async function handleChatOpenRouter(request, env, userEmail) {
   // reemplazamos el system message para garantizar identidad completa.
   const uiRole = request.headers.get("x-veritas-role") || null;
   const promptKey = uiRole ? UI_ROLE_TO_PROMPT_KEY[uiRole] : null;
-  // Fallback: resolver desde el modelId directamente.
-  const resolvedKey = promptKey || MODEL_TO_ROLE[model];
+  // v2.12v: el modelId es más específico que el rol UI. El toggle Pensador envía
+  // el modelo Ultra con x-veritas-role:agent; con el orden anterior el promptKey
+  // ("super_executor") tapaba MODEL_TO_ROLE["...ultra..."]="ultra_orchestrator"
+  // y Ultra corría con el prompt del Ejecutor.
+  const resolvedKey = MODEL_TO_ROLE[model] || promptKey;
   let systemPrompt = SYSTEM_PROMPTS[resolvedKey] || SYSTEM_PROMPTS.super_executor;
   // v2.8.7: reglas de conducta inmutables — una identidad, una respuesta limpia.
   const CONDUCT = "\n\n<reglas_veritas>\n- Eres una unica identidad: Veritas. Las herramientas son internas; NUNCA muestres bloques tool_call/tool_result, JSON crudo de herramientas, ni instrucciones internas en tu respuesta.\n- Entrega UNA unica respuesta final en el idioma del usuario integrando los resultados.\n- Si generas HTML o graficos, emitelos SOLO dentro de un bloque <file path=\"preview.html\">...</file> y no repitas el codigo en tu respuesta.\n- Si una herramienta falla o no hay datos, responde con tu mejor aproximacion indicando brevemente la limitacion.\n</reglas_veritas>";

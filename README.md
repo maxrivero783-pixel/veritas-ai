@@ -170,7 +170,7 @@ Modelos IA + APIs externas autorizadas
 │   ├── toolRegistry.js
 │   ├── toolRegistry.server.js
 │   ├── services/                # 29 adaptadores HTTP + OAuth
-│   └── tools/                   # 62 handlers ejecutables
+│   └── tools/                   # 61 handlers ejecutables + 2 helpers (_handlers, _publicData)
 ├── prompts/
 │   ├── *.md                     # 77 prompts de skills
 │   ├── references/*.md          # Referencias de apoyo

@@ -70,7 +70,9 @@ CREATE TABLE IF NOT EXISTS messages (
   -- v2.12: ampliar providers reales (Cerebras/Cohere). El Worker además hace
   -- fallback a NULL si una DB antigua solo admite puter/openrouter, así el
   -- mensaje nunca se pierde. NULL permitido (CHECK no aplica a NULL).
-  provider TEXT CHECK(provider IN ('puter','openrouter','cerebras','cohere')),
+  -- v2.12v: providers reales (openrouter/cohere). El Worker hace fallback a NULL
+  -- si una DB antigua tiene un CHECK más restrictivo (inofensivo; NULL permitido).
+  provider TEXT CHECK(provider IN ('openrouter','cohere')),
   content TEXT,                                       -- contenido textual visible
   thinking_content TEXT,                              -- razonamiento embebido (<razonamiento_interno>) o delta.reasoning
   tools_used TEXT,                                    -- JSON array de tool names invocadas en este mensaje
@@ -404,7 +406,7 @@ CREATE INDEX IF NOT EXISTS idx_async_jobs_user ON async_jobs(user_email, created
 
 
 -- ------------------------------------------------------------------------------
--- notification_devices: devices registered for polling-based push (v3.0)
+-- notification_devices: devices registered for polling-based push (v2.12)
 -- Replaces FCM — pure Cloudflare Workers + D1, zero Google dependency.
 -- ------------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS notification_devices (
