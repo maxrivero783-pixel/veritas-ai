@@ -5,7 +5,7 @@
 //   - Inicialización: i18n, fallback chains, tool registry, sandbox templates.
 //   - Sidebar: submenús, nuevo/renombrar/borrar chat, abrir repo/ajustes.
 //   - Canvas 2D: animación de la entidad cybernetic (idle/active/processing).
-//   - Chat: enviar mensaje (Puter u OpenRouter según modelo), parser SSE,
+//   - Chat: enviar mensaje (OpenRouter/Cohere según modelo), parser SSE,
 //     parser <tool_call> XML, parser <razonamiento_interno>, indicadores.
 //   - Tool Caller loop (máx 5 iter), ejecución vía /api/tool/invoke,
 //     persistencia de cada iteración en D1.
@@ -499,12 +499,12 @@ function setStreamingMode(isStreaming) {
   stopBtn.hidden = !isStreaming;
 }
 
-// stopStreaming(): aborta el AbortController actual. El catch de callPuter/
+// stopStreaming(): aborta el AbortController actual. El catch de callOpenRouter/
 // callOpenRouter devuelve { aborted: true } y runChatWithTools lo maneja.
 function stopStreaming() {
   if (state.abortController) {
     state.abortController.abort();
-    // No null aquí — el finally de callPuter/callOpenRouter lo limpia.
+    // No null aquí — el finally de callOpenRouter lo limpia.
   }
   hideStreamingIndicator();
   // No llamamos setStreamingMode(false) aquí; lo hace runChatWithTools al
@@ -2452,7 +2452,7 @@ async function loadCrossChatMemories() {
 /**
  * Extrae posibles memorias del último intercambio (mensaje del usuario +
  * respuesta del asistente) y las guarda. Usa /api/llm/complete (cadena
- * Cerebras → Cohere → OpenRouter) para identificar datos dignos de recordar.
+ * Cohere → OpenRouter) para identificar datos dignos de recordar.
  * Fire-and-forget: nunca bloquea el flujo principal.
  *
  * v2.12: antes solo analizaba la respuesta del asistente — los datos
@@ -2607,7 +2607,7 @@ async function callModel(userContent, previousAssistantText, isFollowUp) {
         toast(t("model.changed", { model: `${info.icon} ${info.shortName}`, old: "" }), "info", 4000);
       }
 
-      // Retornar en el mismo formato que callPuter/callOpenRouter.
+      // Retornar en el mismo formato que callOpenRouter.
       return {
         text: result.text,
         thinking_content: result.thinking_content,
@@ -2622,7 +2622,7 @@ async function callModel(userContent, previousAssistantText, isFollowUp) {
     }
   }
 
-  // ── Ruta normal (coder, general): Puter u OpenRouter directo ──
+  // ── Ruta normal (coder, general): OpenRouter/Cohere directo ──
   const provider = getProvider(state.currentModel);
 
   // Cargar memorias cross-chat para inyectar en contexto.
@@ -3741,7 +3741,7 @@ function getSkillMode(role) {
 // ==============================================================================
 async function getSystemPrompt() {
   // Resolver el system prompt real para el rol UI actual.
-  // Esto se usa en rutas que NO pasan por el Worker (Puter) o donde el Worker
+  // Esto se usa en rutas que NO pasan por el Worker o donde el Worker
   // actúa como passthrough (/api/chat/openrouter) y no reemplaza el system message.
   const promptKey = UI_ROLE_TO_PROMPT_KEY[state.currentRole];
   const realPrompt = promptKey ? SYSTEM_PROMPTS[promptKey] : null;
@@ -4195,8 +4195,8 @@ async function loadDashboard() {
     const grid = $("#dashboardModels");
     grid.innerHTML = "";
 
-    // v2.8 — Cerebras/Cohere como fallback (tarjetas informativas).
-    ["Cerebras", "Cohere"].forEach((name) => {
+    // v2.12u — Cohere como respaldo del rol Fast (tarjeta informativa).
+    ["Cohere"].forEach((name) => {
       grid.innerHTML += `<div class="dashboard-card"><div class="dashboard-card-name">${name}</div><div class="dashboard-card-status status-amber">⚡ Fallback</div></div>`;
     });
 
@@ -4940,10 +4940,10 @@ function updateDeepThinkingVisibility() {
 }
 
 // ==============================================================================
-// PROMPT CRAFT — Botón flotante arrastrable + generador de prompts vía GLM
+// PROMPT CRAFT — Botón flotante arrastrable + generador de prompts
 // ==============================================================================
-// Widget autónomo: no depende del estado del chat principal. Usa Puter.js
-// directamente con GLM-4.7-Flash para generar prompts optimizados por rol.
+// Widget autónomo: no depende del estado del chat principal. Genera prompts
+// optimizados por rol vía /api/llm/complete (Cohere → OpenRouter).
 (function initPromptCraft() {
   const $ = (s) => document.querySelector(s);
 
@@ -4995,7 +4995,7 @@ function updateDeepThinkingVisibility() {
         "Operaciones con GitHub: crear branches, PRs, leer/escribir archivos",
         "Código funcional al primer intento (filosofía de código sobre explicación)",
         "Fetch vía proxy para APIs con restricciones CORS",
-        "Fallback a GLM Flash para parches pequeños o lookups puntuales",
+        "Inferencia rápida vía Cohere North Mini Code para lookups puntuales",
       ],
       tips: [
         "Describe qué quieres construir con el mayor detalle técnico posible",
@@ -5003,27 +5003,6 @@ function updateDeepThinkingVisibility() {
         "Si editas código existente, pega el código o indica el archivo del proyecto",
         "Para aplicaciones complejas, desglosa en componentes o vistas",
         "Menciona si necesitas que sea responsive, accesible, o con animaciones específicas",
-      ],
-    },
-    estratega: {
-      name: "Estratega",
-      model: "GLM 4.7 Flash vía Puter (prompt estratégico permisivo)",
-      strengths: [
-        "Análisis estratégico profundo con modo permisivo",
-        "Contexto warfare/inteligencia/contrainteligencia",
-        "Evaluación de escenarios y análisis de actores",
-        "Razonamiento multi-nivel: táctico, operativo y estratégico",
-        "Ciclo de inteligencia completo (6 fases: dirección, recolección, procesamiento, análisis, difusión, retroalimentación)",
-        "Crítica de arquitectura y evaluación de trade-offs",
-        "Búsqueda web nativa como tool",
-        "Receptor de fallback ético (procesa queries que otros modelos rechazan)",
-      ],
-      tips: [
-        "Sé directo — GLM responde mejor con objetivos estratégicos claros y contexto explícito",
-        "Para análisis geopolíticos o de conflictos, menciona las partes involucradas",
-        "Puedes pedir análisis en múltiples niveles (táctico/operativo/estratégico)",
-        "Si necesitas reducir rechazos, formula la tarea como análisis estratégico legítimo, factual y contextualizado",
-        "Para investigaciones largas, pide que siga el ciclo de inteligencia completo",
       ],
     },
     pensador: {
@@ -5049,12 +5028,12 @@ function updateDeepThinkingVisibility() {
     },
     fast: {
       name: "Fast",
-      model: "GLM 4.7 Flash → 4.6V Flash → 4.5 Flash vía Puter",
+      model: "Cohere Command A+ (primario) → North Mini Code",
       strengths: [
         "Respuestas rápidas con baja latencia",
         "Reformulación, resumen, clasificación y extracción ligera",
         "Prompt Arquitecto y micro-tareas de productividad",
-        "Degradación automática entre modelos GLM Flash",
+        "Degradación automática entre modelos Cohere",
       ],
       tips: [
         "Pide salidas breves y concretas",
@@ -5155,7 +5134,7 @@ function updateDeepThinkingVisibility() {
   closeBtn.addEventListener("click", closePanel);
   window.addEventListener("resize", () => { if (panelOpen) positionPanel(); });
 
-  // --- Generar prompt con GLM ---
+  // --- Generar prompt vía /api/llm/complete (Cohere→OpenRouter) ---
   async function generatePrompt() {
     const role = roleSel.value;
     const brief = input.value.trim();

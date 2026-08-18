@@ -209,65 +209,156 @@ Fallbacks adicionales permitidos:
 
 ## 🛠️ Tools disponibles: 61
 
-### Núcleo / proyecto
+### Búsqueda web general
 
 | Tool | Propósito |
 |---|---|
-| `search_repository` | Buscar documentos en el repositorio del usuario |
-| `read_project_file` | Leer archivos del proyecto en R2 |
-| `write_project_file` | Escribir archivos del proyecto en R2 |
-| `create_skill` | Crear una skill personalizada en D1 |
-| `preview_html` | Previsualizar HTML generado |
-| `load_template` | Cargar plantillas sandbox |
-| `fetch_via_proxy` | Proxy seguro para recursos externos |
+| `exa_search` | Búsqueda semántica para IA (Exa.ai): resultados por significado, no solo keywords. Modos: search (búsqueda neural/auto/k |
+| `hackernews_search` | Busca discusiones y señales técnicas en Hacker News vía Algolia. |
+| `web_search` | Búsqueda web. Proveedores en orden de preferencia: Jina → Tavily → Serper. |
 
-### Búsqueda, scraping y navegación
+### Lectura/scraping de páginas
 
 | Tool | Propósito |
 |---|---|
-| `web_search` | Búsqueda web con Jina → Tavily → Serper |
-| `scrape_url` | Lectura puntual de URL |
-| `firecrawl_scrape` | Scraping estructurado |
-| `firecrawl_crawl` | Crawling recursivo |
-| `jina_reader_search` | Lectura/búsqueda con Jina Reader |
-| `jina_github_search` | Búsqueda GitHub vía Jina |
-| `gdelt_search` | Eventos/noticias globales |
-| `rover_scrape` | Scraping/agente cloud Rover |
-| `spider_cloud_search` | Search/crawl/screenshot/unblocker |
-| `browserless_execute` | Chromium remoto |
-| `browser_use_browse` | Navegación autónoma Browser-use |
-| `browser_use_cloud` | Navegación autónoma Browser Use Cloud |
-| `steel_session` | Sesiones persistentes Steel |
-| `steel_auth_session` | Sesiones Steel Auth |
+| `fetch_via_proxy` | Llamada HTTP a una API externa desde el iframe del Sandbox vía proxy del Worker. Evita CORS. Si la URL pertenece a un se |
+| `firecrawl_crawl` | Crawl recursivo de un sitio web completo (hasta N páginas) vía Firecrawl. |
+| `firecrawl_scrape` | Scraping de URL con extracción estructurada vía Firecrawl. Devuelve markdown limpio. |
+| `jina_reader_search` | Lectura de URLs a Markdown limpio y búsqueda web combinada vía Jina Reader (r.jina.ai). Modo reader: extrae contenido co |
+| `rover_scrape` | Scraper cloud MCP-native (rtrvr.ai). Modo scrape: extracción instantánea de URL a Markdown. Modo agent: agente web multi |
+| `scrape_url` | Scraping de una sola URL. Proveedores: Jina r.jina.ai → ScrapingBee. |
+| `scrapedo_scrape` | Scraping con proxies rotativos y anti-bot (Scrape.do). Modos: scrape (extrae cualquier URL como markdown/raw, con render |
 
-### OSINT e infraestructura
+### Enciclopedias y datos estructurados
 
 | Tool | Propósito |
 |---|---|
-| `dns_lookup` | DNS lookup |
-| `shodan_search` | Shodan search |
-| `zoomeye_search` | ZoomEye search |
-| `intelx_search` | Intelligence X search |
-| `apify_google_places` | Google Places/Maps vía Apify |
-| `apify_social` | Redes sociales públicas vía Apify |
-| `gfw_search` | Global Fishing Watch / marítimo |
-| `ner_extract` | Extracción de entidades |
+| `wikidata_search` | Busca entidades estructuradas, aliases y relaciones en Wikidata. |
+| `wikipedia_search` | Busca contexto enciclopédico y desambiguación en Wikipedia. |
 
-### Documentos, audio y media
+### Eventos y noticias globales
 
 | Tool | Propósito |
 |---|---|
-| `analyze_media` | Imagen/PDF/audio/video |
-| `llamaparse_parse` | PDF/DOCX complejo a Markdown |
-| `assemblyai_transcribe` | Transcripción/análisis de audio |
+| `gdelt_search` | Búsqueda en GDELT Project (global events database). Modos: events (eventos globales con actores, temas, ubicaciones), gk |
 
-### OAuth: GitHub
+### OSINT técnico: dominios, IPs, certificados, dispositivos
 
-| Provider | Tools |
+| Tool | Propósito |
 |---|---|
-| GitHub | `github_list_repos`, `github_read_file`, `github_write_file`, `github_write_files`, `github_create_branch`, `github_create_pr` |
+| `crtsh_lookup` | Busca certificados y subdominios públicos en crt.sh. |
+| `dns_lookup` | Resolución DNS y análisis de dominios vía Google DNS API. Modos: resolve (consulta A/AAAA/MX/NS/TXT/CNAME/SOA/PTR/SRV/CA |
+| `rdap_lookup` | Consulta RDAP público para dominios, IPs y ASNs. |
+| `shodan_search` | Búsqueda OSINT de infraestructura en Shodan. Modos: search (dispositivos/puertos/servicios), host (detalle de IP), explo |
+| `zoomeye_search` | Búsqueda OSINT de infraestructura en ZoomEye. Modos: search (web/host search), host (dispositivos), ip (detalle de IP).  |
 
----
+### Ciberseguridad y vulnerabilidades
+
+| Tool | Propósito |
+|---|---|
+| `cisa_kev_search` | Busca vulnerabilidades explotadas conocidas en CISA KEV. |
+| `gfw_search` | Búsqueda web alternativa vía GFW API. Motor de búsqueda general como respaldo/alternativa a Jina/Tavily/Serper. Resultad |
+| `intelx_search` | Búsqueda OSINT en Intelligence X (IntelX). Modos: search (busqueda inteligente de datos filtrados), results (resultados  |
+| `nvd_cve_search` | Busca CVEs y detalles de severidad en NVD. |
+
+### Legal y regulatorio
+
+| Tool | Propósito |
+|---|---|
+| `courtlistener_search` | Jurisprudencia y dockets de EE.UU. en CourtListener (Free Law Project): ~8M de opiniones federales/estatales + RECAP/PAC |
+| `sec_edgar_search` | Consulta filings recientes de SEC EDGAR. |
+
+### Académico y científico
+
+| Tool | Propósito |
+|---|---|
+| `crossref_search` | Busca metadatos bibliográficos y DOI en Crossref. |
+| `nasa_search` | Busca contenido público en NASA Image and Video Library. |
+| `openalex_search` | Busca literatura académica abierta e instituciones en OpenAlex. |
+| `semantic_scholar_search` | Busca papers, autores y citas en Semantic Scholar Graph API. |
+
+### Geolocalización, clima y vuelos
+
+| Tool | Propósito |
+|---|---|
+| `aviationstack_flights` | Datos de aviación en tiempo real (AviationStack): estado de vuelos, aeropuertos y aerolíneas. Modos: flights (por número |
+| `geonames_search` | Busca lugares con GeoNames. |
+| `nominatim_search` | Geocodifica lugares con Nominatim/OpenStreetMap. |
+| `open_meteo_weather` | Clima actual y pronóstico con Open-Meteo. |
+
+### Software y dependencias
+
+| Tool | Propósito |
+|---|---|
+| `jina_github_search` | Búsqueda de código y repositorios GitHub vía Jina. Modos: search (busqueda de código), readme (lectura de README markdow |
+| `npm_package_info` | Consulta metadatos, licencia y dependencias de un paquete npm. |
+| `pypi_package_info` | Consulta metadatos, licencia y compatibilidad de un paquete PyPI. |
+
+### Análisis de texto y entidades
+
+| Tool | Propósito |
+|---|---|
+| `ner_extract` | Extracción de entidades nombradas (NER) de texto. Extrae URLs, emails, teléfonos, IPs (v4/v6), fechas, hashtags, mencion |
+
+### GitHub (OAuth)
+
+| Tool | Propósito |
+|---|---|
+| `github_create_branch` | Crea una nueva rama en un repo GitHub. |
+| `github_create_pr` | Crea un Pull Request en un repo GitHub. |
+| `github_list_repos` | Lista los repositorios del usuario conectado en GitHub. |
+| `github_read_file` | Lee un archivo de un repo GitHub del usuario. |
+| `github_write_file` | Crea o actualiza un archivo en un repo GitHub del usuario. Crea commit. |
+| `github_write_files` | Escribe múltiples archivos en un repo GitHub en un solo commit (Trees API). |
+
+### Media, audio y documentos
+
+| Tool | Propósito |
+|---|---|
+| `analyze_media` | Analiza contenido multimedia (imagen, PDF, audio, video) usando los modelos Nano del stack Nemotron. El target puede ser |
+| `assemblyai_transcribe` | Transcripción de audio a texto + inteligencia. 99+ idiomas, diarización de speakers, sentimiento, resumen, topics, chapt |
+| `llamaparse_parse` | Parsea documentos PDF/DOCX complejos a Markdown estructurado. Extrae tablas, OCR, ecuaciones. Acepta URL pública o archi |
+
+### Proyecto y sandbox
+
+| Tool | Propósito |
+|---|---|
+| `create_skill` | Crea una skill personalizada del usuario y la persiste en D1. Úsala solo cuando el usuario pida explícitamente crear una |
+| `load_template` | Inserta una plantilla pre-armada en el Sandbox con parámetros. |
+| `preview_html` | Carga HTML en el Live Preview del Sandbox. |
+| `read_project_file` | Lee un archivo de la Carpeta Proyecto del usuario en R2. |
+| `search_repository` | Busca documento en el repositorio del usuario por número o nombre. |
+| `write_project_file` | Escribe o sobrescribe un archivo en la Carpeta Proyecto del usuario en R2. Persiste archivos generados por la IA (código |
+
+### Navegación con browser real
+
+| Tool | Propósito |
+|---|---|
+| `browser_use_browse` | Ejecuta una tarea de navegación autónoma descrita en lenguaje natural vía Browser-use hosted API. Latencia alta (10-60s) |
+| `browser_use_cloud` | Agente navegador autónomo NL vía Browser Use Cloud API. Alternativa a browser_use_browse con auto-provisioning de keys.  |
+| `browserless_execute` | Ejecuta código en clúster headless Chromium remoto (Browserless). Modos: evaluate (ejecuta JS en página), screenshot (ca |
+| `spider_cloud_search` | Crawler ultra-rápido Spider Cloud. Modos: search (búsqueda + crawling combinado), crawl (multi-página paralelo), screens |
+| `steel_auth_session` | Sesiones de navegador autenticadas en Steel.dev con proxy, cookies, fingerprints custom. Modos: create (crea sesión con  |
+| `steel_session` | Crea/release/scrape sesiones de navegador persistente en Steel.dev. |
+
+### Redes sociales y mapas (Apify)
+
+| Tool | Propósito |
+|---|---|
+| `apify_google_places` | Búsqueda OSINT en Google Places/Maps. Extrae listings de negocios locales con dirección, teléfono, web, coords, rating y |
+| `apify_social` | Scraping de perfiles/posts públicos en redes sociales. Plataformas: facebook_posts, instagram_profile, instagram_posts,  |
+
+### Inferencia LLM directa
+
+| Tool | Propósito |
+|---|---|
+| `cohere_infer` | Reservado para inferencia auxiliar Cohere. |
+
+### Utilidades
+
+| Tool | Propósito |
+|---|---|
+| `email_report` | Envía un reporte opt-in por Brevo. |
 
 ## 🧠 Skills
 
