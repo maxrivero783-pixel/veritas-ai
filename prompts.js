@@ -1101,9 +1101,12 @@ export const UI_ROLE_TO_PROMPT_KEY = {
 };
 
 // Mapeo inverso: SYSTEM_PROMPTS key → UI role (para el Worker).
-export const PROMPT_KEY_TO_UI_ROLE = Object.fromEntries(
-  Object.entries(UI_ROLE_TO_PROMPT_KEY).map(([k, v]) => [v, k])
-);
+// v2.12t: agent y pensador apuntan ambos a super_executor; en el inverso la
+// última entrada ganaba y se perdía "agent". Lo fijamos explícitamente.
+export const PROMPT_KEY_TO_UI_ROLE = {
+  ...Object.fromEntries(Object.entries(UI_ROLE_TO_PROMPT_KEY).map(([k, v]) => [v, k])),
+  super_executor: "agent",
+};
 
 // ------------------------------------------------------------------------------
 export default {

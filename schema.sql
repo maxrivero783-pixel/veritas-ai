@@ -291,7 +291,7 @@ CREATE INDEX IF NOT EXISTS idx_presence_chat ON chat_presence(chat_id, last_hear
 -- Hechos clave, preferencias y contexto aprendido por el sistema a lo largo
 -- de múltiples conversaciones. Se inyecta como contexto en buildContext().
 --
--- Puntos de写入 (fire-and-forget desde el frontend tras cada respuesta):
+-- Puntos de escritura (fire-and-forget desde el frontend tras cada respuesta):
 --   1. Después de cada respuesta del modelo, si la conversación contiene datos
 --      personales o preferencias explícitas, el frontend llama POST /api/memories.
 --   2. El sistema puede sugerir memorias nuevas desde el resumen generado por

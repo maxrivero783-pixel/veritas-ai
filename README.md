@@ -1,6 +1,6 @@
 # VÉRITAS v2.12 — Asistente OSINT con IA multi-modelo
 
-> **Una interfaz auto-alojada para investigar, verificar, crear, programar y operar con IA usando Cloudflare, múltiples modelos, skills dinámicas y 62 herramientas integradas.**
+> **Una interfaz auto-alojada para investigar, verificar, crear, programar y operar con IA usando Cloudflare, múltiples modelos, skills dinámicas y 61 herramientas integradas.**
 
 Véritas no es solo un chat. Es un **centro de mando**: combina modelos IA, memoria, herramientas OSINT, conectores OAuth, sandbox de código, documentos, scraping, navegación, skills especializadas y una UI vanilla ultraligera para convertir preguntas complejas en resultados verificables.
 
@@ -10,7 +10,7 @@ Véritas no es solo un chat. Es un **centro de mando**: combina modelos IA, memo
 
 - 🧠 **Orquestación multi-modelo**: 2 roles visibles — **Agente** y **Fast** — con toggle 🧠 Pensador (Nemotron Ultra) y Code-first.
 - 🧩 **77 skills built-in** en `prompts/`: verificación, OSINT, análisis, código, escritura, media, negocios, diseño, documentos y educación.
-- 🛠️ **62 tools registradas** con dispatcher único, validación de argumentos y permisos por rol.
+- 🛠️ **61 tools registradas** con dispatcher único, validación de argumentos y permisos por rol.
 - 🔁 **Rotación de API keys** con cooldown, health checks y estado persistido en D1.
 - 🔎 **Investigación y scraping multi-proveedor**: Jina, Tavily, Serper, Firecrawl, ScrapingBee, Spider Cloud, Rover, Browserless, Steel, Browser-use, GDELT y más.
 - 🛰️ **OSINT defensivo**: DNS, Shodan, ZoomEye, Intelligence X, GFW, Apify Social/Places, NER y análisis coordinado.
@@ -169,7 +169,7 @@ Modelos IA + APIs externas autorizadas
 │   ├── skillsRegistry.js
 │   ├── toolRegistry.js
 │   ├── toolRegistry.server.js
-│   ├── services/                # 24 adaptadores HTTP + OAuth
+│   ├── services/                # 29 adaptadores HTTP + OAuth
 │   └── tools/                   # 62 handlers ejecutables
 ├── prompts/
 │   ├── *.md                     # 77 prompts de skills
@@ -207,7 +207,7 @@ Fallbacks adicionales permitidos:
 
 ---
 
-## 🛠️ Tools disponibles: 62
+## 🛠️ Tools disponibles: 61
 
 ### Núcleo / proyecto
 
@@ -387,6 +387,11 @@ INTELX_API_KEY_N
 JINA_READER_API_KEY_N
 JINA_GITHUB_API_KEY_N
 GFW_API_KEY_N
+EXA_API_KEY_N
+SCRAPEDO_API_TOKEN_N
+COURTLISTENER_API_TOKEN_N
+AVIATIONSTACK_API_KEY_N
+BREVO_API_KEY_N
 ```
 
 OAuth / sistema:

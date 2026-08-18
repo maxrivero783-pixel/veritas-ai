@@ -1,5 +1,5 @@
 # ==============================================================================
-# Véritas v2.4 — wrangler.toml
+# Véritas v2.12 — wrangler.toml
 # ==============================================================================
 # Configuración del Worker de Cloudflare Pages + Workers.
 # Este archivo SÍ se commitea (es configuración pública). Los secrets reales
