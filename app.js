@@ -29,7 +29,7 @@ import { FALLBACK_CHAINS, MODEL_PROVIDER, getNextFallback, isFallbackExhausted, 
 import { TOOL_REGISTRY, isAllowed, parseToolCallXML, buildToolResultXML, escapeXML, fetchAndHydrate, getTool } from "./lib/toolRegistry.js";
 import * as ContextManager from "./lib/contextManager.js";
 import { runAgentLoop } from "./lib/agentOrchestrator.js";
-import { SharedSessionManager, createShare, revokeShare, joinSession, isRoleShareable } from "./lib/sharedSession.js";
+import { SharedSessionManager, createShare, revokeShare, joinSession } from "./lib/sharedSession.js";
 import { getNotificationManager } from "./lib/notifications.js";
 import { getOfflineCacheManager } from "./lib/offlineCache.js";
 import { getTemplate, listTemplates } from "./lib/sandboxTemplates.js";
@@ -945,6 +945,9 @@ async function loadChatList() {
   if (!list) return;
   list.innerHTML = "";
 
+  // v2.12: los chats Fast se persisten como categoría "general".
+  const listCategory = persistedCategory(state.currentCategory);
+
   // P1-4: aplicar filtro de búsqueda activo (solo por título, case-insensitive).
   const query = (state.chatSearchQuery || "").trim().toLowerCase();
   const applyFilter = (chats) => {
@@ -957,17 +960,17 @@ async function loadChatList() {
   // En offline, cargar desde cache.
   if (state.isOffline) {
     const cached = await getOfflineCacheManager().loadChatsFromCache();
-    chats = cached.filter((c) => c.category === state.currentCategory);
+    chats = cached.filter((c) => c.category === listCategory);
   } else {
     try {
-      const resp = await fetch(`/api/chats?category=${state.currentCategory}`);
+      const resp = await fetch(`/api/chats?category=${encodeURIComponent(listCategory)}`);
       if (resp.ok) {
         const data = await resp.json();
         chats = data.chats || [];
       } else {
         // Fallback: offline-bundle (trae chats también).
         const bundle = await fetch("/api/chats/offline-bundle").then((r) => r.json()).catch(() => ({ chats: [] }));
-        chats = (bundle.chats || []).filter((c) => c.category === state.currentCategory);
+        chats = (bundle.chats || []).filter((c) => c.category === listCategory);
       }
     } catch (e) {
       toast(`Error cargando chats: ${e.message}`, "error");
@@ -1051,10 +1054,22 @@ function renderChatItem(chat) {
   list.appendChild(item);
 }
 
+/**
+ * v2.12: categoría persistida de un chat. El CHECK de D1 solo admite
+ * agent|coder|general; la pestaña ⚡ Fast persiste como "general"
+ * (sigue siendo un chat Fast por su modelo; la UI lo trata igual).
+ */
+function persistedCategory(category) {
+  return category === "fast" ? "general" : category;
+}
+
 async function createNewChat() {
   const chatId = crypto.randomUUID();
   const title = t("chat.empty");
-  const category = state.currentCategory;
+  // v2.12: la categoría persistida "fast" no existe en el CHECK de D1
+  // (agent|coder|general) y el servidor la rechazaba, dejando los chats Fast
+  // sin persistir (mensajes perdidos al recargar). Fast persiste como general.
+  const category = persistedCategory(state.currentCategory);
   // Persistir el chat en el backend vía POST /api/chats.
   const chat = {
     id: chatId,
@@ -2297,10 +2312,10 @@ async function runChatWithTools(userContent) {
     $("#chatCachedBadge").textContent = `⚡ ${state.chatCachedTotal} cached this chat`;
   }
 
-  // v2.3: Fire-and-forget — extraer memorias de la respuesta final.
-  // Solo si hay texto de asistente suficiente y Puter está disponible.
-  if (assistantText && assistantText.length > 100) {
-    extractAndSaveMemories(assistantText).catch(() => {});
+  // v2.3: Fire-and-forget — extraer memorias del intercambio final.
+  // Analiza el mensaje del usuario (donde viven sus datos) + la respuesta.
+  if (userContent && userContent.length >= 10) {
+    extractAndSaveMemories(userContent, assistantText).catch(() => {});
   }
 
   return { aborted: wasAborted };
@@ -2320,8 +2335,8 @@ async function runChatWithTools(userContent) {
  */
 async function loadCrossChatMemories() {
   try {
-    const excludeParam = state.currentChat?.id ? `&exclude_chat=${state.currentChat.id}` : "";
-    const resp = await fetch(`/api/memories?limit=30&${excludeParam}`);
+    const excludeParam = state.currentChat?.id ? `&exclude_chat=${encodeURIComponent(state.currentChat.id)}` : "";
+    const resp = await fetch(`/api/memories?limit=30${excludeParam}`);
     if (!resp.ok) return "";
     const data = await resp.json();
     const memories = data.memories || [];
@@ -2361,23 +2376,32 @@ async function loadCrossChatMemories() {
 }
 
 /**
- * Extrae posibles memorias de la última respuesta del asistente y las guarda.
- * Usa Puter/GLM-Flash (gratis) para identificar datos dignos de recordar.
+ * Extrae posibles memorias del último intercambio (mensaje del usuario +
+ * respuesta del asistente) y las guarda. Usa /api/llm/complete (cadena
+ * Cerebras → Cohere → OpenRouter) para identificar datos dignos de recordar.
  * Fire-and-forget: nunca bloquea el flujo principal.
+ *
+ * v2.12: antes solo analizaba la respuesta del asistente — los datos
+ * personales del usuario (nombre, preferencias…) viven en SUS mensajes,
+ * así que casi nunca se extraía nada útil.
  */
-async function extractAndSaveMemories(lastAssistantText) {
+async function extractAndSaveMemories(lastUserText, lastAssistantText) {
   try {
-    if (!lastAssistantText || lastAssistantText.length < 50) return;
+    const userPart = String(lastUserText || "").trim();
+    if (userPart.length < 10 && !(lastAssistantText || "").length) return;
 
-    const prompt = `Analiza este mensaje de un asistente de IA. Identifica si hay datos personales, preferencias, o información contextual del usuario que valga la pena recordar para conversaciones futuras.
+    const prompt = `Analiza este intercambio entre un usuario y un asistente de IA. Identifica si hay datos personales, preferencias, o información contextual del USUARIO que valga la pena recordar para conversaciones futuras.
 
 Importante:
-- Solo extrae hechos concretos y relevantes (nombre, rol, preferencias técnicas, datos de proyectos, etc.).
-- NO extraigas información genérica o transaccional.
+- Solo extrae hechos concretos y relevantes del usuario (nombre, rol, preferencias técnicas, datos de proyectos, etc.).
+- NO extraigas información genérica, transaccional ni del propio asistente.
 - Si no hay nada digno de recordar, responde exactamente: []
 
-Mensaje del asistente:
-${lastAssistantText.slice(-3000)}
+Mensaje del usuario:
+${userPart.slice(0, 2000) || "(sin mensaje)"}
+
+Respuesta del asistente (contexto):
+${String(lastAssistantText || "").slice(-1500)}
 
 Responde SOLO un JSON array de objetos con formato: [{"content": "...", "category": "personal|tech|preference|fact", "importance": 1-5}]
 No incluyas nada más que el JSON array.`;
@@ -3553,8 +3577,12 @@ function renderSharedParticipants(presence) {
 function updateInviteButtonVisibility() {
   const btn = $("#inviteBtn");
   if (!btn) return;
-  const shareable = state.currentChat && isRoleShareable(state.currentRole);
-  show(btn); // Lo dejamos visible para roles shareables; hidden para otros.
+  // v2.12: alineado con el servidor (handleShareCreate permite categorías
+  // agent y general) y con el toggle Ajustes → Sesión compartida. Antes usaba
+  // roles obsoletos (estratega/pensador) e ignoraba el toggle.
+  const shareable = state.settings.shared.enable !== false
+    && !!state.currentChat
+    && ["agent", "general"].includes(state.currentChat.category);
   btn.hidden = !shareable;
 }
 
@@ -3600,11 +3628,18 @@ async function detectSharedJoinFromURL() {
     return;
   }
   toast(t("shared.joined"), "success");
-  // Cargar el chat.
-  // Necesitamos fetch el chat desde el backend; como no hay endpoint explícito,
-  // usamos el offline-bundle para encontrarlo.
-  const bundle = await fetch("/api/chats/offline-bundle").then((r) => r.json()).catch(() => ({ chats: [] }));
-  const chat = (bundle.chats || []).find((c) => c.id === chatId);
+  // v2.12: /api/chats ya incluye chats donde el usuario es participante (editor),
+  // así que el chat compartido aparece ahí (y queda en la barra lateral).
+  let chat = null;
+  try {
+    const list = await fetch("/api/chats").then((x) => x.json()).catch(() => ({ chats: [] }));
+    chat = (list.chats || []).find((c) => c.id === chatId);
+  } catch { /* fallback abajo */ }
+  if (!chat) {
+    const bundle = await fetch("/api/chats/offline-bundle").then((x) => x.json()).catch(() => ({ chats: [] }));
+    chat = (bundle.chats || []).find((c) => c.id === chatId);
+  }
+  loadChatList(); // refrescar sidebar para que el chat compartido quede visible
   if (chat) openChat(chat);
 }
 

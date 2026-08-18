@@ -1736,6 +1736,17 @@ body.is-offline .status-text::before { content: "Sin conexión"; }
   border-left: 3px solid var(--accent-cyan);
 }
 
+/* ── Acerca de: logo reducido (antes se renderizaba a tamaño natural) ── */
+.about-logo {
+  display: block;
+  width: 64px;
+  height: 64px;
+  object-fit: contain;
+  border-radius: var(--radius-md);
+  margin: 4px 0 12px;
+  opacity: .95;
+}
+
 .settings-info-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
