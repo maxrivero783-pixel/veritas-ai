@@ -180,6 +180,9 @@ async function init() {
   // Cargar conexiones OAuth.
   await loadConnections();
 
+  // v2.12l: feedback si venimos del retorno de OAuth (GitHub).
+  handleOAuthReturn();
+
   // Cargar dashboard.
   await loadDashboard();
 
@@ -3781,6 +3784,31 @@ const debouncedUpdateTokenCounter = debounce(updateTokenCounter, 300);
 // ==============================================================================
 // OAUTH CONNECTIONS
 // ==============================================================================
+// v2.12l — Retorno de OAuth (GitHub): el Worker redirige a
+// /ajustes/conexiones?status=ok|error&provider=github tras autorizar. Sin este
+// handler el usuario aterrizaba sin feedback ni vista de conexiones.
+function handleOAuthReturn() {
+  const params = new URLSearchParams(location.search);
+  const status = params.get("status");
+  if (!status) return;
+  const provider = params.get("provider") || "github";
+  const error = params.get("error");
+  try { history.replaceState(null, "", location.pathname); } catch { /* limpio */ }
+  // Abrir Ajustes → Conexiones.
+  try {
+    $$(".settings-tab").forEach((tb) => tb.classList.toggle("active", tb.dataset.section === "connections"));
+    $$(".settings-section").forEach((sec) => hide(sec));
+    show($("#settings-connections"));
+    show($("#settingsModal"));
+  } catch { /* la vista puede no existir en móvil */ }
+  if (status === "ok") {
+    toast(`✅ ${provider} conectado correctamente`, "success", 4000);
+  } else {
+    toast(`⚠️ Error conectando ${provider}: ${error || "desconocido"}`, "error", 7000);
+  }
+  loadConnections();
+}
+
 async function loadConnections() {
   try {
     const resp = await fetch("/api/oauth/connections");
