@@ -3845,7 +3845,10 @@ function updateConnectionUI(conn) {
 function connectOAuth(provider) {
   // Redirigir al endpoint start del Worker.
   toast(t("connections.redirecting", { provider }), "info");
-  window.location.href = `/api/oauth/${provider}/start`;
+  // v2.12n: el navegador no envía headers de sesión al navegar; pasar el
+  // token por query para que el Worker asocie la conexión al usuario.
+  const _oauthTok = localStorage.getItem("veritas_token") || "";
+  window.location.href = `/api/oauth/${provider}/start` + (_oauthTok ? `?auth_token=${encodeURIComponent(_oauthTok)}` : "");
 }
 
 async function disconnectOAuth(provider) {
