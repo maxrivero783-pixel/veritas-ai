@@ -1875,17 +1875,8 @@ async function handleChatOpenRouter(request, env, userEmail) {
   // --- Logging de telemetría (opcional, best-effort) ---
   logOpenRouterCall(env, userEmail, model, keyIndexUsed, upstreamResp.status, startTs).catch(() => {});
 
-  // --- Stream passthrough ---
+  // --- Stream ---
   if (stream) {
-    // TransformStream para interceptar el último evento (usage) y persistirlo.
-    const ts = new TransformStream({
-      async transform(chunk, controller) {
-        controller.enqueue(chunk);
-      },
-    });
-
-    // Pipe upstream → cliente. El frontend parsea SSE y manda de vuelta usage
-    // vía /api/db/message (tokens_in/out/cached_tokens).
     const headers = new Headers(upstreamResp.headers);
     headers.set("Cache-Control", "no-cache");
     headers.set("Connection", "keep-alive");
@@ -1893,6 +1884,63 @@ async function handleChatOpenRouter(request, env, userEmail) {
     headers.set("X-Veritas-Key-Index", String(keyIndexUsed));
     if (degraded) headers.set("X-Veritas-Degraded", "1");
 
+    // v2.12q — Cohere v2 emite SSE nativo (message-start/content-delta/message-end)
+    // que el parser del frontend (formato OpenAI) no entiende: el rol Fast
+    // quedaba en blanco. Normalizamos a SSE estilo OpenAI en el Worker.
+    if (upstreamProvider === "cohere") {
+      const reader = upstreamResp.body.getReader();
+      const dec = new TextDecoder();
+      const enc = new TextEncoder();
+      let buf = "";
+      const normalized = new ReadableStream({
+        async start(controller) {
+          const emit = (obj) => controller.enqueue(enc.encode("data: " + JSON.stringify(obj) + "\n\n"));
+          try {
+            for (;;) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              buf += dec.decode(value, { stream: true });
+              const lines = buf.split("\n");
+              buf = lines.pop() || "";
+              for (const line of lines) {
+                if (!line.startsWith("data: ")) continue;
+                let ev;
+                try { ev = JSON.parse(line.slice(6)); } catch { continue; }
+                const t = ev.type;
+                if (t === "content-delta") {
+                  const c = ev.delta && ev.delta.message && ev.delta.message.content;
+                  if (!c) continue;
+                  if (c.type === "text" && typeof c.text === "string" && c.text) {
+                    emit({ choices: [{ delta: { content: c.text } }] });
+                  } else if (c.type === "thinking" && typeof c.thinking === "string" && c.thinking) {
+                    emit({ choices: [{ delta: { reasoning: c.thinking } }] });
+                  }
+                } else if (t === "message-end") {
+                  const u = (ev.delta && ev.delta.usage && ev.delta.usage.tokens) || {};
+                  emit({ choices: [], usage: {
+                    prompt_tokens: u.input_tokens || 0,
+                    completion_tokens: u.output_tokens || 0,
+                    prompt_tokens_details: { cached_tokens: (ev.delta && ev.delta.usage && ev.delta.usage.cached_tokens) || 0 },
+                  } });
+                }
+              }
+            }
+            controller.enqueue(enc.encode("data: [DONE]\n\n"));
+            controller.close();
+          } catch (e) {
+            try { controller.error(e); } catch { /* ya cerrada */ }
+          }
+        },
+      });
+      return new Response(normalized, { status: 200, headers });
+    }
+
+    // OpenRouter: passthrough directo (ya es formato OpenAI).
+    const ts = new TransformStream({
+      async transform(chunk, controller) {
+        controller.enqueue(chunk);
+      },
+    });
     return new Response(upstreamResp.body.pipeThrough(ts), { status: 200, headers });
   }
 
