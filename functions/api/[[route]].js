@@ -52,6 +52,10 @@ import {
   OAuthInvalidError,
 } from "../../lib/oauth.js";
 
+// v2.12i — adaptadores OAuth estáticos (los import() dinámicos con template
+// literal no se bundleaban ⇒ "No such module" en producción).
+import { getOAuthAdapter } from "../../lib/services/oauth/_adapters.js";
+
 import {
   TOOL_REGISTRY_SERVER,
   isAllowed,
@@ -2482,7 +2486,8 @@ async function handleToolsRegistry() {
 // ==============================================================================
 async function handleOAuthStart(provider, request, env, userEmail) {
   if (provider !== "github") return errorResponse("unknown_provider", 400, { provider });
-  const adapter = (await import(`../../lib/services/oauth/${provider}.js`)).default;
+  const adapter = getOAuthAdapter(provider);
+  if (!adapter) return errorResponse("unknown_provider", 400, { provider });
   const clientId = env.GITHUB_OAUTH_CLIENT_ID;
   if (!clientId) return errorResponse("client_id_missing", 500, { provider });
 
@@ -2531,7 +2536,8 @@ async function handleOAuthCallback(provider, request, env) {
 
   await env.DB.prepare(`DELETE FROM oauth_pending WHERE state = ?`).bind(state).run();
 
-  const adapter = (await import(`../../lib/services/oauth/${provider}.js`)).default;
+  const adapter = getOAuthAdapter(provider);
+  if (!adapter) return errorResponse("unknown_provider", 400, { provider });
   const clientId = env.GITHUB_OAUTH_CLIENT_ID;
   const clientSecret = env.GITHUB_OAUTH_CLIENT_SECRET;
   const redirectUri = `${frontendBase}/api/oauth/${provider}/callback`;
