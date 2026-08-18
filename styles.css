@@ -412,7 +412,8 @@ a:hover { text-decoration: underline; }
   background: var(--bg-input);
   color: var(--text-secondary);
 }
-.chat-item-provider.puter { background: rgba(0, 212, 255, 0.15); color: var(--accent-cyan); }
+.chat-item-provider.cerebras { background: rgba(0, 212, 255, 0.15); color: var(--accent-cyan); }
+.chat-item-provider.cohere { background: rgba(150, 120, 255, 0.15); color: #b39dff; }
 .chat-item-provider.openrouter { background: rgba(80, 200, 120, 0.15); color: var(--accent-eme); }
 .chat-item-actions {
   position: absolute;
@@ -526,7 +527,8 @@ body.is-offline .status-text::before { content: "Sin conexión"; }
   color: var(--text-secondary);
   font-family: var(--font-mono);
 }
-.model-chip.puter { color: var(--accent-cyan); }
+.model-chip.cerebras { color: var(--accent-cyan); }
+.model-chip.cohere { color: #b39dff; }
 .model-chip.openrouter { color: var(--accent-eme); }
 
 .shared-banner {
@@ -707,9 +709,13 @@ body.is-offline .status-text::before { content: "Sin conexión"; }
   border-radius: var(--radius-sm);
   font-family: var(--font-mono);
 }
-.welcome-card-provider.puter {
+.welcome-card-provider.cerebras {
   background: rgba(0, 212, 255, 0.15);
   color: var(--accent-cyan);
+}
+.welcome-card-provider.cohere {
+  background: rgba(150, 120, 255, 0.15);
+  color: #b39dff;
 }
 .welcome-card-provider.openrouter {
   background: rgba(80, 200, 120, 0.15);
