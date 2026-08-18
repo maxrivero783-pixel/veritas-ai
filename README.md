@@ -357,10 +357,16 @@ wrangler pages dev .
 
 ## 🔑 Secrets soportados
 
-Todos los pools usan sufijo `_1`, `_2`, `_N`.
+Todos los pools usan sufijo `_1`, `_2`, `_N`. Desde v2.12i el rotador también
+acepta la primera clave **sin sufijo** (p. ej. `CEREBRAS_API_KEY` además de
+`CEREBRAS_API_KEY_1`), para evitar que una clave configurada sin el `_1` quede
+sin detectar. Para verificar qué claves ve realmente el Worker (nombres, nunca
+valores): `GET /api/keys/diagnose` (solo admin).
 
 ```txt
 OPENROUTER_API_KEY_N
+CEREBRAS_API_KEY_N        ← LLM rol Fast (gpt-oss-120b)
+COHERE_API_KEY_N          ← LLM rol Fast (Command A+ / North Mini Code)
 JINA_API_KEY_N
 TAVILY_API_KEY_N
 SERPER_API_KEY_N

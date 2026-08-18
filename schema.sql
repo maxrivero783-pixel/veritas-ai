@@ -168,6 +168,23 @@ CREATE INDEX IF NOT EXISTS idx_toolcalls_user ON tool_calls(user_email, ts DESC)
 CREATE INDEX IF NOT EXISTS idx_toolcalls_chat ON tool_calls(chat_id, ts);
 CREATE INDEX IF NOT EXISTS idx_toolcalls_tool ON tool_calls(tool_name, ts DESC);
 
+-- ------------------------------------------------------------------------------
+-- v2.12: tool_selections — instrumentación de routing/selección de tools.
+-- Registra qué subconjunto de tools se inyectó por request (y el modo), para
+-- detectar la "cola larga" de tools apenas usadas y ajustar el catálogo.
+-- ------------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS tool_selections (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_email TEXT,
+  chat_id TEXT,
+  query_preview TEXT,                                -- primeros 200 chars de la consulta
+  selected_tools TEXT,                               -- JSON array de tool names inyectadas
+  mode TEXT,                                         -- 'native' | 'xml'
+  total_available INTEGER,                           -- tools disponibles para el rol
+  ts DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_toolsel_ts ON tool_selections(ts DESC);
+
 
 -- ------------------------------------------------------------------------------
 -- oauth_pending: state + PKCE durante flujo OAuth (se borra al canjear)
