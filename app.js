@@ -1277,7 +1277,7 @@ function populateModelSelector() {
     // v2.12: modelos 2026 de la cadena Fast (antes: modelos obsoletos que el
     // Worker rechazaba con model_not_allowed — la categoría Fast estaba rota).
     // v2.12k: Fast = Cohere como primario y único proveedor.
-    models = ["cohere/command-a-plus-05-2026", "cohere/north-mini-code"];
+    models = ["cohere/command-a-plus-05-2026"];
   } else {
     models = [getDefaultModelForCategory(state.currentCategory)];
   }
@@ -1371,7 +1371,7 @@ function renderWelcomeModelCards() {
   } else if (state.currentCategory === "fast") {
     // v2.12: modelos 2026 de la cadena Fast.
     // v2.12k: Fast = Cohere como primario y único proveedor.
-    models = ["cohere/command-a-plus-05-2026", "cohere/north-mini-code"];
+    models = ["cohere/command-a-plus-05-2026"];
   } else {
     models = [getDefaultModelForCategory(state.currentCategory)];
   }
