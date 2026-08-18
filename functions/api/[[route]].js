@@ -326,6 +326,8 @@ function isPublicPath(path) {
   if (/^\/api\/oauth\/[^/]+\/(start|callback)$/.test(path)) return true;
   // Auth: registro, login y logout NO requieren sesión previa.
   if (/^\/api\/auth\/(register|login|logout|me)$/.test(path)) return true;
+  // v2.12i: diagnose pasa el gate global pero el handler exige admin o PURGE_SECRET.
+  if (path === "/api/keys/diagnose") return true;
   return false;
 }
 
@@ -530,7 +532,7 @@ export async function onRequest(context) {
     if (path === "/api/keys/health" && method === "POST") return await handleKeysHealth(request, env, userEmail);
     if (path === "/api/keys/cooldown/reset" && method === "POST") return await handleKeysCooldownReset(request, env, userEmail);
     if (path === "/api/keys/services" && method === "GET") return await handleKeysServices(env, userEmail);
-    if (path === "/api/keys/diagnose" && method === "GET") return await handleKeysDiagnose(env, userEmail);
+    if (path === "/api/keys/diagnose" && method === "GET") return await handleKeysDiagnose(request, env, userEmail);
 
     // 6.5 — tool invoke + tools registry
     if (path === "/api/tool/invoke" && method === "POST") return await handleToolInvoke(request, env, userEmail);
@@ -2236,8 +2238,14 @@ async function handleKeysServices(env, userEmail) {
 // el Worker (solo NOMBRE/tipo/longitud, NUNCA el valor) y si cada servicio del
 // registro las detecta. Sirve para detectar claves mal nombradas (p. ej.
 // CEREBRAS_API_KEY sin el sufijo _1) o configuradas en el entorno equivocado.
-async function handleKeysDiagnose(env, userEmail) {
-  if (!isAdmin(userEmail, env)) return errorResponse("admin_required", 403);
+// Acceso: usuario admin, o header x-purge-secret con el PURGE_SECRET correcto
+// (para que el owner pueda ejecutarlo sin sesión admin).
+async function handleKeysDiagnose(request, env, userEmail) {
+  const viaSecret = (() => {
+    const provided = request.headers.get("x-purge-secret") || "";
+    return !!env.PURGE_SECRET && provided === env.PURGE_SECRET;
+  })();
+  if (!viaSecret && !isAdmin(userEmail, env)) return errorResponse("admin_required", 403);
   const keyNames = Object.keys(env).filter((k) => /API_KEY|API_TOKEN|_KEY$|_TOKEN$/i.test(k));
   const env_keys = keyNames.map((k) => ({
     name: k,
