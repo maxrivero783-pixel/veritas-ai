@@ -125,7 +125,12 @@ function allowedOrigin() {
 // ------------------------------------------------------------------------------
 async function getUserEmail(request, env) {
   const auth = request.headers.get("Authorization") || "";
-  const token = auth.startsWith("Bearer ") ? auth.slice(7).trim() : (request.headers.get("x-veritas-token") || "");
+  let token = auth.startsWith("Bearer ") ? auth.slice(7).trim() : (request.headers.get("x-veritas-token") || "");
+  // v2.12n: OAuth start se navega directo desde el browser (sin headers);
+  // aceptar el token de sesión también por query param auth_token.
+  if (!token) {
+    try { token = new URL(request.url).searchParams.get("auth_token") || ""; } catch { /* sin query */ }
+  }
   if (token && env.DB) {
     try {
       const row = await env.DB.prepare(
@@ -2483,6 +2488,9 @@ async function handleToolsRegistry() {
 // ==============================================================================
 async function handleOAuthStart(provider, request, env, userEmail) {
   if (provider !== "github") return errorResponse("unknown_provider", 400, { provider });
+  // v2.12n: sin sesión no se puede asociar la conexión — 401 claro en vez del
+  // NOT NULL de oauth_pending. El frontend pasa ?auth_token= al navegar.
+  if (!userEmail) return errorResponse("unauthorized", 401, { message: "Inicia sesión en la app y usá el botón Conectar de Ajustes → Conexiones." });
   const adapter = getOAuthAdapter(provider);
   if (!adapter) return errorResponse("unknown_provider", 400, { provider });
   const clientId = env.GITHUB_OAUTH_CLIENT_ID;
