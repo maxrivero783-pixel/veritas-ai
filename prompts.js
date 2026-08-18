@@ -1096,7 +1096,7 @@ export const MODEL_TO_ROLE = {
 export const UI_ROLE_TO_PROMPT_KEY = {
   agent:    "super_executor",       // default del agente (ultra se decide en el Worker por escalate)
   coder:    "laguna",
-  pensador: "super_executor",
+  pensador: "ultra_orchestrator",   // v2.12v: Pensador = Orquestador (Ultra)
   fast:     "fast",
 };
 
