@@ -262,6 +262,7 @@
             <button class="toggle-btn" id="skillsBtn" aria-pressed="false" aria-haspopup="menu" title="✨ Skills activas">✨<span class="skills-btn-count" id="skillsBtnCount" hidden></span></button>
             <div class="dropdown-menu skills-menu" id="skillsMenu" hidden role="menu" aria-label="Skills activas"></div>
           </div>
+          <button class="toggle-btn" id="inviteBtn" title="👥 Compartir sesión" data-i18n-title="shared.invite" hidden>👥</button>
           <button class="toggle-btn" id="deepThinkingBtn" aria-pressed="false" title="🧠 Pensador (Nemotron 3 Ultra primero)">🧠</button>
         </div>
 
@@ -291,9 +292,6 @@
 
         <!-- File input oculto para attach (multimedia: imagen, PDF, audio, video) -->
         <input type="file" id="fileInput" hidden multiple accept="image/*,.pdf,audio/*,video/*" />
-
-        <!-- Botón Invitar (sesión compartida, solo roles elegibles) -->
-        <button class="action-btn small" id="inviteBtn" data-i18n="shared.invite" hidden>Invitar</button>
 
         <!-- Context ticker (OSINT/sci-fi: tokens, tools, fallback) -->
         <div class="context-ticker" id="contextTicker">
@@ -607,7 +605,7 @@
           <p class="hint">Ajustes pensados para free tier: ventana deslizante, truncado defensivo de tool results, sticky routing por chat y caché de prompt cuando OpenRouter lo soporte.</p>
           <div class="settings-info-grid">
             <div class="settings-info-card"><strong>Agente</strong><span>OpenRouter free pool: Nemotron 3, Gemma 4, GPT-OSS, North Mini Code y Laguna S/XS.</span></div>
-            <div class="settings-info-card"><strong>Estratega/Fast</strong><span>Cerebras → Cohere como fallback del plan gratuito.</span></div>
+            <div class="settings-info-card"><strong>Fast</strong><span>Cerebras gpt-oss-120b → Cohere Command A+ / North Mini Code como cadena 2026.</span></div>
             <div class="settings-info-card"><strong>Tools largas</strong><span>Modo async/pending por defecto para proteger el límite de Cloudflare.</span></div>
           </div>
           <label class="toggle-row">
@@ -779,10 +777,11 @@
         <!-- Dashboard de modelos y APIs -->
         <section class="settings-section" id="settings-dashboard" hidden>
           <h3 data-i18n="settings.dashboard">Dashboard de modelos, APIs y resiliencia</h3>
-          <p class="hint">Vista rápida de proveedores: Puter GLM no consume claves del Worker; OpenRouter usa rotador, cooldown y fallback por rol; tools largas devuelven pending por defecto.</p>
+          <p class="hint">Vista rápida de proveedores: OpenRouter/Cerebras/Cohere usan el rotador de claves con cooldown y fallback por rol; tools largas devuelven pending por defecto.</p>
           <div class="settings-info-grid">
             <div class="settings-info-card"><strong>Cloudflare Free</strong><span>100K requests/día, 10ms CPU, 50 subrequests/request. Véritas prioriza browser-first y async jobs.</span></div>
-            <div class="settings-info-card"><strong>OpenRouter Free</strong><span>20 RPM y límite diario por key. Usa rotador y pool de modelos para resiliencia.</span></div>
+            <div class="settings-info-card"><strong>OpenRouter Free</strong><span>~20 RPM y límite diario por key. Usa rotador y pool de modelos para resiliencia.</span></div>
+            <div class="settings-info-card"><strong>Cerebras / Cohere</strong><span>Respaldos del plan gratuito (gpt-oss-120b, Command A+, North Mini Code) con rotación propia.</span></div>
             <div class="settings-info-card"><strong>R2</strong><span>10GB storage free. Guard rail activo para multimedia y repositorio.</span></div>
           </div>
           <div class="dashboard-grid" id="dashboardModels"></div>
@@ -798,14 +797,14 @@
         <section class="settings-section" id="settings-about" hidden>
           <h3 data-i18n="settings.about">Acerca de</h3>
           <img src="https://ik.imagekit.io/csdp6gbr6/17815803429593.png" alt="Véritas logo" class="about-logo" />
-          <p><strong>Véritas v2.4</strong> — Intelligence OS para IA multi-modelo.</p>
+          <p><strong>Véritas v2.12</strong> — Asistente OSINT con IA multi-modelo.</p>
           <p data-i18n="settings.about.desc">Centro de mando IA con Agente, Fast, 🧠 Pensador, Prompt Arquitecto, sandbox telemétrico y diseño free-tier-first.</p>
           <div class="settings-info-grid">
-            <div class="settings-info-card"><strong>Entidad viva</strong><span>Canvas con estados idle, listening, thinking, searching, tooling, coding, error y offline.</span></div>
-            <div class="settings-info-card"><strong>Sandbox Pro</strong><span>Snapshots, diff, tests browser-side, console/network capture y reparación con Coder.</span></div>
-            <div class="settings-info-card"><strong>Free-tier-first</strong><span>Async/pending para jobs largos y guard rails de R2.</span></div>
+            <div class="settings-info-card"><strong>Stack 2026</strong><span>OpenRouter (Nemotron 3) como primario; Cerebras gpt-oss-120b y Cohere Command A+ de respaldo, con rotador de claves y cooldowns.</span></div>
+            <div class="settings-info-card"><strong>Sandbox Pro</strong><span>Snapshots, diff, tests browser-side, console/network capture y vista previa de artefactos HTML.</span></div>
+            <div class="settings-info-card"><strong>Free-tier-first</strong><span>Jobs largos en modo async/pending, guard rails de R2 y caché de tools de solo lectura.</span></div>
           </div>
-          <p><a href="https://github.com/" target="_blank" rel="noopener">Repositorio en GitHub</a></p>
+          <p><a href="https://github.com/maxrivero783-pixel/veritas-ai" target="_blank" rel="noopener">Repositorio en GitHub</a></p>
         </section>
       </div>
     </div>
@@ -876,7 +875,7 @@
   </template>
 
   <!-- ============================================================ -->
-  <!-- PROMPT ARQUITECTO: Botón flotante arrastrable + panel chat (GLM) -->
+  <!-- PROMPT ARQUITECTO: Botón flotante arrastrable + panel chat (vía /api/llm/complete) -->
   <!-- ============================================================ -->
   <div id="promptCraftFab" class="prompt-craft-fab" title="Prompt Arquitecto — Genera prompts optimizados">
     <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>

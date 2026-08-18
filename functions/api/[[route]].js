@@ -1135,18 +1135,23 @@ async function handleChatsList(request, env, userEmail) {
   const category = url.searchParams.get("category");
   const search = url.searchParams.get("search");
 
-  let sql = `SELECT id, user_email, category, title, summary_json, is_shared, updated_at
-             FROM chats WHERE user_email = ?`;
-  const binds = [userEmail];
+  // v2.12: incluir también chats compartidos donde el usuario es participante
+  // (editor). Antes solo veía sus propios chats y perdía acceso al chat
+  // compartido tras el join (el token de invitación es de un solo uso).
+  let sql = `SELECT DISTINCT c.id, c.user_email, c.category, c.title, c.summary_json, c.is_shared, c.updated_at
+             FROM chats c
+             LEFT JOIN chat_participants cp ON cp.chat_id = c.id AND cp.user_email = ?
+             WHERE (c.user_email = ? OR cp.user_email = ?)`;
+  const binds = [userEmail, userEmail, userEmail];
   if (category && ["agent", "coder", "general"].includes(category)) {
-    sql += ` AND category = ?`;
+    sql += ` AND c.category = ?`;
     binds.push(category);
   }
   if (search) {
-    sql += ` AND title LIKE ?`;
+    sql += ` AND c.title LIKE ?`;
     binds.push(`%${search}%`);
   }
-  sql += ` ORDER BY updated_at DESC LIMIT 200`;
+  sql += ` ORDER BY c.updated_at DESC LIMIT 200`;
 
   const result = await env.DB.prepare(sql).bind(...binds).all();
   return json({ chats: result.results || [] });
@@ -2713,6 +2718,11 @@ async function handleShareJoin(chatId, url, env, userEmail) {
   const existingEditor = await env.DB.prepare(
     `SELECT user_email FROM chat_participants WHERE chat_id = ? AND role = 'editor' AND user_email IS NOT NULL`
   ).bind(chatId).first();
+  if (existingEditor && existingEditor.user_email === userEmail) {
+    // v2.12: re-join idempotente — el editor ya canjeó el token antes (los
+    // tokens son de un solo uso); devolver OK para que recupere el acceso.
+    return json({ ok: true, chat_id: chatId, role: "editor", already_joined: true });
+  }
   if (existingEditor && existingEditor.user_email !== userEmail) {
     return errorResponse("session_full", 409, { message: "Sesión compartida llena." });
   }
@@ -3021,9 +3031,15 @@ async function handleSuggestTitle(chatId, env, userEmail) {
 // 6.9 — OFFLINE BUNDLE
 // ==============================================================================
 async function handleOfflineBundle(env, userEmail) {
+  // v2.12: incluir chats compartidos donde el usuario es participante (editor),
+  // necesario para que el flujo de join pueda localizar el chat tras canjear el token.
   const chats = await env.DB.prepare(
-    `SELECT id, category, title, summary_json, is_shared, updated_at FROM chats WHERE user_email = ? ORDER BY updated_at DESC LIMIT 100`
-  ).bind(userEmail).all();
+    `SELECT DISTINCT c.id, c.user_email, c.category, c.title, c.summary_json, c.is_shared, c.updated_at
+     FROM chats c
+     LEFT JOIN chat_participants cp ON cp.chat_id = c.id AND cp.user_email = ?
+     WHERE (c.user_email = ? OR cp.user_email = ?)
+     ORDER BY c.updated_at DESC LIMIT 100`
+  ).bind(userEmail, userEmail, userEmail).all();
 
   const chatIds = (chats.results || []).map((c) => c.id);
   let messages = [];
