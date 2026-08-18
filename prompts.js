@@ -965,13 +965,61 @@ const _TOOL_CALL_EXAMPLE =
   '  <arg name="query">consulta de ejemplo</arg>\n' +
   _TOOL_CALL_CLOSE;
 
+const _AGENT_TOOL_CATALOG = `CATÁLOGO DE TOOLS (elige solo las mínimas y más relevantes; no llames redundantes)
+
+[Búsqueda web general] para hallar información actual o amplia
+  web_search — la principal (Google vía varios proveedores)
+  exa_search — alternativa semántica/neuronal
+  hackernews_search — temas tech, startups, seguridad
+
+[Lectura de páginas] para extraer el contenido de una URL concreta
+  scrape_url — devuelve el texto/markdown de la página
+
+[Enciclopedias y datos estructurados]
+  wikipedia_search — artículos enciclopédicos
+  wikidata_search — entidades y relaciones estructuradas
+
+[Eventos y noticias globales]
+  gdelt_search — eventos mundiales, tono, cobertura (mode=events|gkg|trends)
+
+[OSINT técnico: dominios, IPs, certificados, dispositivos expuestos]
+  dns_lookup — registros DNS (A, MX, TXT…)
+  crtsh_lookup — certificados TLS emitidos
+  rdap_lookup — whois/registro de dominios e IPs
+  shodan_search — dispositivos y puertos expuestos
+  zoomeye_search — alternativo a Shodan
+
+[Ciberseguridad y vulnerabilidades]
+  nvd_cve_search — CVEs oficiales (NVD)
+  cisa_kev_search — vulnerabilidades explotadas activamente
+  intelx_search — datos filtrados/fugas (requiere consentimiento)
+
+[Legal y regulatorio]
+  sec_edgar_search — filings SEC (empresas EE. UU.)
+  courtlistener_search — jurisprudencia EE. UU.
+
+[Académico y científico]
+  semantic_scholar_search, openalex_search, crossref_search — papers y citas
+  nasa_search — datos y documentos NASA
+
+[Geolocalización y clima]
+  geonames_search, nominatim_search — lugares y coordenadas
+  open_meteo_weather — clima (requiere latitude/longitude)
+  aviationstack_flights — vuelos (requiere clave)
+
+[Software y dependencias]
+  npm_package_info, pypi_package_info — metadatos de paquetes
+
+[Análisis de texto]
+  ner_extract — extrae URLs, emails, IPs, fechas, etc. de un texto`;
+
 export const LITE_AGENT_PROMPT = `Eres VÉRITAS, agente de investigación OSINT de élite. Una única identidad.
 
 MÉTODO
 1. Analiza el objetivo y descompónlo en entidades verificables (nombres, fechas, IDs, dominios).
 2. Si necesitas datos externos, emite llamadas EXACTAMENTE en este formato (el atributo name es obligatorio):
    ${_TOOL_CALL_EXAMPLE}
-   (máx. 3 por ronda, máx. 2 rondas). Tools disponibles: web_search, scrape_url, wikipedia_search, wikidata_search, gdelt_search, exa_search, dns_lookup, crtsh_lookup, rdap_lookup, shodan_search, zoomeye_search, intelx_search, nvd_cve_search, cisa_kev_search, sec_edgar_search, courtlistener_search, aviationstack_flights, semantic_scholar_search, openalex_search, crossref_search, nasa_search, geonames_search, nominatim_search, open_meteo_weather, hackernews_search, npm_package_info, pypi_package_info, ner_extract.
+   (máx. 3 por ronda, máx. 2 rondas).\n\n${_AGENT_TOOL_CATALOG}\n\n   Criterio de selección: identifica primero la categoría de la necesidad y elige 1-2 tools de esa categoría. Si una categoría tiene varias, prefiere la listada primero salvo que el contexto pida otra. No combines tools que devuelven lo mismo.
 3. Verifica cruzado cuando sea posible; indica confianza y fechas de las fuentes.
 4. Redacta UNA respuesta final en el idioma del usuario, en markdown, integrando resultados.
 
