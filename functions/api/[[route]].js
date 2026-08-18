@@ -410,19 +410,21 @@ async function handleExportData(request, env) {
   const userEmail = await getUserEmail(request, env);
   if (!userEmail) return errorResponse("unauthorized", 401);
   try {
+    // v2.12t: usar solo columnas reales (chats no tiene model/created_at;
+    // user_memories no tiene tags). Antes esto lanzaba "no such column" => 500.
     const chats = await env.DB.prepare(
-      "SELECT id, title, category, model, created_at, updated_at FROM chats WHERE user_email = ? ORDER BY updated_at DESC"
+      "SELECT id, title, category, is_shared, updated_at FROM chats WHERE user_email = ? ORDER BY updated_at DESC"
     ).bind(userEmail).all();
     const messages = await env.DB.prepare(
       "SELECT chat_id, role, model, provider, content, thinking_content, tools_used, tokens_in, tokens_out, created_at FROM messages WHERE author_email = ? ORDER BY created_at ASC"
     ).bind(userEmail).all();
     const memories = await env.DB.prepare(
-      "SELECT id, content, tags, importance, created_at FROM user_memories WHERE user_email = ? ORDER BY created_at DESC"
+      "SELECT id, category, content, importance, source_chat_id, created_at FROM user_memories WHERE user_email = ? ORDER BY created_at DESC"
     ).bind(userEmail).all();
     const payload = {
       exported_at: new Date().toISOString(),
       app: "Véritas AI",
-      version: "2.4",
+      version: env.APP_VERSION || "2.12",
       user: userEmail,
       chats: (chats.results || []).map((c) => ({ ...c, messages: (messages.results || []).filter((m) => m.chat_id === c.id) })),
       memories: memories.results || [],
@@ -1183,12 +1185,13 @@ async function handleChatsCreate(request, env, userEmail) {
     return errorResponse("invalid_category", 400, { allowed: ["agent", "coder", "general"] });
   }
   const chatId = id || crypto.randomUUID();
+  // v2.12t: asegurar el usuario ANTES que el chat (FK chats.user_email → users.email).
+  // Antes el chat se insertaba primero y fallaba con error de FK si el usuario
+  // aún no tenía fila (caso normal con Cloudflare Access / dev fallback).
+  await env.DB.prepare(`INSERT OR IGNORE INTO users (email) VALUES (?)`).bind(userEmail).run();
   await env.DB.prepare(
     `INSERT INTO chats (id, user_email, category, title, is_shared) VALUES (?, ?, ?, ?, 0)`
   ).bind(chatId, userEmail, category, String(title).slice(0, 200)).run();
-
-  // Asegurar que el usuario existe en D1 (INSERT OR IGNORE).
-  await env.DB.prepare(`INSERT OR IGNORE INTO users (email) VALUES (?)`).bind(userEmail).run();
 
   return json({
     ok: true,
@@ -2029,7 +2032,7 @@ async function logOpenRouterCall(env, userEmail, model, keyIndex, status, startT
 // ------------------------------------------------------------------------------
 // v2.8 — /api/llm/complete: completación stateless ligera (Prompt Arquitecto,
 // extracción de memorias, micro-tareas). Sin persistencia ni tools.
-// Prueba Cerebras → Cohere → OpenRouter con rotación de keys por proveedor.
+// Prueba Cohere → OpenRouter con rotación de keys por proveedor.
 // ------------------------------------------------------------------------------
 
 async function handleLLMComplete(request, env, userEmail) {
@@ -2492,7 +2495,7 @@ async function handleInlineCreateSkill(args, env, userEmail) {
     references: [],
     icon: icon || "\u2728",
     color: color || "#f59e0b",
-    allowedRoles: ["agent", "estratega", "pensador", "coder", "fast"],
+    allowedRoles: ["agent", "pensador", "coder", "fast"],
   };
 
   await env.DB.prepare(
@@ -3227,7 +3230,7 @@ async function handleOfflineBundle(env, userEmail) {
 // Retorna streaming SSE igual que /api/chat/openrouter.
 
 
-// v2.9.2: síntesis final multi-proveedor (OpenRouter -> Cerebras -> Cohere).
+// v2.12t: síntesis final multi-proveedor (OpenRouter -> Cohere).
 async function callFallbackLLM(env, prompt) {
   const chain = [
     ["openrouter", "openai/gpt-oss-20b:free", "https://openrouter.ai/api/v1/chat/completions"],
@@ -3409,7 +3412,12 @@ async function handleAgentOrchestrate(request, env, userEmail) {
   else if (model && (OPENROUTER_WHITELIST.has(model) || MODEL_PROVIDER[model])) { modelId = model; roleKey = MODEL_TO_ROLE[modelId] || "super_executor"; }
   else { modelId = ROLE_TO_MODEL.super_executor; roleKey = "super_executor"; }
 
-  let systemPrompt = LITE_AGENT_PROMPT;
+  // v2.12t: el modo Pensador/Ultra usa el prompt del ORQUESTADOR (no el del
+  // Ejecutor). ULTRA_ORCHESTRATOR_ADAPTATION ya trae su propio protocolo de
+  // tools; el catálogo ruteado y la búsqueda fresca se añaden después igual.
+  let systemPrompt = (roleKey === "ultra_orchestrator" && SYSTEM_PROMPTS.ultra_orchestrator)
+    ? SYSTEM_PROMPTS.ultra_orchestrator
+    : LITE_AGENT_PROMPT;
   if (roleKey === "ultra_orchestrator") systemPrompt += "\n\nModo ULTRA: orquesta investigacion profunda; descompone en sub-pasos y verifica cruzado.";
   if (memory_block) systemPrompt += "\n\n<memorias_cross_chat>\n" + memory_block + "\n</memorias_cross_chat>";
   if (skills_block) systemPrompt += "\n" + skills_block;
@@ -3881,7 +3889,7 @@ async function handleSkillCreate(request, env, userEmail) {
     references: body.references || [],
     icon: body.icon || "\u2728",
     color: body.color || "#f59e0b",
-    allowedRoles: body.allowedRoles || ["agent", "estratega", "pensador", "coder", "fast"],
+    allowedRoles: body.allowedRoles || ["agent", "pensador", "coder", "fast"],
   };
 
   await env.DB.prepare(

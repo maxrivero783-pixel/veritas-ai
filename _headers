@@ -25,8 +25,9 @@
   Permissions-Policy: geolocation=(), microphone=(), camera=(), payment=(), usb=()
   X-XSS-Protection: 1; mode=block
 
-  # CORS — permitimos cualquier origen (la app es auto-alojada por usuarios);
-  # la auth real la hace Cloudflare Access (cf-access-user-email header).
+  # CORS — este ACAO:* aplica SOLO a assets estáticos. El API (Worker) impone
+  # CORS same-origin y auth por sesión Bearer (ver allowedOrigin() en el router);
+  # cf-access-user-email es solo un fallback legacy, no la auth primaria.
   Access-Control-Allow-Origin: *
   Access-Control-Allow-Methods: GET, POST, PUT, PATCH, DELETE, OPTIONS
   Access-Control-Allow-Headers: Content-Type, cf-access-user-email, x-veritas-role
