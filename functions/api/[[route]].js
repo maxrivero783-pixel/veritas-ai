@@ -1806,6 +1806,9 @@ async function handleChatOpenRouter(request, env, userEmail) {
       }).catch(() => {});
       throw e;
     }
+    // v2.12: sin claves configuradas el error tipado debe llegar al handler
+    // global (503 key_pool_empty), no disfrazarse de upstream_error 502.
+    if (e instanceof KeyPoolEmptyError) throw e;
     return errorResponse("upstream_error", 502, { message: e.message });
   }
 
@@ -3274,7 +3277,7 @@ async function handleAgentOrchestrate(request, env, userEmail) {
     }
     if (!lastText) lastText = await callLLM();
   } catch (e) {
-    if (e instanceof AllKeysCooldownError) throw e;
+    if (e instanceof AllKeysCooldownError || e instanceof KeyPoolEmptyError) throw e;
     if (!lastText) return errorResponse("upstream_error", 502, { message: e.message });
   }
 
@@ -3424,7 +3427,7 @@ async function handlePerceive(request, env, userEmail) {
     upstreamResp = result.response;
     keyIndexUsed = result.keyIndex;
   } catch (e) {
-    if (e instanceof AllKeysCooldownError) throw e;
+    if (e instanceof AllKeysCooldownError || e instanceof KeyPoolEmptyError) throw e;
     return errorResponse("upstream_error", 502, { message: e.message, role: roleKey });
   }
 
