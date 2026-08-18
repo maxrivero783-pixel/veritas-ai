@@ -83,7 +83,7 @@
         <div class="onboarding-slide" data-step="0">
           <div class="onboarding-icon">🎭</div>
           <h3>Roles de IA</h3>
-          <p>Agente y Fast con Pensador opcional: cadenas de fallback OpenRouter → Cerebras → Cohere.</p>
+          <p>Agente y Fast con Pensador opcional: Agente vía OpenRouter, Fast vía Cohere (Command A+).</p>
         </div>
         <div class="onboarding-slide" data-step="1">
           <div class="onboarding-icon">🧰</div>
@@ -605,7 +605,7 @@
           <p class="hint">Ajustes pensados para free tier: ventana deslizante, truncado defensivo de tool results, sticky routing por chat y caché de prompt cuando OpenRouter lo soporte.</p>
           <div class="settings-info-grid">
             <div class="settings-info-card"><strong>Agente</strong><span>OpenRouter free pool: Nemotron 3, Gemma 4, GPT-OSS, North Mini Code y Laguna S/XS.</span></div>
-            <div class="settings-info-card"><strong>Fast</strong><span>Cerebras gpt-oss-120b → Cohere Command A+ / North Mini Code como cadena 2026.</span></div>
+            <div class="settings-info-card"><strong>Fast</strong><span>Cohere Command A+ como primario y único proveedor (respaldo: North Mini Code).</span></div>
             <div class="settings-info-card"><strong>Tools largas</strong><span>Modo async/pending por defecto para proteger el límite de Cloudflare.</span></div>
           </div>
           <label class="toggle-row">
@@ -777,11 +777,11 @@
         <!-- Dashboard de modelos y APIs -->
         <section class="settings-section" id="settings-dashboard" hidden>
           <h3 data-i18n="settings.dashboard">Dashboard de modelos, APIs y resiliencia</h3>
-          <p class="hint">Vista rápida de proveedores: OpenRouter/Cerebras/Cohere usan el rotador de claves con cooldown y fallback por rol; tools largas devuelven pending por defecto.</p>
+          <p class="hint">Vista rápida de proveedores: OpenRouter/Cohere usan el rotador de claves con cooldown y fallback por rol; tools largas devuelven pending por defecto.</p>
           <div class="settings-info-grid">
             <div class="settings-info-card"><strong>Cloudflare Free</strong><span>100K requests/día, 10ms CPU, 50 subrequests/request. Véritas prioriza browser-first y async jobs.</span></div>
             <div class="settings-info-card"><strong>OpenRouter Free</strong><span>~20 RPM y límite diario por key. Usa rotador y pool de modelos para resiliencia.</span></div>
-            <div class="settings-info-card"><strong>Cerebras / Cohere</strong><span>Respaldos del plan gratuito (gpt-oss-120b, Command A+, North Mini Code) con rotación propia.</span></div>
+            <div class="settings-info-card"><strong>Cohere</strong><span>Proveedor del rol Fast (Command A+ primario, North Mini Code de respaldo) con rotación propia.</span></div>
             <div class="settings-info-card"><strong>R2</strong><span>10GB storage free. Guard rail activo para multimedia y repositorio.</span></div>
           </div>
           <div class="dashboard-grid" id="dashboardModels"></div>
@@ -800,7 +800,7 @@
           <p><strong>Véritas v2.12</strong> — Asistente OSINT con IA multi-modelo.</p>
           <p data-i18n="settings.about.desc">Centro de mando IA con Agente, Fast, 🧠 Pensador, Prompt Arquitecto, sandbox telemétrico y diseño free-tier-first.</p>
           <div class="settings-info-grid">
-            <div class="settings-info-card"><strong>Stack 2026</strong><span>OpenRouter (Nemotron 3) como primario; Cerebras gpt-oss-120b y Cohere Command A+ de respaldo, con rotador de claves y cooldowns.</span></div>
+            <div class="settings-info-card"><strong>Stack 2026</strong><span>OpenRouter (Nemotron 3) para el Agente; Cohere Command A+ para Fast, con rotador de claves y cooldowns.</span></div>
             <div class="settings-info-card"><strong>Sandbox Pro</strong><span>Snapshots, diff, tests browser-side, console/network capture y vista previa de artefactos HTML.</span></div>
             <div class="settings-info-card"><strong>Free-tier-first</strong><span>Jobs largos en modo async/pending, guard rails de R2 y caché de tools de solo lectura.</span></div>
           </div>

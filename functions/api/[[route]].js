@@ -1624,7 +1624,7 @@ async function handleDbMessage(request, env, userEmail) {
   if (!chatExists) return errorResponse("chat_not_found", 404, { chat_id });
 
   const msgId = message_id || crypto.randomUUID();
-  // v2.12: persistir el provider REAL (openrouter, cerebras, cohere…).
+  // v2.12k: persistir el provider REAL (openrouter, cohere…).
   // En DBs antiguas el CHECK solo admite puter/openrouter: si el INSERT falla
   // por constraint, reintentar con NULL para no perder el mensaje.
   // v2.12g: INSERT OR IGNORE hace la inserción IDEMPOTENTE por message_id: el
@@ -1764,7 +1764,7 @@ async function handleChatOpenRouter(request, env, userEmail) {
   const upstreamProvider = getProvider(model);
 
   // ID del modelo que se envía upstream (sin prefijo de proveedor).
-  let modelId = model.replace(/^cerebras\//, "").replace(/^cohere\//, "");
+  let modelId = model.replace(/^cohere\//, ""); // v2.12k: sin Cerebras
 
   // Sticky routing (Sección 1.4.1) — solo OpenRouter lo entiende.
   if (upstreamProvider === "openrouter" && settings.stickyRouting !== false && chat_id) {
@@ -1810,10 +1810,7 @@ async function handleChatOpenRouter(request, env, userEmail) {
     const result = await withKeyRotation(env, upstreamProvider, async (key) => {
       const accept = stream ? "text/event-stream" : "application/json";
       let url, headers;
-      if (upstreamProvider === "cerebras") {
-        url = "https://api.cerebras.ai/v1/chat/completions";
-        headers = { "Authorization": `Bearer ${key}`, "Content-Type": "application/json", "Accept": accept };
-      } else if (upstreamProvider === "cohere") {
+      if (upstreamProvider === "cohere") {
         url = "https://api.cohere.com/v2/chat";
         headers = { "Authorization": `Bearer ${key}`, "Content-Type": "application/json", "Accept": accept };
       } else {
@@ -1987,7 +1984,6 @@ async function handleLLMComplete(request, env, userEmail) {
   if (!prompt || typeof prompt !== "string") return errorResponse("missing_prompt", 400);
   const maxTokens = Math.min(4000, Math.max(64, Number(body.max_tokens) || 1200));
   const chain = [
-    ["cerebras", "gpt-oss-120b", "https://api.cerebras.ai/v1/chat/completions"],
     ["cohere", "command-a-plus-05-2026", "https://api.cohere.com/v2/chat"],
     ["openrouter", "openai/gpt-oss-20b:free", "https://openrouter.ai/api/v1/chat/completions"],
   ];
@@ -2041,7 +2037,7 @@ async function handleStatus(env, userEmail) {
 
   // v2.11: sin Puter. Estado de pools LLM (OpenRouter/Cerebras/Cohere) + servicios.
   const llmPools = {};
-  for (const svc of ["openrouter", "cerebras", "cohere"]) {
+  for (const svc of ["openrouter", "cohere"]) {
     if (services.includes(svc)) {
       try { llmPools[svc] = await getPoolStatus(env, svc); } catch { llmPools[svc] = { error: "pool_status_failed" }; }
     }
@@ -3177,7 +3173,6 @@ async function handleOfflineBundle(env, userEmail) {
 async function callFallbackLLM(env, prompt) {
   const chain = [
     ["openrouter", "openai/gpt-oss-20b:free", "https://openrouter.ai/api/v1/chat/completions"],
-    ["cerebras", "gpt-oss-120b", "https://api.cerebras.ai/v1/chat/completions"],
     ["cohere", "command-a-plus-05-2026", "https://api.cohere.com/v2/chat"],
   ];
   for (const [prov, mid, url] of chain) {
@@ -3384,16 +3379,13 @@ async function handleAgentOrchestrate(request, env, userEmail) {
 
   // Proveedor real del modelo elegido (no siempre OpenRouter).
   const orchProvider = getProvider(modelId);
-  const orchModelSent = modelId.replace(/^cerebras\//, "").replace(/^cohere\//, "");
+  const orchModelSent = modelId.replace(/^cohere\//, ""); // v2.12k: sin Cerebras
 
   // Fetch compartido (ambos protocolos). extraBody inyecta `tools` en nativo.
   const doLLMRequest = async (extraBody = {}) => {
     const result = await withKeyRotation(env, orchProvider, async (key) => {
       let url, headers;
-      if (orchProvider === "cerebras") {
-        url = "https://api.cerebras.ai/v1/chat/completions";
-        headers = { "Authorization": `Bearer ${key}`, "Content-Type": "application/json" };
-      } else if (orchProvider === "cohere") {
+      if (orchProvider === "cohere") {
         url = "https://api.cohere.com/v2/chat";
         headers = { "Authorization": `Bearer ${key}`, "Content-Type": "application/json" };
       } else {

@@ -36,7 +36,7 @@ Véritas no es solo un chat. Es un **centro de mando**: combina modelos IA, memo
 - Streaming de respuestas con cancelación mediante `AbortController`.
 - Parser de razonamiento interno y parser XML de tools (`<tool_call>` / `<tool_result>`).
 - Loop de tools con límite defensivo y persistencia de cada llamada.
-- Fallback automático entre modelos según rol (OpenRouter → Cerebras → Cohere).
+- Fallback automático entre modelos según rol (Agente vía OpenRouter; Fast vía Cohere).
 - Contadores de tokens, tokens cacheados, truncado configurable y resumen de contexto.
 - Auto-título de chats y renombrado manual.
 - Búsqueda/filtrado de chats por categoría.
@@ -45,7 +45,7 @@ Véritas no es solo un chat. Es un **centro de mando**: combina modelos IA, memo
 
 - Botón flotante pequeño, arrastrable y siempre accesible.
 - Panel compacto para generar prompts optimizados por rol.
-- Usa `/api/llm/complete` (cadena Cerebras → Cohere → OpenRouter) para convertir una intención breve en un prompt listo para copiar.
+- Usa `/api/llm/complete` (cadena Cohere → OpenRouter) para convertir una intención breve en un prompt listo para copiar.
 - Permite seleccionar rol objetivo, generar, copiar, limpiar y volver a iterar.
 - Pensado para sacar máximo provecho de Agente y Fast, y los modos internos Pensador/Code-first.
 
@@ -194,9 +194,9 @@ Los modelos se centralizan en `prompts.js` y `lib/fallbackChains.js`.
 | Percepción visual | `nvidia/nemotron-nano-12b-v2-vl:free` | OpenRouter |
 | Percepción audio/video | `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free` | OpenRouter |
 | Code-first dentro de Agente | `cohere/north-mini-code:free` → `poolside/laguna-s-2.1:free` → `poolside/laguna-xs-2.1:free` | OpenRouter |
-| Fast | `cerebras/gpt-oss-120b` → `cohere/command-a-plus-05-2026` → `cohere/north-mini-code` | Cerebras → Cohere |
+| Fast | `cohere/command-a-plus-05-2026` → `cohere/north-mini-code` | Cohere |
 
-> Nota (v2.9): roles activos **Agente** y **Fast** (Pensador como toggle). Sin Puter/GLM/Estratega: el Agente orquesta tools en el server (máx. 2 rondas) con prompt lite y síntesis final garantizada vía OpenRouter → Cerebras → Cohere.
+> Nota (v2.12k): roles activos **Agente** y **Fast** (Pensador como toggle). Agente orquesta tools en el server (máx. 2 rondas) vía OpenRouter; Fast usa Cohere (Command A+ primario) con system prompt corto orientado a búsqueda.
 
 Fallbacks adicionales permitidos:
 
@@ -358,14 +358,13 @@ wrangler pages dev .
 ## 🔑 Secrets soportados
 
 Todos los pools usan sufijo `_1`, `_2`, `_N`. Desde v2.12i el rotador también
-acepta la primera clave **sin sufijo** (p. ej. `CEREBRAS_API_KEY` además de
-`CEREBRAS_API_KEY_1`), para evitar que una clave configurada sin el `_1` quede
+acepta la primera clave **sin sufijo** (p. ej. `COHERE_API_KEY` además de
+`COHERE_API_KEY_1`), para evitar que una clave configurada sin el `_1` quede
 sin detectar. Para verificar qué claves ve realmente el Worker (nombres, nunca
 valores): `GET /api/keys/diagnose` (solo admin).
 
 ```txt
 OPENROUTER_API_KEY_N
-CEREBRAS_API_KEY_N        ← LLM rol Fast (gpt-oss-120b)
 COHERE_API_KEY_N          ← LLM rol Fast (Command A+ / North Mini Code)
 JINA_API_KEY_N
 TAVILY_API_KEY_N
@@ -492,7 +491,7 @@ Todos los correos se firman con: **- Remitido por Véritas, la IA especializada 
 > **Nota histórica de fusión (v2.4):** este proyecto integró la selección de modelos y las
 > herramientas públicas del artefacto de rescate (`V-ritas-main.zip`) con los
 > fixes de consistencia de la sesión. Evolución posterior: Dropbox eliminado en v2.8;
-> Puter/GLM/Estratega eliminados en v2.9+; stack 2026 (Cerebras/Cohere) en v2.11–v2.12.
+> Puter/GLM/Estratega eliminados en v2.9+; Cerebras eliminado en v2.12k (Fast = Cohere).
 > Lema: "Información es ventaja. La ventaja es tuya."
 
 ---

@@ -898,7 +898,7 @@ function toggleButton(name) {
 }
 
 function providerLabel(p) {
-  return p === "cerebras" ? "Cerebras" : p === "cohere" ? "Cohere" : "OpenRouter";
+  return p === "cohere" ? "Cohere" : "OpenRouter";
 }
 
 function resolveUiRoleForCurrentSelection(modelId = state.currentModel) {
@@ -911,11 +911,11 @@ function resolveUiRoleForCurrentSelection(modelId = state.currentModel) {
 function getDefaultModelForCategory(category) {
   return {
     agent: "nvidia/nemotron-3-super-120b-a12b:free",
-    estratega: "cerebras/gpt-oss-120b",
-    fast: "cerebras/gpt-oss-120b",
+    estratega: "cohere/command-a-plus-05-2026",
+    fast: "cohere/command-a-plus-05-2026",
     // Compatibilidad con categorías antiguas persistidas.
     coder: "cohere/north-mini-code",
-    general: "cerebras/gpt-oss-120b",
+    general: "cohere/command-a-plus-05-2026",
   }[category] || "nvidia/nemotron-3-super-120b-a12b:free";
 }
 
@@ -1274,7 +1274,8 @@ function populateModelSelector() {
   } else if (state.currentCategory === "fast") {
     // v2.12: modelos 2026 de la cadena Fast (antes: modelos obsoletos que el
     // Worker rechazaba con model_not_allowed — la categoría Fast estaba rota).
-    models = ["cerebras/gpt-oss-120b", "cohere/command-a-plus-05-2026", "cohere/north-mini-code"];
+    // v2.12k: Fast = Cohere como primario y único proveedor.
+    models = ["cohere/command-a-plus-05-2026", "cohere/north-mini-code"];
   } else {
     models = [getDefaultModelForCategory(state.currentCategory)];
   }
@@ -1367,7 +1368,8 @@ function renderWelcomeModelCards() {
     ];
   } else if (state.currentCategory === "fast") {
     // v2.12: modelos 2026 de la cadena Fast.
-    models = ["cerebras/gpt-oss-120b", "cohere/command-a-plus-05-2026", "cohere/north-mini-code"];
+    // v2.12k: Fast = Cohere como primario y único proveedor.
+    models = ["cohere/command-a-plus-05-2026", "cohere/north-mini-code"];
   } else {
     models = [getDefaultModelForCategory(state.currentCategory)];
   }
@@ -1477,18 +1479,6 @@ function getModelDisplayInfo(modelId) {
       shortName: "Laguna XS 2.1",
       roleName: t("roles.coder"),
       icon: "🔧",
-      provider,
-    },
-    "cerebras/llama3.1-8b": {
-      shortName: "Cerebras 8B",
-      roleName: "⚡ Explorador Veloz",
-      icon: "⚡",
-      provider,
-    },
-    "cerebras/llama-3.3-70b": {
-      shortName: "Cerebras 70B",
-      roleName: "🏃 Corredor de Fondo",
-      icon: "🏃",
       provider,
     },
     "cohere/command-r-plus": {
@@ -4662,6 +4652,9 @@ function getRoleActiveSkills() {
 function updateSkillsBtnState() {
   const btn = $("#skillsBtn");
   if (!btn) return;
+  // v2.12k: Fast no usa skills — botón oculto en ese rol.
+  if (state.currentRole === "fast") { btn.hidden = true; return; }
+  btn.hidden = false;
   const active = getRoleActiveSkills();
   const countEl = $("#skillsBtnCount");
   if (countEl) {
@@ -4749,6 +4742,8 @@ function openSkillsSettings() {
 // Construye el bloque de prompt cuando hay una skill seleccionada (forzada).
 async function buildForcedSkillBlock() {
   if (!state.pendingSkillId) return "";
+  // v2.12k: el rol Fast no usa skills (prompt corto, solo búsqueda).
+  if (state.currentRole === "fast") return "";
   const skill = getSkillById(state.pendingSkillId);
   if (!skill) return "";
   await loadSkillMdContent(skill);

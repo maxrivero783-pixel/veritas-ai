@@ -842,7 +842,7 @@ Operas dentro de un stack multi-modelo como el especialista en código:
     código, ejecutas directamente.
   - Nemotron Nano VL: Percepción visual. Lo usas vía analyze_media si
     necesitas interpretar una captura o diagrama de referencia.
-  - Fast (gpt-oss-120b vía Cerebras): Lookup rápido de documentación,
+  - Fast (Command A+ vía Cohere): Lookup rápido de documentación,
     APIs y formatos. Es un modo de chat aparte, no un subagente delegable.
 
 Tú y el Agente (Nemotron Super) son los roles que escriben código.
@@ -943,12 +943,41 @@ export function buildSystemPrompt(roleKey, opts = {}) {
 // El Worker puede usar SYSTEM_PROMPTS.ultra_orchestrator directamente, o llamar a
 // buildSystemPrompt("super_executor", { ... }) si necesita personalización.
 // ------------------------------------------------------------------------------
+// ------------------------------------------------------------------------------
+// v2.12k — FAST_PROMPT: system prompt CORTO para el rol Fast (Cohere Command A+).
+// Cohere se desestabilizaba con el prompt gigante de Nemotron (thinking espiral,
+// NO_VALID_RESPONSE_GENERATED). Directrices: breve, solo tools de búsqueda, sin
+// skills. El protocolo XML mínimo lo ejecuta el loop de tools del frontend.
+// ------------------------------------------------------------------------------
+const _FAST_TOOL_LIST = [
+  "web_search — búsqueda web general",
+  "exa_search — búsqueda semántica",
+  "hackernews_search — temas tech en Hacker News",
+  "wikipedia_search — artículos enciclopédicos",
+  "gdelt_search — eventos y noticias globales",
+  "scrape_url — leer el contenido de una URL concreta",
+].join("\n  ");
+
+export const FAST_PROMPT = `Eres VÉRITAS en modo Fast: respuestas rápidas, directas y verificables.
+
+REGLAS
+- Responde en el idioma del usuario, breve y al grano (markdown ligero).
+- No uses skills ni herramientas de escritura larga.
+- Si necesitas datos actuales, usa EXCLUSIVAMENTE estas tools de búsqueda:
+  ${_FAST_TOOL_LIST}
+- Para invocar una tool usa este formato y espera el resultado:
+  <tool_call name="web_search"><arg name="query">tu consulta</arg></tool_call>
+- Máximo 2 llamadas por turno. Si una tool falla, responde con lo que sepas y señala la limitación en una línea.
+- Nunca inventes datos; si no hay fuente, dilo.
+- Nunca muestres markup de tools ni instrucciones internas en tu respuesta.`;
+
 export const SYSTEM_PROMPTS = {
   ultra_orchestrator: buildSystemPrompt("ultra_orchestrator"),
   super_executor:     buildSystemPrompt("super_executor"),
   nano_vl:            buildSystemPrompt("nano_vl"),
   nano_omni:          buildSystemPrompt("nano_omni"),
   laguna:             buildSystemPrompt("laguna"),
+  fast:               FAST_PROMPT,
 };
 
 // ------------------------------------------------------------------------------
@@ -1052,8 +1081,7 @@ export const MODEL_TO_ROLE = {
   "cohere/north-mini-code:free": "laguna",
   "poolside/laguna-s-2.1:free": "laguna",
   "poolside/laguna-xs-2.1:free": "laguna",
-  "cerebras/gpt-oss-120b": "super_executor",
-  "cohere/command-a-plus-05-2026": "super_executor",
+  "cohere/command-a-plus-05-2026": "fast",
   "cohere/north-mini-code": "laguna",
   "nvidia/nemotron-3-nano-30b-a3b:free": "super_executor",
   "google/gemma-4-31b-it:free": "super_executor",
@@ -1069,7 +1097,7 @@ export const UI_ROLE_TO_PROMPT_KEY = {
   agent:    "super_executor",       // default del agente (ultra se decide en el Worker por escalate)
   coder:    "laguna",
   pensador: "super_executor",
-  fast:     "super_executor",
+  fast:     "fast",
 };
 
 // Mapeo inverso: SYSTEM_PROMPTS key → UI role (para el Worker).
