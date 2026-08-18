@@ -2246,7 +2246,8 @@ async function handleKeysDiagnose(request, env, userEmail) {
     return !!env.PURGE_SECRET && provided === env.PURGE_SECRET;
   })();
   if (!viaSecret && !isAdmin(userEmail, env)) return errorResponse("admin_required", 403);
-  const keyNames = Object.keys(env).filter((k) => /API_KEY|API_TOKEN|_KEY$|_TOKEN$/i.test(k));
+  // v2.12m: incluir también OAuth (CLIENT_ID/SECRET) y cifrado, no solo pools.
+  const keyNames = Object.keys(env).filter((k) => /API_KEY|API_TOKEN|_KEY$|_TOKEN$|CLIENT_ID|CLIENT_SECRET|OAUTH|ENCRYPTION|PURGE/i.test(k));
   const env_keys = keyNames.map((k) => ({
     name: k,
     type: typeof env[k],
