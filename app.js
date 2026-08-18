@@ -117,7 +117,7 @@ function setUserEmail() {
 // INICIALIZACIÓN
 // ==============================================================================
 async function init() {
-  console.log("[Véritas] Inicializando v2.4...");
+  console.log("[Véritas] Inicializando v2.12s...");
 
   // Idioma inicial.
   const initialLang = state.settings.ui_lang || detectInitialLang();
