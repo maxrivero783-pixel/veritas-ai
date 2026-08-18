@@ -3312,6 +3312,32 @@ function buildRoutedCatalog(routed) {
   return lines.join("\n");
 }
 
+// ------------------------------------------------------------------------------
+// v2.12p — CONEXIONES EXTERNAS: informa al Agente qué integraciones OAuth están
+// activas (p. ej. GitHub). Antes el modelo no sabía que la conexión existía y
+// respondía "no tengo conexión" aunque estuviera guardada.
+// ------------------------------------------------------------------------------
+async function buildConnectionsBlock(env, userEmail) {
+  if (!env.DB || !userEmail) return "";
+  try {
+    const res = await env.DB.prepare(
+      `SELECT provider, account_metadata FROM external_connections
+        WHERE user_email = ? AND invalid = 0`
+    ).bind(userEmail).all();
+    const conns = res.results || [];
+    if (conns.length === 0) {
+      return "\n\nCONEXIONES EXTERNAS: sin conexiones activas. Las tools que requieren OAuth (p. ej. github_*) deben indicar al usuario que conecte su cuenta en Ajustes → Conexiones.";
+    }
+    const lines = conns.map((c) => {
+      let who = "";
+      try { const m = JSON.parse(c.account_metadata || "{}"); who = m.login || m.name || ""; } catch { /* sin metadata */ }
+      return `- ${c.provider}: conectado${who ? " como " + who : ""}. Las tools ${c.provider}_* están disponibles y funcionan sin pedir credenciales.`;
+    });
+    return "\n\nCONEXIONES EXTERNAS ACTIVAS (OAuth):\n" + lines.join("\n") +
+      "\nSi el usuario pregunta por sus repositorios, archivos o cuenta, invocá las tools correspondientes (no digas que no tenés conexión).";
+  } catch { return ""; }
+}
+
 async function handleAgentOrchestrate(request, env, userEmail) {
   // v2.12: Tool Intelligence — routing por categoría + function-calling NATIVO
   // (JSON Schema) cuando el proveedor lo soporta, con fallback al protocolo XML.
@@ -3338,6 +3364,8 @@ async function handleAgentOrchestrate(request, env, userEmail) {
   if (roleKey === "ultra_orchestrator") systemPrompt += "\n\nModo ULTRA: orquesta investigacion profunda; descompone en sub-pasos y verifica cruzado.";
   if (memory_block) systemPrompt += "\n\n<memorias_cross_chat>\n" + memory_block + "\n</memorias_cross_chat>";
   if (skills_block) systemPrompt += "\n" + skills_block;
+  // v2.12p: conciencia de conexiones externas (GitHub, etc.).
+  systemPrompt += await buildConnectionsBlock(env, userEmail);
 
   // v2.10 TOOL-FIRST: búsqueda fresca obligatoria antes del primer LLM,
   // + fecha actual inyectada (evita respuestas con corte de conocimiento).
