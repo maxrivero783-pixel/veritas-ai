@@ -521,15 +521,15 @@ function setupEventListeners() {
       $$(".nav-tab").forEach((t) => t.classList.remove("active"));
       tab.classList.add("active");
       state.currentCategory = tab.dataset.category;
-      // P1-extra: actualizar modelo por defecto de la categoría y re-renderizar
-      // welcome si no hay chat abierto (para refrescar las tarjetas).
-      if (!state.currentChat) {
-        state.currentModel = getDefaultModelForCategory(state.currentCategory);
-        state.currentRole = resolveUiRoleForCurrentSelection(state.currentModel);
-        populateModelSelector();
-        renderEmptyState();
-        updateDeepThinkingVisibility();
-      }
+      // v2.12s: SIEMPRE actualizar modelo/rol al cambiar de pestaña. Antes solo
+      // lo hacía sin chat abierto ⇒ con un chat abierto, la pestaña Fast quedaba
+      // muerta (seguía corriendo el modelo/rol anterior, p. ej. Agente).
+      state.currentModel = getDefaultModelForCategory(state.currentCategory);
+      state.currentRole = resolveUiRoleForCurrentSelection(state.currentModel);
+      populateModelSelector();
+      updateDeepThinkingVisibility();
+      updateInviteButtonVisibility();
+      if (!state.currentChat) renderEmptyState();
       loadChatList();
     });
   });

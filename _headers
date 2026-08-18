@@ -38,16 +38,18 @@
   Cache-Control: no-store, must-revalidate
 
 # ------------------------------------------------------------------------------
-# Assets estáticos con hash en el nombre (cacheo largo)
-# Pages ya añade inmutabilidad a archivos con hash; este bloque refuerza.
+# Assets estáticos. v2.12s: esta app NO usa filenames con hash, así que
+# max-age=31536000 + immutable dejaba a los usuarios con JS/CSS viejos para
+# siempre (no recibían updates del frontend). Con no-cache el browser revalida
+# en cada request (304 si no cambió) y siempre está actualizado.
 # ------------------------------------------------------------------------------
 /*.js
   Content-Type: application/javascript; charset=utf-8
-  Cache-Control: public, max-age=31536000, immutable
+  Cache-Control: no-cache
 
 /*.css
   Content-Type: text/css; charset=utf-8
-  Cache-Control: public, max-age=31536000, immutable
+  Cache-Control: no-cache
 
 # ------------------------------------------------------------------------------
 # Páginas HTML — nunca cacheadas (SPA que carga config en runtime)
