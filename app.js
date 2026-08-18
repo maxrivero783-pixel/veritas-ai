@@ -117,7 +117,7 @@ function setUserEmail() {
 // INICIALIZACIÓN
 // ==============================================================================
 async function init() {
-  console.log("[Véritas] Inicializando v2.4...");
+  console.log("[Véritas] Inicializando v2.12s...");
 
   // Idioma inicial.
   const initialLang = state.settings.ui_lang || detectInitialLang();
@@ -5640,8 +5640,11 @@ function initContextTicker() {
     if (tCtx) tCtx.textContent = `ctx ${(used/1000).toFixed(1)}k/${Math.round(avail/1000)}k`;
     if (tTools) tTools.textContent = `${computeToolsCount()} tools disponibles`;
     if (tFallback) {
-      const last = state.lastProvider || "Estratega";
-      tFallback.textContent = `Fallback: ${last}`;
+      // v2.12s: el default "Estratega" era obsoleto; mostrar el proveedor real
+      // de la cadena del modelo actual (OpenRouter p/ Agente, Cohere p/ Fast).
+      const prov = state.lastProvider || getProvider(state.currentModel || "nvidia/nemotron-3-super-120b-a12b:free");
+      const label = prov === "openrouter" ? "OpenRouter" : prov === "cohere" ? "Cohere" : prov;
+      tFallback.textContent = `Fallback: ${label}`;
     }
   };
   update();
