@@ -1605,6 +1605,11 @@ async function handleDbMessage(request, env, userEmail) {
   const { chat_id, role, content, model, provider, thinking_content, tools_used, author_email, tokens_in, tokens_out, cached_tokens, message_id } = await request.json().catch(() => ({}));
   if (!chat_id || !role || !content) return errorResponse("missing_fields", 400);
 
+  // v2.12d: validar que el chat existe antes del INSERT. Sin esto, un chat_id
+  // inexistente violaba la FK messages.chat_id y devolvía un 500 genérico.
+  const chatExists = await env.DB.prepare(`SELECT id FROM chats WHERE id = ?`).bind(chat_id).first();
+  if (!chatExists) return errorResponse("chat_not_found", 404, { chat_id });
+
   const msgId = message_id || crypto.randomUUID();
   // v2.8.1: el CHECK de la tabla solo admite puter/openrouter; cualquier otro
   // proveedor (cerebras, cohere…) se guarda como NULL para no perder el mensaje.
@@ -2670,16 +2675,15 @@ async function handleShareCreate(chatId, request, env, userEmail) {
   }
 
   const shareToken = crypto.randomUUID();
+  // v2.12d: la invitación pendiente se guarda en la column share_token de la
+  // fila del OWNER. Antes se insertaba una fila con user_email=NULL, pero el
+  // schema exige user_email NOT NULL (PK + FK) ⇒ el INSERT fallaba y la
+  // generación de enlaces de invitación estaba ROTA en producción.
+  // Crear un share nuevo reemplaza el token previo (el enlace viejo caduca).
   await env.DB.prepare(
     `INSERT OR REPLACE INTO chat_participants (chat_id, user_email, role, share_token, joined_at)
-     VALUES (?, ?, 'owner', NULL, CURRENT_TIMESTAMP)`
-  ).bind(chatId, userEmail).run();
-
-  // Crear invitación pendiente (una fila con share_token y user_email=NULL).
-  await env.DB.prepare(
-    `INSERT INTO chat_participants (chat_id, user_email, role, share_token, joined_at)
-     VALUES (?, NULL, 'editor', ?, CURRENT_TIMESTAMP)`
-  ).bind(chatId, shareToken).run();
+     VALUES (?, ?, 'owner', ?, CURRENT_TIMESTAMP)`
+  ).bind(chatId, userEmail, shareToken).run();
 
   await env.DB.prepare(
     `UPDATE chats SET is_shared = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
@@ -2697,10 +2701,12 @@ async function handleShareRevoke(chatId, env, userEmail) {
   ).bind(chatId).first();
   if (!owner || owner.user_email !== userEmail) return errorResponse("not_owner", 403);
 
-  // Eliminar invitaciones pendientes (share_token no canjeado aún).
+  // v2.12d: revocar = limpiar el token pendiente de la fila del owner
+  // (antes borraba filas con user_email=NULL que nunca podían existir).
   await env.DB.prepare(
-    `DELETE FROM chat_participants WHERE chat_id = ? AND share_token IS NOT NULL AND user_email IS NULL`
-  ).bind(chatId).run();
+    `UPDATE chat_participants SET share_token = NULL
+      WHERE chat_id = ? AND user_email = ? AND role = 'owner'`
+  ).bind(chatId, userEmail).run();
   return json({ ok: true });
 }
 
@@ -2708,28 +2714,36 @@ async function handleShareJoin(chatId, url, env, userEmail) {
   const token = url.searchParams.get("token");
   if (!token) return errorResponse("missing_token", 400);
 
-  // Validar token.
+  // v2.12d: quien YA es editor recupera acceso aunque el token esté canjeado
+  // (el token es de un solo uso, pero su acceso persiste en chat_participants).
+  const existingEditor = await env.DB.prepare(
+    `SELECT user_email FROM chat_participants WHERE chat_id = ? AND role = 'editor'`
+  ).bind(chatId).first();
+  if (existingEditor && existingEditor.user_email === userEmail) {
+    return json({ ok: true, chat_id: chatId, role: "editor", already_joined: true });
+  }
+
+  // v2.12d: el token pendiente vive en la fila del OWNER (share_token), no en
+  // una fila con user_email=NULL (imposible: el schema exige NOT NULL).
   const pending = await env.DB.prepare(
-    `SELECT user_email FROM chat_participants WHERE chat_id = ? AND share_token = ? AND user_email IS NULL`
+    `SELECT user_email FROM chat_participants WHERE chat_id = ? AND share_token = ? AND role = 'owner'`
   ).bind(chatId, token).first();
   if (!pending) return errorResponse("invalid_or_used_token", 404);
 
-  // Verificar que no haya ya un editor.
-  const existingEditor = await env.DB.prepare(
-    `SELECT user_email FROM chat_participants WHERE chat_id = ? AND role = 'editor' AND user_email IS NOT NULL`
-  ).bind(chatId).first();
-  if (existingEditor && existingEditor.user_email === userEmail) {
-    // v2.12: re-join idempotente — el editor ya canjeó el token antes (los
-    // tokens son de un solo uso); devolver OK para que recupere el acceso.
-    return json({ ok: true, chat_id: chatId, role: "editor", already_joined: true });
+  // El propio owner abriendo su enlace: ya está dentro.
+  if (pending.user_email === userEmail) {
+    return json({ ok: true, chat_id: chatId, role: "owner", already_joined: true });
   }
-  if (existingEditor && existingEditor.user_email !== userEmail) {
+
+  // Ya hay otro editor ⇒ sesión llena.
+  if (existingEditor) {
     return errorResponse("session_full", 409, { message: "Sesión compartida llena." });
   }
 
-  // Canjear: crear fila con user_email y eliminar la pendiente.
+  // Canjear: limpiar el token de la fila del owner y crear la fila del editor.
   await env.DB.prepare(
-    `DELETE FROM chat_participants WHERE chat_id = ? AND share_token = ?`
+    `UPDATE chat_participants SET share_token = NULL
+      WHERE chat_id = ? AND share_token = ? AND role = 'owner'`
   ).bind(chatId, token).run();
   await env.DB.prepare(
     `INSERT INTO chat_participants (chat_id, user_email, role, joined_at) VALUES (?, ?, 'editor', CURRENT_TIMESTAMP)`
