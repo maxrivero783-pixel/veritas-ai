@@ -1,5 +1,5 @@
 // ==============================================================================
-// Véritas v2.3 — /functions/api/[[route]].js
+// Véritas v2.12 — /functions/api/[[route]].js
 // ==============================================================================
 // Router principal del Worker. Cloudflare Pages detecta este archivo como
 // Worker automáticamente (Pages Functions con catch-all route /api/*).
@@ -1611,17 +1611,26 @@ async function handleDbMessage(request, env, userEmail) {
   if (!chatExists) return errorResponse("chat_not_found", 404, { chat_id });
 
   const msgId = message_id || crypto.randomUUID();
-  // v2.8.1: el CHECK de la tabla solo admite puter/openrouter; cualquier otro
-  // proveedor (cerebras, cohere…) se guarda como NULL para no perder el mensaje.
-  const provSafe = provider === "puter" || provider === "openrouter" ? provider : null;
-  await env.DB.prepare(
+  // v2.12: persistir el provider REAL (openrouter, cerebras, cohere…).
+  // En DBs antiguas el CHECK solo admite puter/openrouter: si el INSERT falla
+  // por constraint, reintentar con NULL para no perder el mensaje.
+  const insertMessage = (prov) => env.DB.prepare(
     `INSERT INTO messages (id, chat_id, role, model, provider, content, thinking_content, tools_used, author_email, tokens_in, tokens_out, cached_tokens)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(
-    msgId, chat_id, role, model || null, provSafe, content,
+    msgId, chat_id, role, model || null, prov, content,
     thinking_content || null, tools_used ? JSON.stringify(tools_used) : null,
     author_email || userEmail, tokens_in || null, tokens_out || null, cached_tokens || 0
   ).run();
+  try {
+    await insertMessage(provider || null);
+  } catch (e) {
+    if (provider && /constraint|check/i.test(String(e.message || e))) {
+      await insertMessage(null); // DB sin migrar: sacrificar trazabilidad, no el mensaje.
+    } else {
+      throw e;
+    }
+  }
 
   // Touch chat updated_at.
   await env.DB.prepare(
@@ -2645,8 +2654,10 @@ function matchServiceByHost(hostname) {
 // 6.6 — SANDBOX TEMPLATES
 // ==============================================================================
 async function handleSandboxTemplates() {
-  // El catálogo real está en /lib/sandboxTemplates.js (ETAPA 5). Aquí devolvemos
-  // la lista de nombres para que el frontend pueda hidratar el dropdown.
+  // El catálogo real está en /lib/sandboxTemplates.js (ETAPA 5).
+  // v2.12: lista completa de 14 (antes solo 7; el menú del Sandbox ya
+  // ofrecía las demás y el modelo podía pedirlas sin que el endpoint las
+  // anunciara).
   return json({
     templates: [
       { name: "maplibre-basic", description: "Mapa MapLibre GL centrado en coordenadas dadas, tiles OSM raster." },
@@ -2656,6 +2667,13 @@ async function handleSandboxTemplates() {
       { name: "d3-chart", description: "Gráfico D3.js force-directed graph." },
       { name: "tailwind-page", description: "Página completa con Tailwind CDN y secciones hero/features/footer." },
       { name: "plotly-3d", description: "Superficie 3D Plotly.js." },
+      { name: "osint-report", description: "Informe OSINT estructurado: resumen, hallazgos, fuentes y confianza." },
+      { name: "timeline-investigation", description: "Línea de tiempo vertical de eventos de una investigación." },
+      { name: "entity-graph", description: "Grafo de entidades y relaciones con leyenda." },
+      { name: "csv-dashboard", description: "Dashboard que carga y grafica un CSV (tabla + charts)." },
+      { name: "interactive-quiz", description: "Quiz interactivo con puntuación y feedback." },
+      { name: "markdown-doc-viewer", description: "Visor de documentos Markdown renderizado." },
+      { name: "kanban-local", description: "Tablero Kanban local con columnas y tarjetas arrastrables." },
     ],
   });
 }

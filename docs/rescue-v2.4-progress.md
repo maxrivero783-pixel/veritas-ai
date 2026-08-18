@@ -1,5 +1,11 @@
 # Recuperación Véritas v2.4
 
+> ⚠️ **DOCUMENTO HISTÓRICO (v2.4).** Registra el estado de la reconstrucción en
+> ese momento. Los puntos marcados "Pendiente" ya fueron implementados o
+> eliminados en versiones posteriores (v2.8–v2.12): Puter/GLM/Estratega fueron
+> removidos, R2 es opcional con degradación elegante, y el pipeline de Agente
+> orquesta tools server-side. Consultar el README para el estado actual.
+
 Este documento registra la reconstrucción iniciada a partir del artefacto de rescate compartido por el usuario. El patch pegado en chat contiene transformaciones de Markdown, por lo que no se aplica directamente.
 
 ## Base actual

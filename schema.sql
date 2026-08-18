@@ -1,5 +1,5 @@
 -- ==============================================================================
--- Véritas v2.3 — Esquema D1 (SQLite sobre Cloudflare D1)
+-- Véritas v2.12 — Esquema D1 (SQLite sobre Cloudflare D1)
 -- ==============================================================================
 -- Este script es idempotente: todas las sentencias usan IF NOT EXISTS.
 -- Aplicar con:
@@ -67,7 +67,10 @@ CREATE TABLE IF NOT EXISTS messages (
   chat_id TEXT NOT NULL,
   role TEXT NOT NULL CHECK(role IN ('user','assistant','tool','system')),
   model TEXT,                                         -- model id usado en este turno (trazabilidad)
-  provider TEXT CHECK(provider IN ('puter','openrouter')),
+  -- v2.12: ampliar providers reales (Cerebras/Cohere). El Worker además hace
+  -- fallback a NULL si una DB antigua solo admite puter/openrouter, así el
+  -- mensaje nunca se pierde. NULL permitido (CHECK no aplica a NULL).
+  provider TEXT CHECK(provider IN ('puter','openrouter','cerebras','cohere')),
   content TEXT,                                       -- contenido textual visible
   thinking_content TEXT,                              -- razonamiento embebido (<razonamiento_interno>) o delta.reasoning
   tools_used TEXT,                                    -- JSON array de tool names invocadas en este mensaje

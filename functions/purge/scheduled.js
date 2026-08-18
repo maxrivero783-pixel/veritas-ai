@@ -1,5 +1,5 @@
 // ==============================================================================
-// Véritas v2.3 — /functions/purge/scheduled.js
+// Véritas v2.12 — /functions/purge/scheduled.js
 // ==============================================================================
 // Cloudflare Workers Cron Trigger para limpieza periódica.
 // Se ejecuta cada 6 horas (configurado en wrangler.toml como [triggers] cron).
