@@ -37,7 +37,8 @@
   <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js" defer></script>
 
   <!-- Módulos de la app (ES modules, type=module) -->
-  <script type="module" src="/app.js"></script>
+  <!-- v2.13g: query de versión = cache busting; actualizar en cada release. -->
+  <script type="module" src="/app.js?v=213g"></script>
 </head>
 <body class="offline-mode-false" data-state="idle">
 
@@ -186,6 +187,9 @@
 
       <!-- v2.8.7: identidad del usuario bajo los botones de acción -->
       <div class="sidebar-user" id="sidebarUserChip" hidden>👤 <span id="sidebarUserName"></span></div>
+
+      <!-- v2.13g: versión visible — permite comprobar que se carga la build actual -->
+      <div class="sidebar-version" id="sidebarVersion" title="Versión de la build (recarga la página si no coincide con la última anunciada)">v2.13g</div>
 
       <!-- Indicador online/offline -->
       <div class="connection-status" id="connectionStatus">
@@ -797,7 +801,7 @@
         <section class="settings-section" id="settings-about" hidden>
           <h3 data-i18n="settings.about">Acerca de</h3>
           <img src="https://ik.imagekit.io/csdp6gbr6/17815803429593.png" alt="Véritas logo" class="about-logo" />
-          <p><strong>Véritas v2.13</strong> — Asistente OSINT con IA multi-modelo.</p>
+          <p><strong>Véritas v2.13g</strong> — Asistente OSINT con IA multi-modelo.</p>
           <p data-i18n="settings.about.desc">Centro de mando IA con Agente, Fast, 🧠 Pensador, Prompt Arquitecto, sandbox telemétrico y diseño free-tier-first.</p>
           <div class="settings-info-grid">
             <div class="settings-info-card"><strong>Stack 2026</strong><span>OpenRouter (Nemotron 3) para el Agente; Cohere Command A+ para Fast, con rotador de claves y cooldowns.</span></div>
