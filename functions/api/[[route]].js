@@ -1839,7 +1839,17 @@ async function handleChatOpenRouter(request, env, userEmail) {
           "Accept": accept,
         };
       }
-      return await fetch(url, { method: "POST", headers, body: JSON.stringify(upstreamBody) });
+      let resp = await fetch(url, { method: "POST", headers, body: JSON.stringify(upstreamBody) });
+      // v2.12z: Fast intenta thinking-off; si Cohere lo rechaza (p.ej. 422
+      // INVALID_TOOL_GENERATION en Command A+), reintenta SIN el parámetro
+      // thinking (thinking on) para no romper el modo Fast.
+      if (resp.status >= 400 && resp.status < 500 && upstreamProvider === "cohere" && upstreamBody.thinking) {
+        const retryBody = { ...upstreamBody };
+        delete retryBody.thinking;
+        const r2 = await fetch(url, { method: "POST", headers, body: JSON.stringify(retryBody) });
+        if (r2.status < 400) resp = r2;
+      }
+      return resp;
     });
     upstreamResp = result.response;
     keyIndexUsed = result.keyIndex;
