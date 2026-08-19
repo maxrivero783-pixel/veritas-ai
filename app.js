@@ -916,7 +916,8 @@ function resolveUiRoleForCurrentSelection(modelId = state.currentModel) {
 function getDefaultModelForCategory(category) {
   return {
     agent: "nvidia/nemotron-3-super-120b-a12b:free",
-    fast: "cohere/command-a-plus-05-2026",
+    // v2.13b: primario Fast = Command R+ (no-thinking ⇒ thinking off real).
+    fast: "cohere/command-r-plus-08-2024",
     // Compatibilidad con categorías antiguas persistidas.
     coder: "cohere/north-mini-code",
     general: "cohere/command-a-plus-05-2026",
