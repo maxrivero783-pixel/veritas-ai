@@ -1810,6 +1810,9 @@ async function handleChatOpenRouter(request, env, userEmail) {
   if (upstreamProvider !== "openrouter") {
     delete upstreamBody.session_id;
     delete upstreamBody.reasoning;
+    // v2.13: el flag `stream` del body debe coincidir con el modo resuelto —
+    // Cohere responde SSE si el body trae stream:true aunque Accept sea JSON.
+    upstreamBody.stream = stream;
     // v2.12y→v2.13: Fast parametrizado (ROLE_PARAMS.fast.thinking="off"). En
     // Cohere el razonamiento se desactiva con thinking:{type:"disabled"}
     // (reasoning_effort NO es un campo válido en /v2/chat). Respuestas inmediatas.
