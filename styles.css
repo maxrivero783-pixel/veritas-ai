@@ -3113,3 +3113,9 @@ mark.search-current { background: rgba(80, 200, 120, .6); }
 .sidebar-user { margin: 10px 12px 0; padding: 6px 10px; border: 1px solid var(--border-subtle); border-radius: 8px; color: var(--text-muted); font-size: 12px; font-family: var(--font-mono, monospace); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* v2.13g: versión de la build visible en el sidebar. */
 .sidebar-version { margin: 6px 12px 0; text-align: center; color: var(--text-muted); opacity: 0.55; font-size: 10px; font-family: var(--font-mono, monospace); letter-spacing: 0.5px; cursor: help; }
+/* v2.13h: panel de diagnóstico 🩺 */
+.diag-panel { position: fixed; right: 16px; bottom: 16px; width: min(420px, 90vw); max-height: 60vh; z-index: 10000; display: flex; flex-direction: column; background: var(--bg-elev, #101828); border: 1px solid var(--border-subtle, #2a3441); border-radius: 10px; box-shadow: 0 8px 30px rgba(0,0,0,.45); }
+.diag-panel[hidden] { display: none; }
+.diag-header { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--border-subtle, #2a3441); font-size: 12px; }
+.diag-content { margin: 0; padding: 10px 12px; overflow: auto; font-size: 11px; line-height: 1.5; font-family: var(--font-mono, monospace); white-space: pre-wrap; word-break: break-all; color: var(--text-primary, #e5e7eb); }
+.diag-actions { padding: 8px 12px; border-top: 1px solid var(--border-subtle, #2a3441); text-align: right; }
