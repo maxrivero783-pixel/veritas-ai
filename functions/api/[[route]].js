@@ -2064,7 +2064,9 @@ async function logOpenRouterCall(env, userEmail, model, keyIndex, status, startT
 // ------------------------------------------------------------------------------
 // v2.8 — /api/llm/complete: completación stateless ligera (Prompt Arquitecto,
 // extracción de memorias, micro-tareas). Sin persistencia ni tools.
-// Prueba Cohere → OpenRouter con rotación de keys por proveedor.
+// v2.13d: Prompt Arquitecto deja Cohere-primario y pasa a OpenRouter con un
+// modelo gratuito y ligero (Nemotron 3 Nano 30B); gpt-oss-20b:free de segundo
+// y Command A+ solo como último recurso.
 // ------------------------------------------------------------------------------
 
 async function handleLLMComplete(request, env, userEmail) {
@@ -2072,14 +2074,24 @@ async function handleLLMComplete(request, env, userEmail) {
   const prompt = body.prompt;
   if (!prompt || typeof prompt !== "string") return errorResponse("missing_prompt", 400);
   const maxTokens = Math.min(4000, Math.max(64, Number(body.max_tokens) || 2000)); // v2.12k: 2000 default (thinking models)
+  // v2.13d: OpenRouter ligero+free primero (antes: Cohere Command A+ primero,
+  // que encima se parseaba mal: su formato message.content nunca se leía).
   const chain = [
-    ["cohere", "command-a-plus-05-2026", "https://api.cohere.com/v2/chat"],
+    ["openrouter", "nvidia/nemotron-3-nano-30b-a3b:free", "https://openrouter.ai/api/v1/chat/completions"],
     ["openrouter", "openai/gpt-oss-20b:free", "https://openrouter.ai/api/v1/chat/completions"],
+    ["cohere", "command-a-plus-05-2026", "https://api.cohere.com/v2/chat"],
   ];
   const messages = [
     { role: "system", content: body.system || "Eres un asistente útil. Responde solo lo pedido, sin formato extra." },
     { role: "user", content: prompt },
   ];
+  // v2.13d: normaliza OpenAI ({choices[0].message}) y Cohere v2 ({message}).
+  const parseLLMText = (data) => {
+    const msg = (data && data.message) || (data && data.choices && data.choices[0] && data.choices[0].message) || {};
+    if (typeof msg.content === "string") return msg.content;
+    if (Array.isArray(msg.content)) return msg.content.map((b) => b.text || "").join("");
+    return "";
+  };
   let lastErr = null;
   for (const [provider, modelId, url] of chain) {
     try {
@@ -2097,7 +2109,7 @@ async function handleLLMComplete(request, env, userEmail) {
       const resp = result.response;
       if (resp.ok) {
         const data = await resp.json().catch(() => null);
-        const text = data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content || "";
+        const text = parseLLMText(data);
         if (text) return json({ text, model: modelId, provider });
       }
       lastErr = `HTTP ${resp.status}`;
