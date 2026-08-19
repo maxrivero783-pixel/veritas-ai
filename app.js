@@ -173,6 +173,7 @@ async function init() {
   // Setup event listeners.
   setupEventListeners();
   updateDeepThinkingVisibility();
+  updateSearchToggleVisibility(); // v2.13c: visibilidad del toggle 🔍 por rol
 
   // Setup settings UI.
   setupSettingsUI();
@@ -518,9 +519,13 @@ function setupEventListeners() {
   // Submenús de chat.
   $$(".nav-tab").forEach((tab) => {
     tab.addEventListener("click", () => {
+      const prevCategory = state.currentCategory;
       $$(".nav-tab").forEach((t) => t.classList.remove("active"));
       tab.classList.add("active");
       state.currentCategory = tab.dataset.category;
+      // v2.13c: cambiar de rol limpia la vista — el chat abierto pertenece a la
+      // pestaña anterior; se cierra (sin borrarlo) y se muestra el estado vacío.
+      if (state.currentCategory !== prevCategory) closeChatView();
       // v2.12s: SIEMPRE actualizar modelo/rol al cambiar de pestaña. Antes solo
       // lo hacía sin chat abierto ⇒ con un chat abierto, la pestaña Fast quedaba
       // muerta (seguía corriendo el modelo/rol anterior, p. ej. Agente).
@@ -529,6 +534,7 @@ function setupEventListeners() {
       populateModelSelector();
       updateDeepThinkingVisibility();
       updateInviteButtonVisibility();
+      updateSearchToggleVisibility();
       if (!state.currentChat) renderEmptyState();
       loadChatList();
     });
@@ -669,6 +675,7 @@ function setupEventListeners() {
     updateInviteButtonVisibility();
     updateDeepThinkingVisibility(); // v2.13: visibilidad por rol (Fast sin 🧠)
     updateSkillsBtnState();         // v2.13: Fast sin botón ✨ Skills
+    updateSearchToggleVisibility(); // v2.13c: Agente sin toggle 🔍
   });
 
   // Attach file.
@@ -1145,7 +1152,8 @@ async function openChat(chat) {
   populateModelSelector();
   updateTokenCounter();
   updateInviteButtonVisibility();
-  updateDeepThinkingVisibility(); // v2.13: visibilidad por rol (Fast sin 🧠)
+  updateDeepThinkingVisibility();      // v2.13: visibilidad por rol (Fast sin 🧠)
+  updateSearchToggleVisibility();      // v2.13c: Agente sin toggle 🔍
 
   // Si es shared, iniciar SharedSessionManager.
   if (chat.is_shared) {
@@ -4959,9 +4967,47 @@ function renderAttachmentChips() {
   });
 }
 
+// v2.13c — Visibilidad del toggle 🔍 Búsqueda + Scraping por rol.
+// El Agente SIEMPRE busca información actualizada con sus tools (política
+// SEARCH-FIRST de su system prompt: "DEBES buscar ANTES de responder"), así
+// que el toggle no aplica y se oculta. Fast (Cohere) sí lo conserva, junto
+// con 📎 adjuntar (visible en ambos roles).
+function updateSearchToggleVisibility() {
+  const btn = $("#searchToggle");
+  if (!btn) return;
+  btn.hidden = state.currentRole === "agent";
+}
+
+// v2.13c — Cierra la vista del chat actual SIN borrarlo (al cambiar de rol).
+// Detiene la generación en curso y el polling de sesión compartida, limpia el
+// estado de la conversación y deja el área lista para la nueva pestaña.
+function closeChatView() {
+  if (state.abortController) {
+    try { state.abortController.abort(); } catch { /* noop */ }
+    state.abortController = null;
+  }
+  if (state.sharedSession) {
+    try { state.sharedSession.stop(); } catch { /* noop */ }
+    state.sharedSession = null;
+    hide($("#sharedBanner"));
+  }
+  state.currentChat = null;
+  state.messages = [];
+  state.chatSummary = null;
+  state.chatCachedTotal = 0;
+  state.pendingSkillId = null;
+  state.pendingAttachments = [];
+  try { renderAttachmentChips(); } catch { /* noop */ }
+  try { hideStreamingIndicator(); } catch { /* noop */ }
+  try { localStorage.removeItem("veritas:lastChat"); } catch { /* privado */ }
+  $$(".chat-item").forEach((it) => it.classList.remove("active"));
+  renderEmptyState();
+  renderChatHeader();
+  updateTokenCounter();
+}
+
 // Muestra/oculta el botón de Pensamiento Profundo según la categoría.
-function updateDeepThinkingVisibility() {
-  const btn = $("#deepThinkingBtn");
+function updateDeepThinkingVisibility() {  const btn = $("#deepThinkingBtn");
   const codeBtn = $("#codeFirstToggle");
   // v2.13: el rol Fast no tiene pensamiento profundo (thinking OFF por parámetro).
   const visible = state.currentCategory === "agent" && state.currentRole !== "fast";
