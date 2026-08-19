@@ -25,7 +25,7 @@
 // ==============================================================================
 
 import { t, applyI18n, detectInitialLang, getCurrentLang, formatDate } from "./lib/i18n.js";
-import { FALLBACK_CHAINS, MODEL_PROVIDER, getNextFallback, isFallbackExhausted, getProvider, getContextLimit, getRoleForModel } from "./lib/fallbackChains.js";
+import { FALLBACK_CHAINS, MODEL_PROVIDER, ROLE_PARAMS, getNextFallback, isFallbackExhausted, getProvider, getContextLimit, getRoleForModel, getRoleParams } from "./lib/fallbackChains.js";
 import { TOOL_REGISTRY, isAllowed, parseToolCallXML, buildToolResultXML, escapeXML, fetchAndHydrate, getTool } from "./lib/toolRegistry.js";
 import * as ContextManager from "./lib/contextManager.js";
 import { runAgentLoop } from "./lib/agentOrchestrator.js";
@@ -667,6 +667,8 @@ function setupEventListeners() {
     state.currentRole = resolveUiRoleForCurrentSelection(state.currentModel);
     updateTokenCounter();
     updateInviteButtonVisibility();
+    updateDeepThinkingVisibility(); // v2.13: visibilidad por rol (Fast sin 🧠)
+    updateSkillsBtnState();         // v2.13: Fast sin botón ✨ Skills
   });
 
   // Attach file.
@@ -1142,6 +1144,7 @@ async function openChat(chat) {
   populateModelSelector();
   updateTokenCounter();
   updateInviteButtonVisibility();
+  updateDeepThinkingVisibility(); // v2.13: visibilidad por rol (Fast sin 🧠)
 
   // Si es shared, iniciar SharedSessionManager.
   if (chat.is_shared) {
@@ -1277,7 +1280,8 @@ function populateModelSelector() {
     // v2.12: modelos 2026 de la cadena Fast (antes: modelos obsoletos que el
     // Worker rechazaba con model_not_allowed — la categoría Fast estaba rota).
     // v2.12k: Fast = Cohere como primario y único proveedor.
-    models = ["cohere/command-a-plus-05-2026"];
+    // v2.13: cadena completa (primario + 2 fallbacks Cohere).
+    models = FALLBACK_CHAINS.fast.slice();
   } else {
     models = [getDefaultModelForCategory(state.currentCategory)];
   }
@@ -2687,12 +2691,14 @@ async function callOpenRouter(messages) {
   let tokens_in = 0, tokens_out = 0, cached_tokens = 0;
 
   try {
-    // v2.12y: el rol Fast va SIN streaming y SIN thinking (respuestas inmediatas).
-    const isFast = state.currentRole === "fast";
+    // v2.13: parametrización por rol (ROLE_PARAMS). Fast = SIN streaming y SIN
+    // thinking (respuestas inmediatas); el Worker lo refuerza server-side.
+    const roleParams = getRoleParams(state.currentRole);
+    const isFast = state.currentRole === "fast" || roleParams.thinking === "off";
     const body = {
       model: state.currentModel,
       messages,
-      stream: !isFast,
+      stream: roleParams.stream !== false,
       chat_id: state.currentChat.id,
       is_shared: state.currentChat.is_shared,
       settings: state.settings.tokens,
@@ -3680,8 +3686,10 @@ function updateInviteButtonVisibility() {
   // v2.12: alineado con el servidor (handleShareCreate permite categorías
   // agent y general) y con el toggle Ajustes → Sesión compartida. Antes usaba
   // roles obsoletos (estratega/pensador) e ignoraba el toggle.
+  // v2.13: el rol Fast no soporta sesión compartida — botón oculto.
   const shareable = state.settings.shared.enable !== false
     && !!state.currentChat
+    && state.currentRole !== "fast"
     && ["agent", "general"].includes(state.currentChat.category);
   btn.hidden = !shareable;
 }
@@ -4954,7 +4962,8 @@ function renderAttachmentChips() {
 function updateDeepThinkingVisibility() {
   const btn = $("#deepThinkingBtn");
   const codeBtn = $("#codeFirstToggle");
-  const visible = state.currentCategory === "agent";
+  // v2.13: el rol Fast no tiene pensamiento profundo (thinking OFF por parámetro).
+  const visible = state.currentCategory === "agent" && state.currentRole !== "fast";
   if (btn) btn.hidden = !visible;
   if (codeBtn) codeBtn.hidden = !visible;
   if (!visible) {

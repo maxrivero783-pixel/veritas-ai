@@ -1,4 +1,4 @@
-# VÉRITAS v2.12 — Asistente OSINT con IA multi-modelo
+# VÉRITAS v2.13 — Asistente OSINT con IA multi-modelo
 
 > **Una interfaz auto-alojada para investigar, verificar, crear, programar y operar con IA usando Cloudflare, múltiples modelos, skills dinámicas y 61 herramientas integradas.**
 
@@ -197,6 +197,8 @@ Los modelos se centralizan en `prompts.js` y `lib/fallbackChains.js`.
 | Fast | `cohere/command-a-plus-05-2026` → `cohere/north-mini-code` | Cohere |
 
 > Nota (v2.12k): roles activos **Agente** y **Fast** (Pensador como toggle). Agente orquesta tools en el server (máx. 2 rondas) vía OpenRouter; Fast usa Cohere (Command A+ primario) con system prompt corto orientado a búsqueda.
+>
+> Nota (v2.13): Fast queda **parametrizado** vía `ROLE_PARAMS` (`lib/fallbackChains.js`): `thinking:"off"` y `stream:false`, reforzados server-side por el Worker. Cadena Fast con 2 fallbacks Cohere adicionales: `command-r-plus-08-2024` y `command-r-08-2024`. En el rol Fast se ocultan los botones ✨ Skills, 🧠 Pensador y 👥 Compartir sesión. Los botones de adjuntar (📎) y búsqueda (🔍) muestran emoji en vez de texto.
 
 Fallbacks adicionales permitidos:
 

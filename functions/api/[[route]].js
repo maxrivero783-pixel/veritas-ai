@@ -73,7 +73,7 @@ import { buildToolsArray } from "../../lib/toolSchema.js";
 import { describeTool, getToolCategory, TOOL_CATEGORIES } from "../../lib/toolMeta.js";
 
 import { SYSTEM_PROMPTS, ROLE_TO_MODEL, MODEL_TO_ROLE, UI_ROLE_TO_PROMPT_KEY, LITE_AGENT_PROMPT } from "../../prompts.js";
-import { getProvider, MODEL_PROVIDER } from "../../lib/fallbackChains.js";
+import { getProvider, MODEL_PROVIDER, ROLE_PARAMS } from "../../lib/fallbackChains.js";
 
 // ------------------------------------------------------------------------------
 // Whitelist de modelos OpenRouter permitidos (Sección 3.1 del BUILD).
@@ -1714,7 +1714,8 @@ async function handleDbMessage(request, env, userEmail) {
 // ==============================================================================
 async function handleChatOpenRouter(request, env, userEmail) {
   const clientBody = await request.json().catch(() => ({}));
-  const { model, messages, stream = true, tools, reasoning, chat_id, is_shared, settings = {} } = clientBody;
+  const { model, messages, tools, reasoning, chat_id, is_shared, settings = {} } = clientBody;
+  let stream = clientBody.stream !== false;
 
   if (!model || (!OPENROUTER_WHITELIST.has(model) && !MODEL_PROVIDER[model])) {
     return errorResponse("model_not_allowed", 400, { model, whitelist: [...OPENROUTER_WHITELIST] });
@@ -1727,6 +1728,19 @@ async function handleChatOpenRouter(request, env, userEmail) {
   const rl = await rateLimit(env, userEmail, "chat", 30, 60);
   if (rl.limited) {
     return errorResponse("rate_limited", 429, { message: "Límite temporal de peticiones alcanzado. Intenta en unos segundos.", retry_after_sec: rl.retryAfterSec });
+  }
+
+  // --- v2.13: parametrización por rol (fuente de verdad: lib/fallbackChains.js) ---
+  // El rol Fast (proveedor Cohere) se ejecuta con thinking OFF y SIN streaming,
+  // independientemente de lo que pida el cliente. `fast_mode` se conserva como
+  // flag heredado de clientes v2.12y/z.
+  const uiRole = request.headers.get("x-veritas-role") || null;
+  const upstreamProvider = getProvider(model);
+  const roleParams = ROLE_PARAMS[uiRole] || null;
+  const fastCohere = upstreamProvider === "cohere"
+    && (clientBody.fast_mode === true || (roleParams && roleParams.thinking === "off"));
+  if (fastCohere) {
+    stream = roleParams ? roleParams.stream === true : false; // v2.13: Fast = sin streaming
   }
 
   // Caché opt-in (cache:true, solo no-stream y no compartido): 24h.
@@ -1749,7 +1763,6 @@ async function handleChatOpenRouter(request, env, userEmail) {
   // carecer de BASE_SYSTEM_PROMPT si el admin no lo bundleó en el frontend).
   // El Worker tiene la versión completa (con BASE_SYSTEM_PROMPT real), así que
   // reemplazamos el system message para garantizar identidad completa.
-  const uiRole = request.headers.get("x-veritas-role") || null;
   const promptKey = uiRole ? UI_ROLE_TO_PROMPT_KEY[uiRole] : null;
   // v2.12v: el modelId es más específico que el rol UI. El toggle Pensador envía
   // el modelo Ultra con x-veritas-role:agent; con el orden anterior el promptKey
@@ -1771,9 +1784,7 @@ async function handleChatOpenRouter(request, env, userEmail) {
     }
   }
 
-  // v2.8/v2.11 — proveedor según el modelo (OpenRouter primario; Cerebras/Cohere directo).
-  const upstreamProvider = getProvider(model);
-
+  // v2.8/v2.11 — proveedor resuelto arriba (OpenRouter primario; Cohere directo).
   // ID del modelo que se envía upstream (sin prefijo de proveedor).
   let modelId = model.replace(/^cohere\//, ""); // v2.12k: sin Cerebras
 
@@ -1799,10 +1810,10 @@ async function handleChatOpenRouter(request, env, userEmail) {
   if (upstreamProvider !== "openrouter") {
     delete upstreamBody.session_id;
     delete upstreamBody.reasoning;
-    // v2.12y: modo Fast sin thinking. El frontend envía fast_mode:true para el rol
-    // fast; en Cohere el razonamiento se desactiva con thinking:{type:"disabled"}
+    // v2.12y→v2.13: Fast parametrizado (ROLE_PARAMS.fast.thinking="off"). En
+    // Cohere el razonamiento se desactiva con thinking:{type:"disabled"}
     // (reasoning_effort NO es un campo válido en /v2/chat). Respuestas inmediatas.
-    if (clientBody.fast_mode) upstreamBody.thinking = { type: "disabled" };
+    if (fastCohere) upstreamBody.thinking = { type: "disabled" };
     delete upstreamBody.fast_mode;
     // Contenido de mensajes como string plano (sin bloques cache_control).
     if (Array.isArray(upstreamBody.messages)) {
