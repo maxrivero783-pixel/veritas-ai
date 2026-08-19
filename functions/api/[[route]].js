@@ -3697,6 +3697,18 @@ async function handlePerceive(request, env, userEmail) {
   if (!attachment_url && !attachment_r2_key) {
     return errorResponse("missing_attachment", 400, { message: "Provide attachment_url or attachment_r2_key" });
   }
+  // v2.13f — percepción INLINE sin R2: data URLs solo valen para imagen/PDF
+  // (el modelo VL los recibe como image_url). Audio/video necesitan una URL
+  // pública que el modelo pueda descargar ⇒ requieren almacenamiento R2.
+  const isInlineDataUrl = !attachment_r2_key && typeof attachment_url === "string" && attachment_url.startsWith("data:");
+  if (isInlineDataUrl && (modality === "audio" || modality === "video")) {
+    return errorResponse("inline_modality_unsupported", 400, {
+      message: "Audio/video requieren almacenamiento R2 (URL pública). Sin R2 solo se perciben imágenes y PDF inline.",
+    });
+  }
+  if (isInlineDataUrl && attachment_url.length > 11 * 1024 * 1024) {
+    return errorResponse("attachment_too_large", 413, { message: "Attachment inline demasiado grande (máx ~8MB)." });
+  }
 
   // Seleccionar modelo Nano según modalidad.
   let modelId, roleKey;

@@ -81,7 +81,7 @@ const state = {
   pendingChatFlush: false,
   abortController: null,  // P0-4: AbortController para cancelar streaming en curso
   chatSearchQuery: "",    // P1-4: filtro activo del buscador de chats (solo título)
-  pendingAttachments: [], // ETAPA 5: attachments multimedia pendientes [{ file, r2_key, modality, name, size }]
+  pendingAttachments: [], // ETAPA 5: attachments multimedia pendientes [{ dataUrl|r2_key, modality, name, size }] (v2.13f: inline sin R2)
   repoDocAttachments: [], // Docs del repo adjuntados como contexto [{ doc_number, doc_name, file_size }]
 };
 
@@ -1989,9 +1989,13 @@ async function sendMessage() {
       // Los chips se limpian tras la percepción (dentro de runAgentLoop).
     } else {
       // Roles no-agente: inyectar instrucciones de analyze_media como texto.
-      const attachmentLines = state.pendingAttachments.map((a) =>
-        `[Archivo adjunto: ${a.name} (${a.modality}, ${formatBytes(a.size)}) — R2 key: ${a.r2_key} — Usa la herramienta analyze_media con target="${a.r2_key}" y modality="${a.modality}" para analizar este archivo.]`
-      ).join("\n");
+      const attachmentLines = state.pendingAttachments.map((a) => {
+        // v2.13f: sin r2_key no hay analyze_media posible (R2 no configurado).
+        if (a.r2_key) {
+          return `[Archivo adjunto: ${a.name} (${a.modality}, ${formatBytes(a.size)}) — R2 key: ${a.r2_key} — Usa la herramienta analyze_media con target="${a.r2_key}" y modality="${a.modality}" para analizar este archivo.]`;
+        }
+        return `[Archivo adjunto: ${a.name} (${a.modality}, ${formatBytes(a.size)}) — el almacenamiento R2 no está disponible en este despliegue y el archivo no pudo subirse; indícaselo brevemente al usuario.]`;
+      }).join("\n");
       enrichedContent = content + "\n\n" + attachmentLines;
       // Limpiar chips de attachment para roles no-agente.
       state.pendingAttachments = [];
@@ -4879,45 +4883,49 @@ function updateOfflineSyncInfo(ts, size) {
 async function handleFileAttach(e) {
   const files = Array.from(e.target.files || []);
   for (const file of files) {
-    if (file.size > 20 * 1024 * 1024) {
-      toast(`${file.name}: archivo demasiado grande (máx 20MB para multimedia)`, "warning");
-      continue;
-    }
     // Detectar modalidad.
     const modality = detectModality(file.type, file.name);
     if (!modality) {
       toast(`${file.name}: tipo no soportado (imagen, PDF, audio, video)`, "warning");
       continue;
     }
-
-    // Subir a R2 vía /api/storage/upload.
-    const formData = new FormData();
-    formData.append("file", file);
+    // v2.13f: sin R2 en este despliegue. Audio/video necesitan almacenamiento
+    // (URL pública para el modelo Omni) — se rechazan con aviso claro.
+    if (modality === "audio" || modality === "video") {
+      toast(`${file.name}: audio/video requieren almacenamiento R2 (no configurado). Adjunta imágenes o PDF.`, "warning", 7000);
+      continue;
+    }
+    // v2.13f: imagen/PDF se perciben INLINE (data URL) vía /api/chat/perceive,
+    // sin subir a R2. Límite 8MB para no reventar el payload JSON.
+    if (file.size > 8 * 1024 * 1024) {
+      toast(`${file.name}: demasiado grande para análisis inline (máx 8MB sin R2)`, "warning", 6000);
+      continue;
+    }
     try {
-      const resp = await fetch("/api/storage/upload", { method: "POST", body: formData });
-      if (resp.ok) {
-        const data = await resp.json();
-        state.pendingAttachments.push({
-          r2_key: data.r2_key,
-          modality,
-          name: file.name,
-          size: file.size,
-          mime_type: file.type,
-        });
-        renderAttachmentChips();
-        if (data.usage?.warning) {
-          const pct = Math.round((data.usage.projected_ratio || data.usage.usage_ratio || 0) * 100);
-          toast(`R2 cerca del límite free tier: ${pct}% usado. Considera borrar multimedia antigua.`, "warning", 6000);
-        }
-      } else {
-        const err = await resp.json().catch(() => ({}));
-        toast(`Error subiendo ${file.name}: ${err.message || resp.status}`, "error", 7000);
-      }
+      const dataUrl = await readFileAsDataUrl(file);
+      state.pendingAttachments.push({
+        dataUrl,
+        modality,
+        name: file.name,
+        size: file.size,
+        mime_type: file.type,
+      });
+      renderAttachmentChips();
     } catch (err) {
-      toast(`Error subiendo ${file.name}: ${err.message}`, "error");
+      toast(`Error leyendo ${file.name}: ${err.message}`, "error");
     }
   }
   e.target.value = "";
+}
+
+// v2.13f: lee un File como data URL (base64) para percepción inline sin R2.
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(fr.result);
+    fr.onerror = () => reject(fr.error || new Error("FileReader error"));
+    fr.readAsDataURL(file);
+  });
 }
 
 // Detecta la modalidad de un archivo a partir de su MIME type o extensión.
