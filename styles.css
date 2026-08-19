@@ -3111,3 +3111,5 @@ mark.search-current { background: rgba(80, 200, 120, .6); }
 
 /* v2.8.7 — identidad del usuario bajo los botones de acción */
 .sidebar-user { margin: 10px 12px 0; padding: 6px 10px; border: 1px solid var(--border-subtle); border-radius: 8px; color: var(--text-muted); font-size: 12px; font-family: var(--font-mono, monospace); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* v2.13g: versión de la build visible en el sidebar. */
+.sidebar-version { margin: 6px 12px 0; text-align: center; color: var(--text-muted); opacity: 0.55; font-size: 10px; font-family: var(--font-mono, monospace); letter-spacing: 0.5px; cursor: help; }
