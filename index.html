@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="description" content="Véritas v2.12 — Interfaz de orquestación multi-proveedor de modelos de IA" />
+  <meta name="description" content="Véritas v2.13 — Interfaz de orquestación multi-proveedor de modelos de IA" />
   <meta http-equiv="Content-Security-Policy" content="default-src 'self' https: data:; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com https://cdn.jsdelivr.net https://esm.sh; style-src 'self' 'unsafe-inline' https:; img-src https: data:; connect-src 'self' https: wss:; font-src https: data:;" />
   <title>Véritas — IA Orquestadora</title>
 
@@ -83,7 +83,7 @@
         <div class="onboarding-slide" data-step="0">
           <div class="onboarding-icon">🎭</div>
           <h3>Roles de IA</h3>
-          <p>Agente y Fast con Pensador opcional: Agente vía OpenRouter, Fast vía Cohere (Command A+).</p>
+          <p>Agente y Fast con Pensador opcional: Agente vía OpenRouter, Fast vía Cohere (Command A+, fallback Command R+/R) sin streaming ni thinking.</p>
         </div>
         <div class="onboarding-slide" data-step="1">
           <div class="onboarding-icon">🧰</div>
@@ -256,8 +256,8 @@
       <!-- Barra de entrada -->
       <div class="input-bar" id="inputBar">
         <div class="input-toolbar">
-          <button class="icon-btn" id="attachBtn" aria-label="Attach file" title="📎 Adjuntar archivo" data-i18n="aria.attach">📎</button>
-          <button class="toggle-btn" id="searchToggle" aria-pressed="false" title="🔎 Búsqueda + Scraping" data-i18n="title.search">🔎</button>
+          <button class="icon-btn" id="attachBtn" aria-label="Adjuntar archivo" title="📎 Adjuntar archivo" data-i18n="aria.attach" data-i18n-attr="aria-label">📎</button>
+          <button class="toggle-btn" id="searchToggle" aria-pressed="false" aria-label="Búsqueda web" title="🔍 Búsqueda + Scraping" data-i18n="title.search" data-i18n-attr="aria-label">🔍</button>
           <div class="dropdown skills-dropdown">
             <button class="toggle-btn" id="skillsBtn" aria-pressed="false" aria-haspopup="menu" title="✨ Skills activas">✨<span class="skills-btn-count" id="skillsBtnCount" hidden></span></button>
             <div class="dropdown-menu skills-menu" id="skillsMenu" hidden role="menu" aria-label="Skills activas"></div>
@@ -797,7 +797,7 @@
         <section class="settings-section" id="settings-about" hidden>
           <h3 data-i18n="settings.about">Acerca de</h3>
           <img src="https://ik.imagekit.io/csdp6gbr6/17815803429593.png" alt="Véritas logo" class="about-logo" />
-          <p><strong>Véritas v2.12</strong> — Asistente OSINT con IA multi-modelo.</p>
+          <p><strong>Véritas v2.13</strong> — Asistente OSINT con IA multi-modelo.</p>
           <p data-i18n="settings.about.desc">Centro de mando IA con Agente, Fast, 🧠 Pensador, Prompt Arquitecto, sandbox telemétrico y diseño free-tier-first.</p>
           <div class="settings-info-grid">
             <div class="settings-info-card"><strong>Stack 2026</strong><span>OpenRouter (Nemotron 3) para el Agente; Cohere Command A+ para Fast, con rotador de claves y cooldowns.</span></div>
