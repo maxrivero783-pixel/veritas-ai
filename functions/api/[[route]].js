@@ -1800,9 +1800,9 @@ async function handleChatOpenRouter(request, env, userEmail) {
     delete upstreamBody.session_id;
     delete upstreamBody.reasoning;
     // v2.12y: modo Fast sin thinking. El frontend envía fast_mode:true para el rol
-    // fast; en Cohere se desactiva el razonamiento con reasoning_effort:"none"
-    // (respuestas inmediatas, sin tokens de pensamiento).
-    if (clientBody.fast_mode) upstreamBody.reasoning_effort = "none";
+    // fast; en Cohere el razonamiento se desactiva con thinking:{type:"disabled"}
+    // (reasoning_effort NO es un campo válido en /v2/chat). Respuestas inmediatas.
+    if (clientBody.fast_mode) upstreamBody.thinking = { type: "disabled" };
     delete upstreamBody.fast_mode;
     // Contenido de mensajes como string plano (sin bloques cache_control).
     if (Array.isArray(upstreamBody.messages)) {
