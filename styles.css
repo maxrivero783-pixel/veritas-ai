@@ -2835,6 +2835,16 @@ body.is-offline .send-btn { background: var(--text-muted); }
  background: var(--bg-elev);
  overflow: hidden;
 }
+/* v2.13e: línea con proveedor/modelo que generó el prompt. */
+.prompt-craft-meta {
+ padding: 4px 12px 6px;
+ font-size: 10px;
+ text-align: right;
+ opacity: 0.65;
+ letter-spacing: 0.3px;
+ border-top: 1px dashed var(--border-subtle);
+}
+.prompt-craft-meta[hidden] { display: none; }
 .prompt-craft-output pre {
   margin: 0;
   padding: 10px 12px;

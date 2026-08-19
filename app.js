@@ -5043,6 +5043,7 @@ function updateDeepThinkingVisibility() {  const btn = $("#deepThinkingBtn");
   const closeBtn = $("#promptCraftClose");
   const outputEl = $("#promptCraftOutput");
   const resultEl = $("#promptCraftResult");
+  const metaEl   = $("#promptCraftMeta"); // v2.13e: proveedor/modelo usado
 
   let panelOpen = false;
   let isGenerating = false;
@@ -5268,9 +5269,17 @@ REGLAS:
       lastGeneratedPrompt = text;
       resultEl.textContent = text;
       copyBtn.disabled = false;
+      // v2.13e: mostrar el proveedor/modelo real que generó el prompt
+      // (el Worker devuelve model+provider en la respuesta).
+      if (metaEl) {
+        const provLbl = llmData.provider === "cohere" ? "Cohere" : "OpenRouter";
+        metaEl.textContent = `⚡ Generado con ${llmData.model || "modelo ligero"} · ${provLbl}`;
+        metaEl.hidden = false;
+      }
     } catch (err) {
       resultEl.textContent = `Error: ${err.message}`;
       copyBtn.disabled = true;
+      if (metaEl) metaEl.hidden = true;
     } finally {
       isGenerating = false;
       sendBtn.disabled = false;
@@ -5317,6 +5326,7 @@ REGLAS:
     input.value = "";
     outputEl.hidden = true;
     resultEl.textContent = "";
+    if (metaEl) metaEl.hidden = true;
     lastGeneratedPrompt = "";
     copyBtn.disabled = true;
     input.focus();
