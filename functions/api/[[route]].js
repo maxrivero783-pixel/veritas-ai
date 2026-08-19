@@ -3332,6 +3332,20 @@ function logToolSelection(env, userEmail, chatId, query, selectedNames, mode) {
 // con summary (lo que lee el modelo) y raw (datos estructurados si el handler
 // los expone en extra.raw), truncados para no inflar el contexto.
 // ------------------------------------------------------------------------------
+// v2.12x: truncado consciente de límites (no corta a mitad de palabra).
+function truncateAtBoundary(str, max) {
+  if (str.length <= max) return str;
+  let cut = str.slice(0, max);
+  const tail = cut.match(/[\s.,;:!?)\]]+$/);
+  if (tail) cut = cut.slice(0, cut.length - tail[0].length);
+  return cut + ' …[truncado]';
+}
+// v2.12x: resumen LIMPIO de búsqueda fresca para el fallback (sin JSON crudo).
+function buildFreshSummary(fresh) {
+  const header = "No pude sintetizar una respuesta completa (los proveedores de IA están al límite de uso en este momento). Estos son los resultados de búsqueda que encontré:\n\n";
+  const body = fresh.map((f) => `### ${String(f.tn).replace(/_/g, ' ')}\n${f.output}`).join('\n\n');
+  return header + body;
+}
 function formatToolResultPayload(r) {
   const summary = String(r.output == null ? "" : r.output).slice(0, 3000);
   const payload = { summary, status: r.status || "ok" };
@@ -3443,11 +3457,11 @@ async function handleAgentOrchestrate(request, env, userEmail) {
     } catch { return { tn, r: null }; }
   }));
   for (const { tn, r } of freshResults) {
-    if (r && r.status === "ok" && r.output) fresh.push("### " + tn + "\n" + String(r.output).slice(0, 4000));
+    if (r && r.status === "ok" && r.output) fresh.push({ tn, output: truncateAtBoundary(String(r.output), 4000) });
   }
   systemPrompt += "\n\nFecha actual (UTC): " + new Date().toISOString() + ". NUNCA asumas que una fecha reciente es futura; usa los resultados de búsqueda.";
   if (fresh.length) {
-    systemPrompt += "\n\n<busqueda_actual>\n" + fresh.join("\n\n") + "\n</busqueda_actual>\nUsa estos resultados frescos como base factual. Si no contienen el dato pedido, dilo sin inventar nada.";
+    systemPrompt += "\n\n<busqueda_actual>\n" + fresh.map(f => "### " + f.tn + "\n" + f.output).join("\n\n") + "\n</busqueda_actual>\nUsa estos resultados frescos como base factual. Si no contienen el dato pedido, dilo sin inventar nada.";
   } else {
     systemPrompt += "\n\nNo se obtuvieron resultados de búsqueda automática; usa tus herramientas si el usuario necesita datos actuales y NO inventes datos.";
   }
@@ -3599,7 +3613,7 @@ async function handleAgentOrchestrate(request, env, userEmail) {
   // v2.10.2: si ningun LLM pudo sintetizar pero hay busqueda fresca,
   // entregar los resultados frescos como respuesta (mejor que "no pude").
   if (!finalText && fresh.length) {
-    finalText = "**Resultados de busqueda actual** (sintesis LLM no disponible por limite de proveedores):\n\n" + fresh.join("\n\n");
+    finalText = buildFreshSummary(fresh);
   }
 
   if (!finalText && lastResultsXml) {
