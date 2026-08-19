@@ -201,6 +201,8 @@ Los modelos se centralizan en `prompts.js` y `lib/fallbackChains.js`.
 > Nota (v2.13): Fast queda **parametrizado** vía `ROLE_PARAMS` (`lib/fallbackChains.js`): `thinking:"off"` y `stream:false`, reforzados server-side por el Worker. En el rol Fast se ocultan los botones ✨ Skills, 🧠 Pensador y 👥 Compartir sesión. Los botones de adjuntar (📎) y búsqueda (🔍) muestran emoji en vez de texto.
 >
 > Nota (v2.13b): cadena Fast reordenada para **thinking off real**: primario `command-r-plus-08-2024` (modelo no-thinking); `command-a-plus-05-2026` (rechaza `thinking:{type:"disabled"}` con 422, siempre razona) queda como fallback de emergencia y `command-r-08-2024` cierra la cadena.
+>
+> Nota (v2.13c): el toggle 🔍 Búsqueda+Scraping se oculta en el rol Agente (su system prompt ya es SEARCH-FIRST: siempre busca con tools antes de responder); Fast lo conserva junto a 📎. Cambiar de pestaña/rol limpia la vista del chat abierto (`closeChatView`): detiene generación y sesión compartida, vacía mensajes y muestra el estado vacío.
 
 Fallbacks adicionales permitidos:
 
