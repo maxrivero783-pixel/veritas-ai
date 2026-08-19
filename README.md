@@ -619,3 +619,5 @@ El dispatcher usa los proveedores en orden según **generosidad del plan free** 
 > Si el proveedor primario falla (status != 200 o excepción), se marca cooldown 30s
 > y se salta al siguiente. Configura las keys con `FIRECRAWL_API_KEY_1`,
 > `JINA_API_KEY_1`, `TAVILY_API_KEY_1`, `SERPER_API_KEY_1`, `SCRAPINGBEE_API_KEY_1`.
+>
+> Nota (v2.13d): **Prompt Arquitecto** (`/api/llm/complete`) pasa a OpenRouter con modelo gratuito y ligero como primario: `nvidia/nemotron-3-nano-30b-a3b:free` → `openai/gpt-oss-20b:free` → Command A+ como último recurso. Corregido el parseo del formato nativo Cohere (`message.content`), que antes se descartaba.

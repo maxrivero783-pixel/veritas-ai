@@ -5028,7 +5028,7 @@ function updateDeepThinkingVisibility() {  const btn = $("#deepThinkingBtn");
 // PROMPT CRAFT — Botón flotante arrastrable + generador de prompts
 // ==============================================================================
 // Widget autónomo: no depende del estado del chat principal. Genera prompts
-// optimizados por rol vía /api/llm/complete (Cohere → OpenRouter).
+// optimizados por rol vía /api/llm/complete (OpenRouter ligero free → fallbacks).
 (function initPromptCraft() {
   const $ = (s) => document.querySelector(s);
 
@@ -5219,7 +5219,7 @@ function updateDeepThinkingVisibility() {  const btn = $("#deepThinkingBtn");
   closeBtn.addEventListener("click", closePanel);
   window.addEventListener("resize", () => { if (panelOpen) positionPanel(); });
 
-  // --- Generar prompt vía /api/llm/complete (Cohere→OpenRouter) ---
+  // --- Generar prompt vía /api/llm/complete (OpenRouter ligero free → fallbacks) ---
   async function generatePrompt() {
     const role = roleSel.value;
     const brief = input.value.trim();
