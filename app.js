@@ -172,6 +172,7 @@ async function init() {
 
   // Setup event listeners.
   setupEventListeners();
+  setupDiagPanel(); // v2.13h: panel 🩺 (click en chip de versión)
   updateDeepThinkingVisibility();
   updateSearchToggleVisibility(); // v2.13c: visibilidad del toggle 🔍 por rol
 
@@ -5358,11 +5359,15 @@ function debounce(fn, ms) {
 }
 
 // --- Token de sesión en todos los fetch a /api ---
+// v2.13h: además registra eventos para el panel 🩺 y maneja 401 (sesión
+// expirada). Antes, un 401 a mitad de sesión dejaba la app muda: el Agente,
+// el Prompt Arquitecto y los adjuntos fallaban sin ningún aviso.
 (function patchFetchWithToken() {
   const orig = window.fetch.bind(window);
-  window.fetch = function (input, init) {
+  window.fetch = async function (input, init) {
     const url = typeof input === "string" ? input : (input && input.url) || "";
-    if (url.indexOf("/api/") === 0) {
+    const isApi = url.indexOf("/api/") === 0;
+    if (isApi) {
       const token = localStorage.getItem("veritas_token");
       if (token) {
         init = init || {};
@@ -5371,9 +5376,72 @@ function debounce(fn, ms) {
         init.headers = h;
       }
     }
-    return orig(input, init);
+    const resp = await orig(input, init);
+    if (isApi) {
+      if (resp.status === 401 && url.indexOf("/api/auth/") !== 0) {
+        diagRecord(`401 ${url} — sesión inválida/expirada`);
+        handleSessionExpired();
+      } else if (resp.status >= 400) {
+        diagRecord(`${resp.status} ${url}`);
+      }
+    }
+    return resp;
   };
 })();
+
+// --- v2.13h: diagnóstico in-app (panel 🩺, click en el chip de versión) ---
+let _sessionExpiredHandled = false;
+function handleSessionExpired() {
+  if (_sessionExpiredHandled) return;
+  _sessionExpiredHandled = true;
+  try { localStorage.removeItem("veritas_token"); localStorage.removeItem("veritas_user"); } catch { /* noop */ }
+  showAppLayout(false);
+  const errEl = $("#authError");
+  if (errEl) { errEl.textContent = "Tu sesión expiró o es inválida. Inicia sesión de nuevo."; errEl.hidden = false; }
+  try { toast("Sesión expirada — inicia sesión de nuevo", "warning", 8000); } catch { /* noop */ }
+}
+
+function diagRecord(msg) {
+  try {
+    const arr = window.__veritasDiag || (window.__veritasDiag = []);
+    arr.push(`[${new Date().toLocaleTimeString()}] ${msg}`);
+    if (arr.length > 60) arr.splice(0, arr.length - 60);
+  } catch { /* noop */ }
+}
+window.addEventListener("error", (e) => diagRecord("JS: " + (e.message || e.type)));
+window.addEventListener("unhandledrejection", (e) => diagRecord("Promise: " + String((e.reason && e.reason.message) || e.reason).slice(0, 140)));
+
+function renderDiagPanel() {
+  const el = $("#diagContent");
+  if (!el) return;
+  const ver = ($("#sidebarVersion")?.textContent || "").trim() || "?";
+  const events = window.__veritasDiag || [];
+  el.textContent = [
+    `build: ${ver}`,
+    `usuario: ${state.user_email || localStorage.getItem("veritas_user") || "(sin sesión)"}`,
+    `url: ${location.origin}`,
+    `online: ${navigator.onLine}`,
+    `fecha: ${new Date().toLocaleString()}`,
+    "--- eventos ---",
+    ...(events.length ? events : ["(sin eventos registrados)"]),
+  ].join("\n");
+}
+
+function setupDiagPanel() {
+  const chip = $("#sidebarVersion");
+  const panel = $("#diagPanel");
+  if (chip && panel) {
+    chip.style.cursor = "pointer";
+    chip.title = "Abrir diagnóstico 🩺";
+    chip.addEventListener("click", () => { renderDiagPanel(); panel.hidden = false; });
+  }
+  $("#diagClose")?.addEventListener("click", () => { if (panel) panel.hidden = true; });
+  $("#diagCopy")?.addEventListener("click", async () => {
+    const txt = $("#diagContent")?.textContent || "";
+    try { await navigator.clipboard.writeText(txt); toast("Diagnóstico copiado — pégalo en el chat de soporte", "success", 4000); }
+    catch { toast("No se pudo copiar automáticamente", "warning"); }
+  });
+}
 
 // ==============================================================================
 // BOOT
@@ -5415,7 +5483,14 @@ async function ensureAuth() {
       const data = await resp.json().catch(() => ({}));
       if (data && data.user) { showAppLayout(true); return true; }
     }
-  } catch (e) { /* sin red: se intenta seguir con lo local */ }
+    // v2.13h: si había token y /api/auth/me lo rechaza, la sesión expiró —
+    // decirlo claro en la pantalla de login (antes quedaba mudo).
+    if (_tok && (resp.status === 401 || resp.status === 403)) {
+      const errEl = $("#authError");
+      if (errEl) { errEl.textContent = "Tu sesión expiró o es inválida. Inicia sesión de nuevo."; errEl.hidden = false; }
+      try { localStorage.removeItem("veritas_token"); localStorage.removeItem("veritas_user"); } catch { /* noop */ }
+    }
+  } catch (e) { diagRecord("ensureAuth: " + e.message); /* sin red: se intenta seguir con lo local */ }
   showAppLayout(false);
   return false;
 }
