@@ -1260,6 +1260,9 @@ async function suggestTitle() {
 // MODEL SELECTOR
 // ==============================================================================
 function populateModelSelector() {
+  // v2.13c: el refresco del botón ✨ por rol NO puede depender de que exista
+  // el <select> de modelos (fue retirado de la UI); si no, Fast lo mostraba.
+  updateSkillsBtnState();
   const sel = $("#modelSelector");
   if (!sel) return;
   sel.innerHTML = "";
