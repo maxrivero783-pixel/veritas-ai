@@ -2687,14 +2687,17 @@ async function callOpenRouter(messages) {
   let tokens_in = 0, tokens_out = 0, cached_tokens = 0;
 
   try {
+    // v2.12y: el rol Fast va SIN streaming y SIN thinking (respuestas inmediatas).
+    const isFast = state.currentRole === "fast";
     const body = {
       model: state.currentModel,
       messages,
-      stream: true,
+      stream: !isFast,
       chat_id: state.currentChat.id,
       is_shared: state.currentChat.is_shared,
       settings: state.settings.tokens,
     };
+    if (isFast) body.fast_mode = true;
     if (state.toggles.thinking && state.currentModel.includes("nemotron")) {
       body.reasoning = { effort: "high" };
     }
@@ -2717,6 +2720,30 @@ async function callOpenRouter(messages) {
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({}));
       throw { error: err.error || "upstream_error", message: err.message || `HTTP ${resp.status}`, retry_after_ms: err.retry_after_ms };
+    }
+
+    // v2.12y: Fast va sin streaming — la respuesta es JSON completo. Parsear y salir.
+    if (isFast) {
+      const data = await resp.json().catch(() => null);
+      if (data) {
+        const msg = data.message || (data.choices && data.choices[0] && data.choices[0].message) || {};
+        let full = "", think = "";
+        if (typeof msg.content === "string") full = msg.content;
+        else if (Array.isArray(msg.content)) {
+          for (const b of msg.content) {
+            if (b.type === "text") full += (b.text || "");
+            else if (b.type === "thinking") think += (b.thinking || "");
+          }
+        }
+        text = full.trim();
+        thinkingContent = think.trim();
+        if (data.usage) {
+          tokens_in = data.usage.prompt_tokens || data.usage.billed_units?.input_tokens || 0;
+          tokens_out = data.usage.completion_tokens || data.usage.billed_units?.output_tokens || 0;
+          cached_tokens = data.usage.cached_tokens || 0;
+        }
+      }
+      return { text, thinking_content: thinkingContent, tokens_in, tokens_out, cached_tokens };
     }
 
     // Parsear SSE.

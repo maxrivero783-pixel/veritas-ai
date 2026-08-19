@@ -1799,6 +1799,11 @@ async function handleChatOpenRouter(request, env, userEmail) {
   if (upstreamProvider !== "openrouter") {
     delete upstreamBody.session_id;
     delete upstreamBody.reasoning;
+    // v2.12y: modo Fast sin thinking. El frontend envía fast_mode:true para el rol
+    // fast; en Cohere se desactiva el razonamiento con reasoning_effort:"none"
+    // (respuestas inmediatas, sin tokens de pensamiento).
+    if (clientBody.fast_mode) upstreamBody.reasoning_effort = "none";
+    delete upstreamBody.fast_mode;
     // Contenido de mensajes como string plano (sin bloques cache_control).
     if (Array.isArray(upstreamBody.messages)) {
       upstreamBody.messages = upstreamBody.messages.map((m) => {
